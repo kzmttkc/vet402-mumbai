@@ -1,5 +1,6 @@
 import { createPublicClient } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
+import { eq } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
 import type { RawRead } from './receiptsFeed'
@@ -50,5 +51,25 @@ export function createArkivReader(writer: Hex, transport: Transport = http(undef
       sellers: sellers.entities.map((row) => ({ seller: row.seller.value, expiresAt: row.$expiresAt ?? 0n })),
       timing,
     }
+  }
+}
+
+/** Counts the entities of the receipt schema for these transfer ids: a payment and, once settled, its settlement. */
+export function createArkivCounter(writer: Hex, transport: Transport = http(undefined, { retryCount: 0 })) {
+  const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
+
+  return async function count(transferIds: string[]): Promise<number> {
+    const pages = await Promise.all(
+      transferIds.map((id) =>
+        client
+          .select({ $key: true })
+          .from(ReceiptSchema)
+          .where(eq('gateway_transfer_id', id))
+          .ownedBy(writer)
+          .limit(100)
+          .fetch(),
+      ),
+    )
+    return new Set(pages.flatMap((page) => page.entities.map((row) => row.$key))).size
   }
 }
