@@ -1,5 +1,5 @@
 {
-  "name": "studio-app",
+  "name": "vet402-mumbai",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,9 +7,6 @@
     "dev": "vite",
     "server": "bun run server/index.ts",
     "test": "bash scripts/test.sh",
-    "deploy:self": "bun run ./scripts/self-deploy.ts",
-    "compass:deploy": "bun run ./scripts/compass-deploy.ts",
-    "fetch:abi": "bun run ./scripts/fetch-abi.ts",
     "lint": "oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))",
     "typecheck": "tsc --noEmit",
     "check": "bash scripts/check.sh",
