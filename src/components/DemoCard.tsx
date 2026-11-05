@@ -1,5 +1,5 @@
 import { Loader2, Unplug } from 'lucide-react'
-import type { DemoKind, DemoRun, StepName } from '@/hooks/useDemo'
+import type { DemoAction, DemoKind, DemoRun, StepName } from '@/hooks/useDemo'
 
 const STEP_LABELS: Record<StepName, string> = {
   hold: 'Hold',
@@ -7,6 +7,9 @@ const STEP_LABELS: Record<StepName, string> = {
   waiting: 'Waiting',
   'connection dropped': 'Connection dropped',
   'fetching again': 'Fetching again',
+  claim: 'Claim',
+  'key on chain': 'Key on chain',
+  opened: 'Opened',
   delivered: 'Delivered',
 }
 
@@ -14,6 +17,15 @@ const RUN_TITLES: Record<DemoKind, string> = {
   a: 'Seller A',
   b: 'Seller B',
   compare: 'Comparison only. vet402 does not do this.',
+  d: 'Seller D tries a wrong key, then says nothing.',
+  e: 'Seller E says nothing.',
+  f: 'Seller F swaps the answer.',
+}
+
+const ACTIONS: Record<DemoAction, { label: string; note: string }> = {
+  finalize: { label: 'Finalize', note: 'The time is up with no key. Anyone can close this now.' },
+  prove: { label: 'Prove', note: "The answer does not match the seller's promise." },
+  withdraw: { label: 'Return to hold', note: 'The deposit money is ready to come back.' },
 }
 
 const secondary =
@@ -24,9 +36,13 @@ interface Props {
   error: string | null
   running: boolean
   start: (kind: DemoKind) => Promise<void>
+  /** True when the backend has the contract, so Sellers D, E and F exist. */
+  sealed: boolean
+  act: (action: DemoAction) => Promise<void>
+  acting: boolean
 }
 
-export function DemoCard({ run, error, running, start }: Props) {
+export function DemoCard({ run, error, running, start, sealed, act, acting }: Props) {
   return (
     <div className="mt-4 rounded-2xl bg-[var(--surface-muted)] p-4">
       <div className="flex items-center gap-3">
@@ -48,18 +64,32 @@ export function DemoCard({ run, error, running, start }: Props) {
         </button>
       </div>
 
+      {sealed && (
+        <div className="mt-2 flex gap-2">
+          <button type="button" disabled={running} onClick={() => void start('d')} className={secondary}>
+            Try Seller D
+          </button>
+          <button type="button" disabled={running} onClick={() => void start('e')} className={secondary}>
+            Try Seller E
+          </button>
+          <button type="button" disabled={running} onClick={() => void start('f')} className={secondary}>
+            Try Seller F
+          </button>
+        </div>
+      )}
+
       {error && (
         <p className="mt-3 text-sm text-[var(--danger)]" role="alert">
           {error}
         </p>
       )}
 
-      {run && <Progress run={run} />}
+      {run && <Progress run={run} act={act} acting={acting} />}
     </div>
   )
 }
 
-function Progress({ run }: { run: DemoRun }) {
+function Progress({ run, act, acting }: { run: DemoRun; act: Props['act']; acting: boolean }) {
   return (
     <div className="mt-4 rounded-xl bg-white p-4" aria-live="polite">
       <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Progress</p>
@@ -77,6 +107,15 @@ function Progress({ run }: { run: DemoRun }) {
           <Loader2 size={14} className="animate-spin" aria-hidden />
           Working…
         </p>
+      )}
+      {run.action && (
+        <div className="mt-3">
+          <p className="text-sm text-pretty">{ACTIONS[run.action].note}</p>
+          <button type="button" disabled={acting} onClick={() => void act(run.action as DemoAction)} className={`${secondary} mt-2 w-full`}>
+            {acting && <Loader2 size={14} className="animate-spin" aria-hidden />}
+            {ACTIONS[run.action].label}
+          </button>
+        </div>
       )}
       {run.state === 'failed' && run.error && (
         <p className="mt-3 text-sm text-[var(--danger)]" role="alert">

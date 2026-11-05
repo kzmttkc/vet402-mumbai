@@ -34,7 +34,15 @@ export default function App() {
 
         <HoldCard data={data} reload={reload} />
         <JobCard reload={refreshAll} />
-        <DemoCard run={demo.run} error={demo.error} running={demo.running} start={demo.start} />
+        <DemoCard
+          run={demo.run}
+          error={demo.error}
+          running={demo.running}
+          start={demo.start}
+          sealed={demo.sealed}
+          act={demo.act}
+          acting={demo.acting}
+        />
         <ReceiptList receipts={receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />
 
         {failed && (
