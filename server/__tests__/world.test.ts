@@ -763,3 +763,32 @@ describe('production: the real World App', () => {
     ).toThrow('WORLD_ENVIRONMENT')
   })
 })
+
+describe('production keeps its own record', () => {
+  test('a staging budget does not carry over, and the staging file is left as it was', async () => {
+    const staging = createWorldService({
+      appId: 'app_x',
+      rpId: 'rp_x',
+      store: createWorldStore(dir),
+      ports: { sign: () => ({ sig: 's', nonce: '0x1', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'staging' }), createHold: () => Promise.resolve() },
+    })
+    const budget = staging.startBudget(usdc(5))
+    await staging.complete(budget.request.id, sessionResult(budget))
+    const before = readFileSync(path.join(dir, 'world.json'), 'utf8')
+
+    const production = createWorldService({
+      appId: 'app_x',
+      rpId: 'rp_x',
+      environment: 'production',
+      store: createWorldStore(dir, 'production'),
+      ports: { sign: () => ({ sig: 's', nonce: '0x2', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'production' }), createHold: () => Promise.resolve() },
+    })
+    expect(production.status().budgetSet).toBe(false)
+    const fresh = production.startBudget(usdc(5))
+    expect((await production.complete(fresh.request.id, { ...sessionResult(fresh), environment: 'production' })).message).toBe(BUDGET_SET)
+
+    expect(existsSync(path.join(dir, 'world-production.json'))).toBe(true)
+    expect(readFileSync(path.join(dir, 'world.json'), 'utf8')).toBe(before)
+    expect(staging.status().budgetSet).toBe(true)
+  })
+})

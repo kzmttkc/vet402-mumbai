@@ -52,7 +52,7 @@ export function mountWorld(app: express.Express, { env, dataDir, createHold, fet
     rpId: config.rpId,
     environment: config.environment,
     ports: createWorldPorts(config, createHold, fetchImpl),
-    store: createWorldStore(dataDir),
+    store: createWorldStore(dataDir, config.environment),
   })
 
   // With World ID on, nothing reaches the plain hold route. An approval is the only way in.

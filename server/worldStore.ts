@@ -33,15 +33,17 @@ export interface WorldStore {
   write(record: WorldRecord): void
 }
 
-const FILE_NAME = 'world.json'
+// A budget's session is made in one environment and can only be proven there, so each environment keeps its own file.
+// Staging keeps the name it always had.
+const FILE_NAMES = { staging: 'world.json', production: 'world-production.json' } as const
 
 function empty(): WorldRecord {
   return { budget: null, request: null, nullifiers: [], lastApproval: null }
 }
 
 // The folder is always passed in, so tests can point it at a temporary directory.
-export function createWorldStore(dir: string): WorldStore {
-  const file = path.join(dir, FILE_NAME)
+export function createWorldStore(dir: string, environment: keyof typeof FILE_NAMES = 'staging'): WorldStore {
+  const file = path.join(dir, FILE_NAMES[environment])
 
   return {
     read() {
