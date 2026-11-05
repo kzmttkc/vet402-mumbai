@@ -4,7 +4,7 @@ import { eq } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
 import type { RawRead } from './receiptsFeed'
-import { ReceiptSchema, SellerSchema } from './schema'
+import { EvidenceSchema, ReceiptSchema, SellerSchema } from './schema'
 
 /** Reads the public endpoint with the writer filter. No key is involved. */
 export function createArkivReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0 })) {
@@ -71,5 +71,22 @@ export function createArkivCounter(writer: Hex, transport: Transport = http(unde
       ),
     )
     return new Set(pages.flatMap((page) => page.entities.map((row) => row.$key))).size
+  }
+}
+
+/** The Swarm reference this writer recorded for one claim, or null when it recorded none. */
+export function createEvidenceReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
+  const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
+
+  return async function readEvidence(claimId: string): Promise<string | null> {
+    const { entities } = await client
+      .select({ $key: true, swarm_ref: true })
+      .from(EvidenceSchema)
+      .where(eq('kind', 'evidence'))
+      .where(eq('claim_id', claimId))
+      .ownedBy(writer)
+      .limit(1)
+      .fetch()
+    return entities[0]?.swarm_ref.value ?? null
   }
 }

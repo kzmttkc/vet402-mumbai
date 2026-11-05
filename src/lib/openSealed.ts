@@ -1,6 +1,7 @@
 import { decodeAbiParameters, keccak256, stringToBytes } from 'viem'
 import type { Hex } from 'viem'
 import { openResponse } from './sealed'
+import { readBox } from './swarmBox'
 
 /** The public node. The published screen reads the key from it directly, with no backend in between. */
 export const PUBLIC_RPC = 'https://rpc.testnet.arc.network'
@@ -30,8 +31,21 @@ export interface PublicSealedFile {
 }
 
 export type OpenResult =
-  | { ok: true; text: string; line: string; matches: boolean }
-  | { ok: false; line: string }
+  | { ok: true; text: string; line: string; matches: boolean; read?: string[] }
+  | { ok: false; line: string; read?: string[] }
+
+/** The chain the contract lives on. A box made for another chain is not used. */
+export const ARC_TESTNET_ID = 5042002
+
+export const FROM_ARKIV = 'Record from Arkiv.'
+export const FROM_SWARM = 'Box from Swarm.'
+export const FROM_ARC = 'Key from Arc.'
+
+/** How the published screen reaches Arkiv and Swarm. Both are optional, and the file is the fallback. */
+export interface EvidenceSources {
+  readEvidence?: (claimId: string) => Promise<string | null>
+  downloadBox?: (reference: string) => Promise<Uint8Array>
+}
 
 /** Reads the key straight from a node. Null when the block holds no key for this claim. */
 export async function readKeyFromNode(
@@ -73,4 +87,41 @@ export async function openSealedAnswer(
   } catch {
     return { ok: false, line: COULD_NOT_READ_KEY }
   }
+}
+
+/**
+ * Opens the answer from the public record. The Swarm reference comes from Arkiv, the box from
+ * Swarm and the key from Arc. When Arkiv or Swarm cannot be read, the exported file's box is used.
+ * `read` names each source that answered, in order.
+ */
+export async function openFromRecord(
+  answer: PublicSealedAnswer,
+  contract: string,
+  sources: EvidenceSources,
+  options: { rpcUrl?: string; fetchImpl?: typeof fetch } = {},
+): Promise<OpenResult> {
+  const read: string[] = []
+  let box: { ciphertext: string; plaintextHash: string } = answer
+  try {
+    const reference = sources.readEvidence ? await sources.readEvidence(answer.claimId) : null
+    if (reference) {
+      read.push(FROM_ARKIV)
+      if (sources.downloadBox) {
+        const fetched = readBox(await sources.downloadBox(reference), {
+          claimId: answer.claimId,
+          contract,
+          chainId: ARC_TESTNET_ID,
+        })
+        if (fetched) {
+          read.push(FROM_SWARM)
+          box = { ciphertext: fetched.ciphertext, plaintextHash: fetched.plaintextHash }
+        }
+      }
+    }
+  } catch {
+    // The exported file's box stands in for whatever could not be read.
+  }
+  const result = await openSealedAnswer({ ...answer, ...box }, contract, options)
+  if (result.ok) read.push(FROM_ARC)
+  return { ...result, read }
 }
