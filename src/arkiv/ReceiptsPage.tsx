@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Receipt as ReceiptIcon } from 'lucide-react'
 import { receiptStatusLine } from '@/lib/receiptStatus'
 import { createArkivReader } from './readArkiv'
@@ -42,10 +42,10 @@ const short = (value: string, keep = 10) => (value.length > keep ? `${value.slic
 
 export function ReceiptsPage() {
   const [state, setState] = useState<FeedState>(() => ({ rows: savedRows.load(), busy: false }))
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     let stopped = false
-    let timer: ReturnType<typeof setTimeout> | undefined
 
     void findWriter().then((writer) => {
       if (stopped || !writer) return
@@ -54,14 +54,14 @@ export function ReceiptsPage() {
         const next = await feed.refresh()
         if (stopped) return
         setState(next)
-        timer = setTimeout(() => void tick(), READ_EVERY_MS)
+        timer.current = setTimeout(() => void tick(), READ_EVERY_MS)
       }
       void tick()
     })
 
     return () => {
       stopped = true
-      clearTimeout(timer)
+      clearTimeout(timer.current)
     }
   }, [])
 
