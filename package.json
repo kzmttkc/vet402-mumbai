@@ -23,6 +23,7 @@
     "@circle-fin/user-controlled-wallets": "^10.8.1",
     "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
     "@circle-fin/x402-batching": "^4.0.0",
+    "@ethersphere/bee-js": "13.2.0",
     "@openzeppelin/contracts": "5.6.1",
     "@tanstack/react-query": "^5.62.7",
     "@web3icons/react": "^4.0.0",
