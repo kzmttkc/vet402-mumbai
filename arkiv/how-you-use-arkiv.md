@@ -14,7 +14,7 @@ No response means no seller write. The payment entity then stores the hash of "n
 
 ## Reading before paying
 
-Before the approval card appears for a Discovery listing or for Seller C, the backend reads that seller from Arkiv with `ownedBy`. A payment entity counts only once it is older than 60 seconds. Seller A and Seller B run a separate demo flow that never reaches this check.
+Before the approval card appears for a Discovery listing or for Seller C, the backend reads that seller from Arkiv with `ownedBy`. A payment entity counts only once it is older than 60 seconds. Sellers A, B, D, E and F run a separate demo flow that never reaches this check.
 
 | What Arkiv holds | What happens | What the screen says |
 |---|---|---|
