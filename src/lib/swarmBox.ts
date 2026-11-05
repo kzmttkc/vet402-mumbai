@@ -1,4 +1,5 @@
 import { Bee, NULL_STAMP, SWARM_GATEWAY_URL } from '@ethersphere/bee-js'
+import type { BatchId } from '@ethersphere/bee-js'
 import { keccak256 } from 'viem'
 import type { Hex } from 'viem'
 
@@ -27,13 +28,16 @@ export interface SwarmWire {
   download(reference: string): Promise<Uint8Array>
 }
 
-/** bee-js against a Bee API. With the gateway the null stamp stands in for a batch the gateway owns. */
-export function createSwarmWire(url: string = SWARM_GATEWAY, timeout = SWARM_TIMEOUT_MS): SwarmWire {
+/**
+ * bee-js against a Bee API. With the gateway the null stamp stands in for a batch the gateway owns.
+ * With your own Bee node, pass the postage batch that node bought.
+ */
+export function createSwarmWire(url: string = SWARM_GATEWAY, timeout = SWARM_TIMEOUT_MS, batchId: BatchId | string = NULL_STAMP): SwarmWire {
   const bee = new Bee(url, { timeout })
   return {
     async upload(data) {
       // No encrypt option: an encrypted reference carries its key, and this one is written to a public entity.
-      const result = await bee.data.upload(NULL_STAMP, data)
+      const result = await bee.data.upload(batchId, data)
       return result.reference.toHex()
     },
     async download(reference) {

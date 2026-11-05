@@ -142,12 +142,13 @@ const demoPorts = {
   ...(sealedClient && sealedScene
     ? {
         sealed: createSealedPorts({ client: sealedClient, holdKey: keys.hold, buyerKey: keys.buyer, rejected: sealedScene.rejected }),
-        // SWARM_UPLOAD=off keeps every box off Swarm. SWARM_API_URL points the upload at another Bee API.
+        // SWARM_UPLOAD=off keeps every box off Swarm. SWARM_API_URL points the upload at another Bee API,
+        // and SWARM_POSTAGE_BATCH_ID is the batch that Bee API stamps it with.
         ...(process.env.SWARM_UPLOAD === 'off'
           ? {}
           : {
               evidence: createEvidenceUploader({
-                swarm: createSwarmWire(process.env.SWARM_API_URL || SWARM_GATEWAY),
+                swarm: createSwarmWire(process.env.SWARM_API_URL || SWARM_GATEWAY, undefined, process.env.SWARM_POSTAGE_BATCH_ID || undefined),
                 contract: sealedClient.address,
                 chainId: ARC_NET.chain.id,
               }),
