@@ -25,7 +25,7 @@ export const TRY_MESSAGES: Record<TryErrorCode, string> = {
   BUSY: 'Someone is trying it right now. Please try again in a minute.',
   RATE: 'One try every two minutes from the same place. Please wait a little.',
   DAILY: "Today's tries are used up. Watch the video instead.",
-  RESTING: 'The demo wallet is resting. Watch the video instead.',
+  RESTING: 'The demo is resting for now. Watch the video instead.',
   UNREACHABLE: 'The demo could not start just now. Please try again in a minute.',
 }
 

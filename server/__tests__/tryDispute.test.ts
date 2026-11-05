@@ -288,7 +288,7 @@ describe('the HTTP side', () => {
     const { tries } = setup({ ready: () => Promise.resolve(false) })
     const res = await createTryHandler(() => tries)(new Request('http://x/api/try-dispute', { method: 'POST' }))
     expect(res.status).toBe(503)
-    expect(await res.json()).toEqual({ code: 'RESTING', error: 'The demo wallet is resting. Watch the video instead.' })
+    expect(await res.json()).toEqual({ code: 'RESTING', error: 'The demo is resting for now. Watch the video instead.' })
   })
 
   test('the two minutes follow the forwarded address', async () => {

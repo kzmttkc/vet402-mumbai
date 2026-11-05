@@ -39,6 +39,7 @@ const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   paymentDomainVersion: ARC_GATEWAY_DOMAIN_VERSION,
   paymentVerifyingContract: ARC_GATEWAY_WALLET,
   disputeCost: 10_500n,
+  paymentDomainSalt: `0x${'0'.repeat(64)}`,
 }
 
 function constructorArgs(abi: unknown[]): unknown[] {

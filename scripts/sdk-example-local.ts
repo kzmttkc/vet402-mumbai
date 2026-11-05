@@ -83,7 +83,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }, cleanups
 
   // Any 6-decimal ERC-20 and any EIP-712 payment domain whose version is not "2" without a salt.
   const usdc = await deploy(['SealedDelivery.Base.t.sol', 'MockUSDC'], [])
-  const contract = await deploy(['SealedDelivery.sol', 'SealedDelivery'], [3600n, 8n, 3608n, usdc, 'GatewayWalletBatched', '1', GATEWAY, DISPUTE_COST])
+  const contract = await deploy(['SealedDelivery.sol', 'SealedDelivery'], [3600n, 8n, 3608n, usdc, 'GatewayWalletBatched', '1', GATEWAY, DISPUTE_COST, `0x${'0'.repeat(64)}`])
   await pub.waitForTransactionReceipt({
     hash: await deployer.writeContract({ address: usdc, abi: parseAbi(['function mint(address,uint256)']), functionName: 'mint', args: [addressOf(keys.seller), DEPOSIT] }),
   })
