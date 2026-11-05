@@ -21,7 +21,7 @@ contract MockUSDC is ERC20 {
 /// Exposes the internal signature helpers for the EIP-3009 vector test.
 contract SealedDeliveryHarness is SealedDelivery {
     constructor(address usdc, string memory name, string memory version, address verifyingContract)
-        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract)
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0)
     {}
 
     function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
@@ -75,8 +75,10 @@ abstract contract SDHelpers is Test {
         usdc = MockUSDC(USDC_ADDR);
     }
 
+    uint256 internal disputeCost;
+
     function _deploy(uint256 maxExpiry, uint256 window, uint256 cooldown) internal returns (SealedDelivery) {
-        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET);
+        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET, disputeCost);
     }
 
     function _sdDomain() internal view returns (bytes32) {

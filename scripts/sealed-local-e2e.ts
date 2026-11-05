@@ -50,6 +50,9 @@ const USDC = ARC_USDC as Address
 const ONE_ETH = '0xDE0B6B3A7640000'
 
 /** Every value the contract's constructor may ask for, by name. Change the deployment here. */
+const DISPUTE_COST = 10_500n
+const OWED = DEMO_PRICE + DISPUTE_COST
+
 const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   maxExpiry: MAX_EXPIRY,
   answerWindow: ANSWER_WINDOW,
@@ -58,6 +61,7 @@ const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   paymentDomainName: ARC_GATEWAY_DOMAIN_NAME,
   paymentDomainVersion: ARC_GATEWAY_DOMAIN_VERSION,
   paymentVerifyingContract: ARC_GATEWAY_WALLET,
+  disputeCost: DISPUTE_COST,
 }
 
 /** Builds the arguments from the artifact, so a constructor with more inputs needs only a new value above. */
@@ -280,7 +284,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const a = await runScene(demos, 'a')
     console.log(`      A: ${stepsLine(a.run)}`)
     check('A key from the chain', 'state', a.run.state, 'done')
-    check('A key from the chain', 'steps', names(a.run), ['hold', 'payment', 'waiting', 'waiting', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
+    check('A key from the chain', 'steps', names(a.run), ['hold', 'payment', 'waiting', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
     check('A key from the chain', 'receipt', a.row?.outcome, ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
     check('A key from the chain', 'received once', a.row?.timesReceived, 1)
     check('A key from the chain', 'settled once', settleCalls.count - before, 1)
@@ -288,7 +292,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const holdTopUp = (await client.usdcBalance(hold)) - holdStart
     check('A key from the chain', 'the buyer added gas to the hold', holdTopUp > 0n, true)
     check('A key from the chain', 'deposit untouched', await client.deposits(addressOf(keys.a)), SELLER_DEPOSIT)
-    check('A key from the chain', 'coverage came back', await client.coverageFor(addressOf(keys.a), SELLER_DEPOSIT / 2n), true)
+    check('A key from the chain', 'coverage came back', await client.coverageFor(addressOf(keys.a), SELLER_DEPOSIT / 2n - DISPUTE_COST), true)
     const aClaimId = a.row?.sealed?.claimId as Hex
     let kept = 'no revert'
     try {
@@ -303,7 +307,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const beforeBox = settleCalls.count
     const box = await runScene(demos, 'a')
     console.log(`      A box lost: ${stepsLine(box.run)}`)
-    check('A box lost, then key', 'steps', names(box.run), ['hold', 'payment', 'waiting', 'connection dropped', 'fetching again', 'waiting', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
+    check('A box lost, then key', 'steps', names(box.run), ['hold', 'payment', 'waiting', 'connection dropped', 'fetching again', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
     check('A box lost, then key', 'receipt', box.row?.outcome, ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
     check('A box lost, then key', 'settled once', settleCalls.count - beforeBox, 1)
 
@@ -340,15 +344,15 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       const pressed = await demos.act(run.id, 'finalize')
       // The button already sent the burned half on, and the check below reads that.
       const after = receipts.list().find((r) => r.id === row?.id)
-      check(label, 'receipt', after?.outcome, [...first, 'The seller stayed silent. Its deposit paid 0.001 USDC back.'])
-      check(label, 'the buyer is credited 1x', (await client.claimable(hold)) - claimableBefore, DEMO_PRICE)
-      check(label, '1x is burned', (await client.usdcBalance(DEAD)) - deadBefore, DEMO_PRICE)
-      check(label, 'the deposit pays 2x', depositBefore - (await client.deposits(addressOf(key))), 2n * DEMO_PRICE)
+      check(label, 'receipt', after?.outcome, [...first, 'The seller stayed silent. Its deposit paid 0.0115 USDC back.'])
+      check(label, 'the buyer is credited 1x', (await client.claimable(hold)) - claimableBefore, OWED)
+      check(label, '1x is burned', (await client.usdcBalance(DEAD)) - deadBefore, OWED)
+      check(label, 'the deposit pays 2x', depositBefore - (await client.deposits(addressOf(key))), 2n * OWED)
       check(label, 'next button', pressed.action, 'withdraw')
       const holdBefore = await client.usdcBalance(hold)
       const withdrawn = await demos.act(run.id, 'withdraw')
       const holdAfter = await client.usdcBalance(hold)
-      check(label, 'back in the hold', holdAfter - holdBefore >= DEMO_PRICE - (await client.gasCost(WITHDRAW_GAS)), true)
+      check(label, 'back in the hold', holdAfter - holdBefore >= OWED - (await client.gasCost(WITHDRAW_GAS)), true)
       check(label, 'nothing left to take', await client.claimable(hold), 0n)
       check(label, 'no more buttons', withdrawn.action, null)
     }
@@ -364,10 +368,10 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     check('F swapped answer', 'stops at the button', f.run.action, 'prove')
     const proved = await demos.act(f.run.id, 'prove')
     const fRow = receipts.list().find((r) => r.id === f.row?.id)
-    check('F swapped answer', 'receipt', fRow?.outcome, ["The answer did not match the seller's promise. Its deposit paid 0.001 USDC back."])
+    check('F swapped answer', 'receipt', fRow?.outcome, ["The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back."])
     check('F swapped answer', 'FRAUD on the contract', await pub.readContract({ address, abi: SEALED_ABI, functionName: 'fraudCount', args: [addressOf(keys.f)] }), 1n)
-    check('F swapped answer', 'the deposit pays 2x', fDeposit - (await client.deposits(addressOf(keys.f))), 2n * DEMO_PRICE)
-    check('F swapped answer', 'the buyer is credited 1x', await client.claimable(hold), DEMO_PRICE)
+    check('F swapped answer', 'the deposit pays 2x', fDeposit - (await client.deposits(addressOf(keys.f))), 2n * OWED)
+    check('F swapped answer', 'the buyer is credited 1x', await client.claimable(hold), OWED)
     check('F swapped answer', 'next button', proved.action, 'withdraw')
     await demos.act(f.run.id, 'withdraw')
     check('F swapped answer', 'nothing left to take', await client.claimable(hold), 0n)

@@ -307,4 +307,53 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
         _withdraw(sellerA);
         assertEq(usdc.balanceOf(sellerA), 10 * V);
     }
+
+    // ---------------------------------------------------------------- the dispute cost
+
+    function _withDisputeCost(uint256 cost) internal {
+        disputeCost = cost;
+        sd = _deploy(MAX_EXPIRY, WINDOW, COOLDOWN);
+    }
+
+    function test_DisputeCost_SilencePaysThePriceAndTheCostOfAsking() public {
+        uint256 cost = 10_500;
+        uint256 price = 1_000;
+        _withDisputeCost(cost);
+        vm.prank(sellerA);
+        usdc.approve(address(sd), type(uint256).max);
+        _fund(sellerA, 100_000);
+        assertTrue(sd.coverageFor(sellerA, price));
+        _claimOk(_prom(sellerA, buyer, price, N1));
+        assertEq(sd.openLiability(sellerA), 2 * (price + cost));
+        skip(WINDOW);
+        sd.finalize(id1);
+        assertEq(sd.claimable(buyer), price + cost, "the buyer is made whole");
+        assertEq(sd.pendingBurn(), price + cost, "the seller pays the same again");
+        assertEq(sd.deposits(sellerA), 100_000 - 2 * (price + cost));
+    }
+
+    function test_DisputeCost_AnsweringCostsTheDepositNothing() public {
+        _withDisputeCost(10_500);
+        vm.prank(sellerA);
+        usdc.approve(address(sd), type(uint256).max);
+        _fund(sellerA, 100_000);
+        _claimOk(_prom(sellerA, buyer, 1_000, N1));
+        sd.answer(id1, KEY);
+        assertEq(sd.deposits(sellerA), 100_000);
+        assertEq(sd.claimable(buyer), 0);
+    }
+
+    function test_DisputeCost_CoverageForCountsIt() public {
+        _withDisputeCost(10_500);
+        vm.prank(sellerA);
+        usdc.approve(address(sd), type(uint256).max);
+        _fund(sellerA, 2 * (1_000 + 10_500));
+        assertTrue(sd.coverageFor(sellerA, 1_000));
+        assertFalse(sd.coverageFor(sellerA, 1_001));
+    }
+
+    function test_DisputeCost_RefusesAnImpossibleValue() public {
+        vm.expectRevert(SealedDelivery.InvalidDisputeCost.selector);
+        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint256).max);
+    }
 }

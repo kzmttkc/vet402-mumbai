@@ -262,7 +262,12 @@ export function createDemoService(
 
     // The key on its own request. When that works, nothing touches the chain.
     mark(run, 'waiting')
-    const offered = await sealed.requestKey(seller.url, payment)
+    let offered = await sealed.requestKey(seller.url, payment)
+    if (!offered) {
+      // Asking again is free, so the chain is the last resort.
+      mark(run, 'fetching again')
+      offered = await sealed.requestKey(seller.url, payment)
+    }
     const opened = offered ? open(box, offered) : null
     if (opened?.matches) {
       mark(run, 'opened')

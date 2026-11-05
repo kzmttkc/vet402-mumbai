@@ -8,8 +8,8 @@ import { ANSWER_GAS, APPROVE_GAS, ARC_NET, createSealedDelivery, DEPOSIT_GAS, pa
 import type { SealedClient } from '../server/sealedDelivery'
 import { formatUsdc, parseUsdc } from '../src/onchain-money'
 
-export const SELLER_DEPOSIT = parseUsdc('0.01')
-export const SELLER_GAS = parseUsdc('0.02')
+export const SELLER_DEPOSIT = parseUsdc('0.1')
+export const SELLER_GAS = parseUsdc('0.03')
 
 export interface SetupPlan {
   name: string

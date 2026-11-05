@@ -408,7 +408,7 @@ describe('the demo with a contract', () => {
   test('the key comes from the chain and the receipt says so, word for word', async () => {
     const { demos, receipts } = setup()
     const finished = await run(demos, 'a')
-    expect(finished.steps.map((s) => s.name)).toEqual(['hold', 'payment', 'waiting', 'waiting', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
+    expect(finished.steps.map((s) => s.name)).toEqual(['hold', 'payment', 'waiting', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
     expect(receipts.list()[0]?.outcome).toEqual(['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
     expect(receipts.list()[0]?.sealed).toEqual({ ciphertext: sealed.ciphertext, claimId: CLAIM_ID, plaintextHash: sealed.plaintextHash, keyBlock: '7' })
     expect(finished.action).toBeNull()

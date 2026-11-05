@@ -14,7 +14,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  * @dev Never receives or verifies the underlying payment: buyer signatures prove intent, not settlement.
  * Deposits back key revelation and signed plaintext correctness. Buyers should read coverageFor(seller, value)
  * before paying. Nothing is reserved at claim time: a verdict (finalize or prove) takes
- * min(2 * value, deposits[seller]) when it lands, so earlier verdicts are paid first and later ones get
+ * min(2 * (value + DISPUTE_COST), deposits[seller]) when it lands, so earlier verdicts are paid first and later ones get
  * what is left. The buyer gets half rounded up and the remainder queues in pendingBurn until anyone calls
  * flushBurn(), so a blocked burn address cannot stop a verdict. Funds queued for withdrawal stay in
  * deposits and can be taken until they actually leave. openLiability[seller] holds withdrawals back while
@@ -34,6 +34,9 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     uint256 public immutable MAX_EXPIRY;
     uint256 public immutable ANSWER_WINDOW;
     uint256 public immutable COOLDOWN;
+    /// @notice What going to the chain costs a buyer, in USDC units. A silent or lying seller pays it on top of the
+    /// price, so a sub-cent payment is still worth disputing and answering is always cheaper than silence.
+    uint256 public immutable DISPUTE_COST;
 
     bytes32 internal constant PROMISE_TYPEHASH = keccak256(
         "Promise(address seller,uint256 value,bytes32 paymentNonce,bytes32 keyHash,bytes32 plaintextHash,bytes32 ciphertextHash,uint64 expiry,address buyer)"
@@ -105,6 +108,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     error InvalidMaxExpiry();
     error InvalidAnswerWindow();
     error InvalidCooldown();
+    error InvalidDisputeCost();
     error InvalidSellerSignature();
     error InvalidBuyerSignature();
     error NotBuyer();
@@ -154,7 +158,8 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         address usdc,
         string memory paymentDomainName,
         string memory paymentDomainVersion,
-        address paymentVerifyingContract
+        address paymentVerifyingContract,
+        uint256 disputeCost
     ) EIP712("SealedDelivery", "1") {
         if (maxExpiry == 0) revert InvalidMaxExpiry();
         if (answerWindow == 0) revert InvalidAnswerWindow();
@@ -163,6 +168,8 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         MAX_EXPIRY = maxExpiry;
         ANSWER_WINDOW = answerWindow;
         COOLDOWN = cooldown;
+        if (disputeCost > LIABILITY_CAP / 2) revert InvalidDisputeCost();
+        DISPUTE_COST = disputeCost;
         USDC = IERC20(usdc);
         bytes32 nameHash = keccak256(bytes(paymentDomainName));
         bytes32 versionHash = keccak256(bytes(paymentDomainVersion));
@@ -184,10 +191,10 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     /// @notice A buyer reads this before paying to check coverage for twice the payment value.
     /// @dev Coverage can change before a claim; values whose double exceeds uint256 return false.
     function coverageFor(address seller, uint256 value) public view returns (bool) {
-        if (value > type(uint256).max / 2) return false;
+        if (value > type(uint256).max / 2 - DISPUTE_COST) return false;
         uint256 uncommitted = coverage(seller);
         uint256 held = openLiability[seller];
-        return uncommitted >= held && uncommitted - held >= 2 * value;
+        return uncommitted >= held && uncommitted - held >= 2 * (value + DISPUTE_COST);
     }
 
     /// @notice Records a signed key-revelation promise bound to one buyer; moves no funds and reserves none.
@@ -215,7 +222,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
             revert TimestampOverflow();
         }
         uint64 deadline = uint64(block.timestamp + ANSWER_WINDOW);
-        uint256 liability = p.value > LIABILITY_CAP / 2 ? LIABILITY_CAP : 2 * p.value;
+        uint256 liability = p.value > LIABILITY_CAP / 2 - DISPUTE_COST ? LIABILITY_CAP : 2 * (p.value + DISPUTE_COST);
         openLiability[p.seller] += liability;
         Claim storage c = claims[claimId];
         c.seller = p.seller;
