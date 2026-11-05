@@ -12,3 +12,6 @@ contracts/cache/
 .agents/
 dist/
 data/
+data-film/
+data-film2/
+.mainnet/
