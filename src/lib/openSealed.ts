@@ -3,7 +3,7 @@ import type { Hex } from 'viem'
 import { openResponse } from './sealed'
 
 /** The public node. The published screen reads the key from it directly, with no backend in between. */
-export const PUBLIC_RPC = 'https://rpc.testnet.arc.io'
+export const PUBLIC_RPC = 'https://rpc.testnet.arc.network'
 
 export const MATCHES_PROMISE = "Matches the seller's promise."
 export const DOES_NOT_MATCH_PROMISE = "Does not match the seller's promise."

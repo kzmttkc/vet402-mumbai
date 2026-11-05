@@ -47,7 +47,7 @@ describe('opening a sealed answer in the browser', () => {
     expect(result).toEqual({ ok: true, text: TEXT, matches: true, line: MATCHES_PROMISE })
     expect(MATCHES_PROMISE).toBe("Matches the seller's promise.")
     expect(calls[0]?.url).toBe(PUBLIC_RPC)
-    expect(calls[0]?.url).toBe('https://rpc.testnet.arc.io')
+    expect(calls[0]?.url).toBe('https://rpc.testnet.arc.network')
     expect(calls[0]?.body.method).toBe('eth_getLogs')
     expect(calls[0]?.body.params[0]).toMatchObject({ address: CONTRACT, fromBlock: '0xff', toBlock: '0xff' })
     expect((calls[0]?.body.params[0].topics as string[])[1]).toBe(CLAIM)
