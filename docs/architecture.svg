@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1090" width="1600" height="1090" font-family="Helvetica, Arial, sans-serif">
+  <title>vet402 on Arc architecture</title>
+  <desc>Screen, backend, Circle Discovery, Circle Gateway, an x402 seller, SealedDelivery on Arc, Arkiv and World ID. The normal path sends 0 SealedDelivery transactions. A claim appears only in a dispute.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1f2d3d"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#b3261e"/></marker>
+  </defs>
+  <rect width="1600" height="1090" fill="#ffffff"/>
+  <text x="50" y="58" font-size="36" font-weight="700" fill="#1f2d3d">vet402 on Arc: one payment, and what happens if the answer is lost</text>
+
+  <!-- Arc band -->
+  <rect x="540" y="648" width="1030" height="146" rx="14" fill="#eef4fb" stroke="#7aa2cf" stroke-width="2"/>
+  <text x="560" y="682" font-size="24" font-weight="700" fill="#2a5b8f">Arc testnet</text>
+
+  <g font-size="22" fill="#1f2d3d">
+    <!-- Screen -->
+    <rect x="50" y="100" width="340" height="130" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="220" y="145" text-anchor="middle" font-size="26" font-weight="700">Phone screen</text>
+    <text x="220" y="180" text-anchor="middle">React and Vite</text>
+    <text x="220" y="210" text-anchor="middle">No keys in the browser</text>
+
+    <!-- World -->
+    <rect x="50" y="290" width="340" height="130" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="220" y="335" text-anchor="middle" font-size="26" font-weight="700">World ID</text>
+    <text x="220" y="370" text-anchor="middle">IDKit, Proof of Human</text>
+    <text x="220" y="400" text-anchor="middle">Staging Simulator</text>
+
+    <!-- Backend -->
+    <rect x="560" y="100" width="420" height="320" rx="12" fill="#fff8e6" stroke="#1f2d3d" stroke-width="3"/>
+    <text x="770" y="145" text-anchor="middle" font-size="28" font-weight="700">vet402 backend</text>
+    <text x="770" y="180" text-anchor="middle">Express on Bun</text>
+    <text x="770" y="235" text-anchor="middle">Hold: its own Gateway balance</text>
+    <text x="770" y="270" text-anchor="middle">One pay function</text>
+    <text x="770" y="305" text-anchor="middle">Asks again on the same payment</text>
+    <text x="770" y="340" text-anchor="middle">Opens the sealed box</text>
+    <text x="770" y="375" text-anchor="middle">One receipt per payment</text>
+
+    <!-- Discovery -->
+    <rect x="1170" y="100" width="380" height="110" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="1360" y="145" text-anchor="middle" font-size="26" font-weight="700">Circle Discovery API</text>
+    <text x="1360" y="182" text-anchor="middle">Lists x402 sellers on Arc</text>
+
+    <!-- Seller -->
+    <rect x="1170" y="270" width="380" height="150" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="1360" y="312" text-anchor="middle" font-size="26" font-weight="700">x402 seller</text>
+    <text x="1360" y="348" text-anchor="middle">Settles, then sends the box</text>
+    <text x="1360" y="382" text-anchor="middle">Sends the key on its own request</text>
+
+    <!-- Gateway -->
+    <rect x="1170" y="490" width="380" height="100" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="1360" y="533" text-anchor="middle" font-size="26" font-weight="700">Circle Gateway</text>
+    <text x="1360" y="568" text-anchor="middle">Nanopayments, net batches</text>
+
+    <!-- Arkiv -->
+    <rect x="50" y="490" width="340" height="110" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="220" y="535" text-anchor="middle" font-size="26" font-weight="700">Arkiv (Rabdi testnet)</text>
+    <text x="220" y="572" text-anchor="middle">Readonly receipt entities</text>
+
+    <!-- Receipts page -->
+    <rect x="50" y="680" width="340" height="110" rx="12" fill="#f5f7fa" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="220" y="725" text-anchor="middle" font-size="26" font-weight="700">Receipts page</text>
+    <text x="220" y="762" text-anchor="middle">Static, works with backend off</text>
+
+    <!-- SealedDelivery -->
+    <rect x="580" y="692" width="420" height="88" rx="12" fill="#fdecea" stroke="#b3261e" stroke-width="3"/>
+    <text x="790" y="728" text-anchor="middle" font-size="26" font-weight="700">SealedDelivery</text>
+    <text x="790" y="762" text-anchor="middle">Seller deposits and verdicts</text>
+
+    <!-- Batch -->
+    <rect x="1170" y="692" width="380" height="88" rx="12" fill="#ffffff" stroke="#1f2d3d" stroke-width="2"/>
+    <text x="1360" y="728" text-anchor="middle" font-size="26" font-weight="700">Gateway batch tx</text>
+    <text x="1360" y="762" text-anchor="middle">Circle sends it, many payments</text>
+  </g>
+
+  <!-- Solid arrows -->
+  <g fill="none" stroke="#1f2d3d" stroke-width="3">
+    <path d="M390 165H558" marker-end="url(#a)" marker-start="url(#a)"/>
+    <path d="M220 230V288" marker-end="url(#a)" marker-start="url(#a)"/>
+    <path d="M558 355H392" marker-end="url(#a)"/>
+    <path d="M980 155H1168" marker-end="url(#a)"/>
+    <path d="M980 345H1168" marker-end="url(#a)" marker-start="url(#a)"/>
+    <path d="M1360 420V488" marker-end="url(#a)"/>
+    <path d="M1360 590V690" marker-end="url(#a)"/>
+    <path d="M640 420V545H392" marker-end="url(#a)"/>
+    <path d="M220 600V678" marker-end="url(#a)"/>
+    <path d="M900 420V545H1168" marker-end="url(#a)"/>
+  </g>
+  <!-- Dispute arrows -->
+  <g fill="none" stroke="#b3261e" stroke-width="3.5" stroke-dasharray="11 7">
+    <path d="M790 420V690" marker-end="url(#r)"/>
+    <path d="M1170 400H1085V736H1002" marker-end="url(#r)"/>
+  </g>
+
+  <!-- Labels -->
+  <g font-size="21" fill="#1f2d3d">
+    <text x="475" y="150" text-anchor="middle">job, approval</text>
+    <text x="235" y="266">proof</text>
+    <text x="475" y="340" text-anchor="middle">verify proof</text>
+    <text x="1075" y="140" text-anchor="middle">listings</text>
+    <text x="1075" y="330" text-anchor="middle">paid request</text>
+    <text x="1075" y="375" text-anchor="middle">box, key</text>
+    <text x="1375" y="462">settle</text>
+    <text x="1375" y="640">settles on Arc</text>
+    <text x="515" y="532" text-anchor="middle">receipts</text>
+    <text x="235" y="645">read directly</text>
+    <text x="990" y="532" text-anchor="middle">hold, record</text>
+  </g>
+  <g font-size="22" fill="#b3261e" font-weight="700">
+    <text x="775" y="625" text-anchor="end">claim, finalize, prove</text>
+    <text x="1075" y="625" text-anchor="end">answer(key)</text>
+  </g>
+
+  <!-- Two paths -->
+  <rect x="50" y="825" width="1500" height="110" rx="12" fill="#eaf6ec" stroke="#2e7d32" stroke-width="2"/>
+  <text x="74" y="868" font-size="25" font-weight="700" fill="#1b5e20">Normal path: 0 SealedDelivery transactions</text>
+  <text x="74" y="908" font-size="22" fill="#1f2d3d">Box, then key over HTTP. vet402 and the seller send no transaction for that payment. Circle settles it in a shared batch.</text>
+
+  <rect x="50" y="950" width="1500" height="120" rx="12" fill="#fdecea" stroke="#b3261e" stroke-width="2"/>
+  <text x="74" y="992" font-size="25" font-weight="700" fill="#b3261e">Dispute path only: the key did not arrive, so vet402 sends claim</text>
+  <text x="74" y="1030" font-size="22" fill="#1f2d3d">The seller answers on Arc, or silence or a false answer takes 2x the price from its deposit: half to the buyer, half burned.</text>
+  <text x="74" y="1058" font-size="20" fill="#1f2d3d">Measured on 2026-11-05: claim 268,317 gas x 25 gwei = 0.0067 USDC.</text>
+</svg>
