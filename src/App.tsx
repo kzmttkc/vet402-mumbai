@@ -1,3 +1,4 @@
+import { FILM_MODE } from '@/lib/filmMode'
 import { useCallback } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { HoldCard } from '@/components/HoldCard'
@@ -47,7 +48,7 @@ export default function App() {
         />
         </div>
         <div className="lg:-mt-4">
-        <ReceiptList receipts={receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />
+        <ReceiptList receipts={FILM_MODE ? receipts.slice(0, 1) : receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />
 
         {failed && (
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--danger)]" role="alert">
