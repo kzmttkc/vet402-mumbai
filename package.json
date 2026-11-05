@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "server": "bun run server/index.ts",
+    "test": "bash scripts/test.sh",
     "deploy:self": "bun run ./scripts/self-deploy.ts",
     "compass:deploy": "bun run ./scripts/compass-deploy.ts",
     "fetch:abi": "bun run ./scripts/fetch-abi.ts",

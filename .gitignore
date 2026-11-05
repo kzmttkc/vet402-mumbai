@@ -11,3 +11,4 @@ lib/
 .arc-studio/
 .agents/
 dist/
+data/

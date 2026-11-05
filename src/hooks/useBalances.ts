@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 
+export interface HoldView {
+  state: 'none' | 'setting-up' | 'active' | 'used-up'
+  amount: string
+  remaining: string
+}
+
 export interface Balances {
   balance: string
-  agentBudget: string
+  hold: HoldView
 }
 
 const REFRESH_MS = 10_000
@@ -31,5 +37,5 @@ export function useBalances() {
     }
   }, [load])
 
-  return { data, failed, retry: load }
+  return { data, failed, reload: load }
 }
