@@ -70,7 +70,7 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
 
     function test_RequestWithdraw_RevertsWhenDippingIntoReservation() public {
         _fund(sellerA, 100e6);
-        _claimOk(_prom(sellerA, buyer, 60e6, N1));
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 2 * 30 = 60
         vm.startPrank(sellerA);
         vm.expectRevert(SealedDelivery.ExceedsCoverage.selector);
         sd.requestWithdraw(40e6 + 1);
@@ -170,16 +170,36 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
         vm.prank(sellerA);
         sd.requestWithdraw(80e6);
         _claimOk(_prom(sellerA, buyer, 100e6, N1));
-        (,, uint256 r,,) = _claimData(N1);
+        (,, uint256 r,,) = _claimData(id1);
         assertEq(r, 20e6);
         vm.warp(block.timestamp + COOLDOWN);
         vm.prank(sellerA);
         sd.withdrawDeposit();
         assertEq(sd.deposits(sellerA), 20e6);
         assertEq(sd.reserved(sellerA), 20e6);
-        sd.finalize(N1);
-        assertEq(sd.claimable(buyer), 20e6);
+        sd.finalize(id1);
+        assertEq(sd.claimable(buyer), 10e6); // half of the capped 20e6 reservation
+        assertEq(_deadBal(), 10e6);
         assertEq(sd.deposits(sellerA), 0);
+    }
+
+    /// The pending withdrawal stays withdrawable after a claim finalizes: tokens are all there.
+    function test_WithdrawDeposit_PendingSurvivesFinalizeOfOtherClaim() public {
+        _fund(sellerA, 100e6);
+        vm.prank(sellerA);
+        sd.requestWithdraw(40e6);
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 60e6, coverage 0
+        skip(COOLDOWN);
+        sd.finalize(id1); // buyer 30, burned 30, deposits 40
+        vm.prank(sellerA);
+        sd.withdrawDeposit();
+        assertEq(usdc.balanceOf(sellerA), 40e6);
+        assertEq(sd.deposits(sellerA), 0);
+        assertEq(usdc.balanceOf(address(sd)), 30e6); // exactly the buyer's credit remains
+        vm.prank(buyer);
+        sd.withdrawClaimable();
+        assertEq(usdc.balanceOf(buyer), 30e6);
+        assertEq(usdc.balanceOf(address(sd)), 0);
     }
 
     // ---------------------------------------------------------------- withdrawClaimable
@@ -192,16 +212,18 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
 
     function test_WithdrawClaimable_PaysBuyerAfterSilent() public {
         _fund(sellerA, 100e6);
-        _claimOk(_prom(sellerA, buyer, 60e6, N1));
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 60: buyer 30, burned 30
         skip(WINDOW);
-        sd.finalize(N1);
+        sd.finalize(id1);
+        assertEq(usdc.balanceOf(address(sd)), 70e6); // burn already left the contract
 
         vm.expectEmit(true, false, false, true, address(sd));
-        emit SealedDelivery.ClaimableWithdrawn(buyer, 60e6);
+        emit SealedDelivery.ClaimableWithdrawn(buyer, 30e6);
         vm.prank(buyer);
         sd.withdrawClaimable();
-        assertEq(usdc.balanceOf(buyer), 60e6);
+        assertEq(usdc.balanceOf(buyer), 30e6);
         assertEq(usdc.balanceOf(address(sd)), 40e6);
+        assertEq(sd.deposits(sellerA), 40e6);
         assertEq(sd.claimable(buyer), 0);
 
         vm.prank(buyer);
@@ -211,12 +233,12 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
 
     function test_WithdrawClaimable_NotPayableToOthers() public {
         _fund(sellerA, 100e6);
-        _claimOk(_prom(sellerA, buyer, 60e6, N1));
+        _claimOk(_prom(sellerA, buyer, 30e6, N1));
         skip(WINDOW);
-        sd.finalize(N1);
+        sd.finalize(id1);
         vm.prank(carol);
         vm.expectRevert(SealedDelivery.NothingToWithdraw.selector);
         sd.withdrawClaimable();
-        assertEq(sd.claimable(buyer), 60e6);
+        assertEq(sd.claimable(buyer), 30e6);
     }
 }

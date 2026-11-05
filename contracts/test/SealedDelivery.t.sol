@@ -66,21 +66,23 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, 40e6, N1);
         p.expiry = uint64(block.timestamp + 60); // exactly MAX_EXPIRY: accepted
         _claimOk(p);
-        (,,, uint64 dl,) = _claimData(N1);
+        (,,, uint64 dl,) = _claimData(id1);
         assertEq(dl, block.timestamp + 60);
         skip(60);
-        sd.finalize(N1);
+        sd.finalize(id1);
+        // reserved 2 * 40 = 80: buyer 40, burned 40, deposit left 20
         assertEq(sd.claimable(buyer), 40e6);
+        assertEq(_deadBal(), 40e6);
 
         vm.startPrank(sellerA);
-        sd.requestWithdraw(60e6);
+        sd.requestWithdraw(20e6);
         skip(119);
         vm.expectRevert(SealedDelivery.CooldownActive.selector);
         sd.withdrawDeposit();
         skip(1);
         sd.withdrawDeposit();
         vm.stopPrank();
-        assertEq(usdc.balanceOf(sellerA), 60e6);
+        assertEq(usdc.balanceOf(sellerA), 20e6);
 
         // expiry one second beyond the shorter MAX_EXPIRY is rejected
         SealedDelivery.Promise memory q = _prom(sellerA, buyer, 1e6, N2);
@@ -94,16 +96,19 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
     function test_Claim_StoresClaimAndReserves() public {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
         _claimOk(p);
-        (address s, address b, uint256 r, uint64 dl, bytes32 kh) = _claimData(N1);
+        (address s, address b, uint256 r, uint64 dl, bytes32 kh) = _claimData(id1);
         assertEq(s, sellerA);
         assertEq(b, buyer);
-        assertEq(r, VAL);
+        assertEq(r, 2 * VAL);
         assertEq(dl, uint64(block.timestamp + WINDOW));
         assertEq(kh, keccak256(KEY));
-        assertEq(uint8(_status(N1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), VAL);
-        assertEq(sd.coverage(sellerA), DEP - VAL);
+        assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
+        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.coverage(sellerA), DEP - 2 * VAL);
         assertEq(sd.deposits(sellerA), DEP);
+        (bytes32 ph, bytes32 ch) = _claimHashes(id1);
+        assertEq(ph, keccak256("plain"));
+        assertEq(ch, keccak256("cipher"));
     }
 
     function test_Claim_EmitsClaimed() public {
@@ -112,17 +117,57 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         bytes memory ss = _sellerSig(p);
         bytes memory bs = _buyerSig(a);
         vm.expectEmit(true, true, true, true, address(sd));
-        emit SealedDelivery.Claimed(N1, sellerA, buyer, VAL, uint64(block.timestamp + WINDOW));
+        emit SealedDelivery.Claimed(id1, N1, sellerA, buyer, 2 * VAL, uint64(block.timestamp + WINDOW));
         vm.prank(buyer);
         sd.claim(p, ss, a, bs);
     }
 
-    function test_Claim_ReservesMinOfValueAndCoverage() public {
+    function test_Claim_ReservesMinOfTwiceValueAndCoverage() public {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, DEP + 1, N1);
         _claimOk(p);
-        (,, uint256 r,,) = _claimData(N1);
+        (,, uint256 r,,) = _claimData(id1);
+        assertEq(r, DEP); // 2 * (DEP + 1) > DEP
+        assertEq(sd.coverage(sellerA), 0);
+    }
+
+    function test_Claim_ReservesExactlyTwiceValueWhenCovered() public {
+        // 2 * 250e6 == DEP: exactly covered
+        _claimOk(_prom(sellerA, buyer, DEP / 2, N1));
+        (,, uint256 r,,) = _claimData(id1);
         assertEq(r, DEP);
         assertEq(sd.coverage(sellerA), 0);
+    }
+
+    function test_Claim_OneUnderTwiceValueReservesCoverage() public {
+        // value = DEP/2 + 1 => 2*value = DEP + 2 > DEP, capped to DEP
+        _claimOk(_prom(sellerA, buyer, DEP / 2 + 1, N1));
+        (,, uint256 r,,) = _claimData(id1);
+        assertEq(r, DEP);
+    }
+
+    function test_Claim_HugeValueDoesNotOverflow() public {
+        _claimOk(_prom(sellerA, buyer, type(uint256).max, N1));
+        (,, uint256 r,,) = _claimData(id1);
+        assertEq(r, DEP);
+        assertEq(sd.reserved(sellerA), DEP);
+
+        // max/2 + 1 is the smallest value whose double overflows
+        _claimOk(_prom(sellerB, buyer, type(uint256).max / 2 + 1, N1));
+        (,, uint256 r2,,) = _claimData(_cid(sellerB, buyer, N1));
+        assertEq(r2, 0);
+
+        // max/2 doubles to max - 1 without overflow
+        _fund(sellerB, 7);
+        _claimOk(_prom(sellerB, buyer, type(uint256).max / 2, N2));
+        (,, uint256 r3,,) = _claimData(_cid(sellerB, buyer, N2));
+        assertEq(r3, 7);
+    }
+
+    function test_Claim_ZeroValueReservesNothing() public {
+        _claimOk(_prom(sellerA, buyer, 0, N1));
+        (,, uint256 r,,) = _claimData(id1);
+        assertEq(r, 0);
+        assertEq(sd.coverage(sellerA), DEP);
     }
 
     // ---------------------------------------------------------------- claim reverts
@@ -222,7 +267,7 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
         vm.warp(p.expiry - 1);
         _claimOk(p);
-        assertEq(uint8(_status(N1)), uint8(SealedDelivery.Status.OPEN));
+        assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
     }
 
     function test_Claim_RevertsExpiryTooFar() public {
@@ -236,7 +281,7 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
         p.expiry = uint64(block.timestamp + MAX_EXPIRY);
         _claimOk(p);
-        assertEq(uint8(_status(N1)), uint8(SealedDelivery.Status.OPEN));
+        assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
     }
 
     function test_Claim_RevertsAlreadyClaimed_Replay() public {
@@ -246,19 +291,37 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         _claimRaw(p, _sellerSig(p), a, _buyerSig(a), buyer, SealedDelivery.AlreadyClaimed.selector);
     }
 
-    function test_Claim_RevertsAlreadyClaimed_DifferentBuyer() public {
+    /// New truth: same nonce + same seller but a different buyer is a different claim and succeeds.
+    function test_Claim_DifferentBuyerSameNonceIsSeparateClaim() public {
         _claimOk(_prom(sellerA, buyer, VAL, N1));
         SealedDelivery.Promise memory p2 = _prom(sellerA, buyer2, VAL, N1);
-        SealedDelivery.PaymentAuth memory a2 = _authFor(p2);
-        _claimRaw(p2, _sellerSig(p2), a2, _buyerSig(a2), buyer2, SealedDelivery.AlreadyClaimed.selector);
+        _claimOk(p2);
+        bytes32 id2 = _cid(sellerA, buyer2, N1);
+        assertTrue(id2 != id1);
+        assertEq(uint8(_status(id2)), uint8(SealedDelivery.Status.OPEN));
+        assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
+        assertEq(sd.reserved(sellerA), 4 * VAL);
     }
 
-    function test_Claim_AlreadyClaimedAfterTerminalStates() public {
+    function test_Claim_RevertsAlreadyClaimed_AfterAnswer() public {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
         _claimOk(p);
-        sd.answer(N1, KEY);
+        sd.answer(id1, KEY);
         SealedDelivery.PaymentAuth memory a = _authFor(p);
         _claimRaw(p, _sellerSig(p), a, _buyerSig(a), buyer, SealedDelivery.AlreadyClaimed.selector);
+    }
+
+    function test_Claim_RevertsAlreadyClaimed_AfterFinalize() public {
+        SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
+        _claimOk(p);
+        SealedDelivery.PaymentAuth memory a = _authFor(p);
+        bytes memory ss = _sellerSig(p);
+        bytes memory bs = _buyerSig(a);
+        skip(WINDOW);
+        sd.finalize(id1);
+        // still inside promise expiry, so only the single-use claimId can reject it
+        assertLt(block.timestamp, p.expiry);
+        _claimRaw(p, ss, a, bs, buyer, SealedDelivery.AlreadyClaimed.selector);
     }
 
     // ---------------------------------------------------------------- no native-token entry / no owner
