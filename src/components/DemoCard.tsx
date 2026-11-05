@@ -35,7 +35,7 @@ interface Props {
   run: DemoRun | null
   error: string | null
   running: boolean
-  start: (kind: DemoKind) => Promise<void>
+  start: (kind: DemoKind, lineUp?: boolean) => Promise<void>
   /** True when the backend has the contract, so Sellers D, E and F exist. */
   sealed: boolean
   act: (action: DemoAction) => Promise<void>
