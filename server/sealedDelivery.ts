@@ -101,7 +101,7 @@ export const PROMISE_SECONDS = 3000
 
 // Upper bounds on the gas of each call, measured on the local run and rounded up.
 export const CLAIM_GAS = 320_000n
-export const ANSWER_GAS = 60_000n
+export const ANSWER_GAS = 90_000n
 export const APPROVE_GAS = 60_000n
 export const DEPOSIT_GAS = 100_000n
 export const FINALIZE_GAS = 160_000n
