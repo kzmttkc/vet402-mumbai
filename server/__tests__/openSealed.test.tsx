@@ -3,12 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { encodeAbiParameters } from 'viem'
+import { encodeAbiParameters, encodeFunctionResult } from 'viem'
 import { exportPublic } from '../../scripts/export-public'
 import { OpenSealed } from '../../src/components/OpenSealed'
 import { DemoCard } from '../../src/components/DemoCard'
 import type { DemoRun } from '../../src/hooks/useDemo'
-import { DOES_NOT_MATCH_PROMISE, MATCHES_PROMISE, openSealedAnswer, PUBLIC_RPC } from '../../src/lib/openSealed'
+import { CLAIMS_ABI, DOES_NOT_MATCH_PROMISE, MATCHES_PROMISE, openSealedAnswer, PUBLIC_RPC } from '../../src/lib/openSealed'
 import type { PublicSealedAnswer } from '../../src/lib/openSealed'
 import { loadSealedFile, STATIC_PATHS } from '../../src/lib/publicData'
 import { sealResponse } from '../../src/lib/sealed'
@@ -30,11 +30,32 @@ const answer: PublicSealedAnswer = {
   keyBlock: '255',
 }
 
-const node = (result: unknown, status = 200) => {
+/** What the contract stored at claim time, as eth_call returns it. */
+const claimRecord = (hashes: { plaintextHash: string; ciphertextHash: string }) =>
+  encodeFunctionResult({
+    abi: CLAIMS_ABI,
+    functionName: 'claims',
+    result: [
+      `0x${'aa'.repeat(20)}`,
+      `0x${'bb'.repeat(20)}`,
+      1000n,
+      100n,
+      sealed.keyHash,
+      2,
+      `0x${'d'.repeat(64)}`,
+      hashes.plaintextHash as `0x${string}`,
+      hashes.ciphertextHash as `0x${string}`,
+    ],
+  })
+
+/** A node that answers eth_getLogs with `result` and eth_call with the claim's stored hashes. */
+const node = (result: unknown, status = 200, hashes = { plaintextHash: sealed.plaintextHash, ciphertextHash: sealed.ciphertextHash }) => {
   const calls: { url: string; body: { method: string; params: [Record<string, unknown>] } }[] = []
   const fetchImpl = (async (url: string, init: RequestInit) => {
-    calls.push({ url, body: JSON.parse(init.body as string) })
-    return new Response(JSON.stringify({ result }), { status })
+    const body = JSON.parse(init.body as string) as { method: string; params: [Record<string, unknown>] }
+    calls.push({ url, body })
+    const answer = body.method === 'eth_call' ? claimRecord(hashes) : result
+    return new Response(JSON.stringify({ result: answer }), { status })
   }) as unknown as typeof fetch
   return { fetchImpl, calls }
 }
@@ -51,11 +72,14 @@ describe('opening a sealed answer in the browser', () => {
     expect(calls[0]?.body.method).toBe('eth_getLogs')
     expect(calls[0]?.body.params[0]).toMatchObject({ address: CONTRACT, fromBlock: '0xff', toBlock: '0xff' })
     expect((calls[0]?.body.params[0].topics as string[])[1]).toBe(CLAIM)
+    expect(calls[1]?.body.method).toBe('eth_call')
+    expect(calls[1]?.body.params[0]).toMatchObject({ to: CONTRACT })
   })
 
   test('another plaintext does not match', async () => {
+    // The seller promised TEXT and claimed with a box that holds something else.
     const other = sealResponse('something else')
-    const { fetchImpl } = node(log(other.key))
+    const { fetchImpl } = node(log(other.key), 200, { plaintextHash: sealed.plaintextHash, ciphertextHash: other.ciphertextHash })
     const result = await openSealedAnswer({ ...answer, ciphertext: other.ciphertext }, CONTRACT, { fetchImpl })
     expect(result).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE })
   })

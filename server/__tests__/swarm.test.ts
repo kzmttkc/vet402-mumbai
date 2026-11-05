@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { keccak256 } from 'viem'
+import { encodeFunctionResult, keccak256 } from 'viem'
 import type { Hex } from 'viem'
 import { createArkivSink, createScrubber } from '../arkiv'
 import type { ArkivWire, EntityOptions, EvidenceValues } from '../arkiv'
@@ -10,6 +10,8 @@ import type { SealedBox, SealedPorts } from '../sealedDelivery'
 import { DEMO_PRICE } from '../sellers'
 import { createEvidenceUploader } from '../swarm'
 import {
+  BOX_NOT_THIS_CLAIM,
+  CLAIMS_ABI,
   DOES_NOT_MATCH_PROMISE,
   FROM_ARC,
   FROM_ARKIV,
@@ -289,8 +291,22 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
     const data = `0x${'0'.repeat(62)}20${(key.length / 2 - 1).toString(16).padStart(64, '0')}${key.slice(2).padEnd(64, '0')}`
     return [{ data }]
   }
-  const arc = (key: Hex | null) =>
-    (async () => new Response(JSON.stringify({ result: key ? keyLog(key) : [] }))) as unknown as typeof fetch
+  /** What the contract stored when the buyer claimed. By default, the honest box. */
+  const HONEST = { plaintextHash: sealed.plaintextHash, ciphertextHash: sealed.ciphertextHash }
+  const claimRecord = (hashes: { plaintextHash: Hex; ciphertextHash: Hex }) =>
+    encodeFunctionResult({
+      abi: CLAIMS_ABI,
+      functionName: 'claims',
+      result: [`0x${'aa'.repeat(20)}`, `0x${'bb'.repeat(20)}`, 1000n, 100n, sealed.keyHash, 2, `0x${'d'.repeat(64)}`, hashes.plaintextHash, hashes.ciphertextHash],
+    })
+  /** Arc: eth_getLogs gives the revealed key, eth_call gives the claim's stored hashes. */
+  const arc = (key: Hex | null, hashes: { plaintextHash: Hex; ciphertextHash: Hex } = HONEST, calls: string[] = []) =>
+    (async (_url: string, init: RequestInit) => {
+      const { method } = JSON.parse(init.body as string) as { method: string }
+      calls.push(method)
+      const result = method === 'eth_call' ? claimRecord(hashes) : key ? keyLog(key) : []
+      return new Response(JSON.stringify({ result }))
+    }) as unknown as typeof fetch
   const swarmBox = (over: Partial<EvidenceBox> = {}) =>
     encodeBox({
       ciphertext: sealed.ciphertext,
@@ -317,14 +333,9 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
           return Promise.resolve(swarmBox())
         },
       },
-      {
-        fetchImpl: (async (...args: Parameters<typeof fetch>) => {
-          order.push('arc')
-          return arc(sealed.key)(...args)
-        }) as typeof fetch,
-      },
+      { fetchImpl: arc(sealed.key, HONEST, order) },
     )
-    expect(order).toEqual(['arkiv true', 'swarm true', 'arc'])
+    expect(order).toEqual(['arkiv true', 'swarm true', 'eth_getLogs', 'eth_call'])
     expect(result).toEqual({ ok: true, text: ANSWER, matches: true, line: MATCHES_PROMISE, read: [FROM_ARKIV, FROM_SWARM, FROM_ARC] })
     expect([FROM_ARKIV, FROM_SWARM, FROM_ARC]).toEqual(['Record from Arkiv.', 'Box from Swarm.', 'Key from Arc.'])
   })
@@ -339,9 +350,63 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
         downloadBox: () =>
           Promise.resolve(swarmBox({ ciphertext: lie.ciphertext, ciphertextHash: keccak256(lie.ciphertext) })),
       },
-      { fetchImpl: arc(lie.key) },
+      // The seller promised the real answer and the buyer claimed with the box that holds the lie.
+      { fetchImpl: arc(lie.key, { plaintextHash: sealed.plaintextHash, ciphertextHash: lie.ciphertextHash }) },
     )
     expect(result).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE, read: [FROM_ARKIV, FROM_SWARM, FROM_ARC] })
+  })
+
+  test('a fake gateway that returns a forged plaintext, ciphertext and hashes together never gets a match', async () => {
+    // Once the key is on Arc anyone can seal any text with it, and make every hash in the box agree.
+    const forged = sealResponse('{"answer":"Forged by the gateway."}', sealed.key)
+    const forgedBox = swarmBox({ ciphertext: forged.ciphertext, ciphertextHash: forged.ciphertextHash, plaintextHash: forged.plaintextHash })
+    const sources = { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.resolve(forgedBox) }
+    const result = await openFromRecord(answer, CONTRACT, sources, { fetchImpl: arc(sealed.key) })
+    expect(result).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [FROM_ARKIV, FROM_SWARM] })
+    expect(BOX_NOT_THIS_CLAIM).toBe('This box is not the one claimed on Arc.')
+
+    // The real ciphertext with a forged promise: the hash on Arc decides, so a lying seller still shows.
+    const lie = sealResponse('This is not what the seller promised.')
+    const relabelled = swarmBox({ ciphertext: lie.ciphertext, ciphertextHash: lie.ciphertextHash, plaintextHash: lie.plaintextHash })
+    const lied = await openFromRecord(
+      answer,
+      CONTRACT,
+      { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.resolve(relabelled) },
+      { fetchImpl: arc(lie.key, { plaintextHash: sealed.plaintextHash, ciphertextHash: lie.ciphertextHash }) },
+    )
+    expect(lied).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE })
+  })
+
+  test('the exported file is held to the same record on Arc', async () => {
+    const noRecord = { readEvidence: () => Promise.resolve(null) }
+    // A forged file box, with every hash in it agreeing.
+    const forged = sealResponse('{"answer":"Forged in the file."}', sealed.key)
+    const forgedFile = await openFromRecord(
+      { ...answer, ciphertext: forged.ciphertext, plaintextHash: forged.plaintextHash },
+      CONTRACT,
+      noRecord,
+      { fetchImpl: arc(sealed.key) },
+    )
+    expect(forgedFile).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [] })
+
+    // A file that relabels a lying seller's box as kept: the hash on Arc still says it was not.
+    const lie = sealResponse('This is not what the seller promised.')
+    const relabelled = await openFromRecord(
+      { ...answer, ciphertext: lie.ciphertext, plaintextHash: keccak256(new TextEncoder().encode('This is not what the seller promised.')) },
+      CONTRACT,
+      noRecord,
+      { fetchImpl: arc(lie.key, { plaintextHash: sealed.plaintextHash, ciphertextHash: lie.ciphertextHash }) },
+    )
+    expect(relabelled).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE, read: [FROM_ARC] })
+
+    // A Swarm failure falls back to the file, and the file is checked the same way.
+    const swarmDown = await openFromRecord(
+      { ...answer, ciphertext: forged.ciphertext, plaintextHash: forged.plaintextHash },
+      CONTRACT,
+      { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.reject(new Error('404')) },
+      { fetchImpl: arc(sealed.key) },
+    )
+    expect(swarmDown).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [FROM_ARKIV] })
   })
 
   test('no Arkiv record, a Swarm failure or a wrong box fall back to the exported file', async () => {
