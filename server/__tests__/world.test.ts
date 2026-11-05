@@ -429,7 +429,8 @@ describe('the path that goes through', () => {
     const view = await world.complete(second.request.id, proofFor(second, '2'))
 
     expect(view.message).toBe('Held 2 USDC for this job.')
-    expect(hold.deposits).toEqual([usdc(1), usdc(2)])
+    // The first hold's leftover stays, so the second deposit is only the difference.
+    expect(hold.deposits).toEqual([usdc(1), usdc(1)])
   })
 
   test('a hold that fails after approval keeps the nullifier spent and shows the hold error', async () => {
