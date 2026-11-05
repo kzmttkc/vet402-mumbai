@@ -117,6 +117,10 @@ export function createTryPorts(options: TryWireOptions): TryPorts {
         client.usdcBalance(buyer),
         client.gasCost(CLAIM_GAS + ANSWER_GAS),
       ])
+      if (available < DEMO_PRICE && options.topUpHold) {
+        // An empty hold would rest forever, so it is refilled now and the next press can pay.
+        await options.topUpHold().catch((error: unknown) => log(`try hold refill failed: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`))
+      }
       return available >= DEMO_PRICE && covered && buyerHas >= gasNeeded
     },
 
