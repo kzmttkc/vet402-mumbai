@@ -94,6 +94,7 @@ const sealedClient = sealedAddress
 const sealedKeys = sealedClient ? loadSealedSellerKeys() : null
 const sealedScene = sealedClient && sealedKeys
   ? createSealedScene({
+      storeDir: path.join(DATA_DIR, 'sellers'),
       client: sealedClient,
       keys: { a: keys.sellerA, d: sealedKeys.sellerD, e: sealedKeys.sellerE, f: sealedKeys.sellerF },
       facilitator,
@@ -110,7 +111,7 @@ const sellerA = createSeller({
   confirmCharged: async (nonce, payer) =>
     (await readOnePayment(nonce, { seller: sellerAddress.a, payer, amount: DEMO_PRICE.toString() })).ok,
   dropAfterSettle: () => !sealedScene && DROP_AFTER_SETTLE,
-  ...(sealedScene ? { sealing: sealedScene.sellerASealing } : {}),
+  ...(sealedScene ? { sealing: sealedScene.sellerASealing, storeFile: path.join(DATA_DIR, 'sellers', 'seller-a.json') } : {}),
 })
 // Seller B declares nothing: it settles, and it has no way to give the same answer again.
 const sellerB = createSeller({

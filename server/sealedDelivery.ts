@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -113,6 +114,8 @@ const FEE_CUSHION = 2n
 const GAS_UNITS_PER_USDC_UNIT = 10n ** 12n
 
 const TX_TIMEOUT_MS = 60_000
+const REFUSED_ANSWER_GAS = 120_000n
+const FLUSH_GAS = 80_000n
 
 export interface SealedPromise {
   seller: Address
@@ -319,10 +322,12 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
     },
 
     /**
-     * Tries a key without paying for a transaction. Returns the contract's error name, or null
-     * when the contract would take the key. A failure that is not a revert is thrown.
+     * Sends a key the contract will refuse, so the refusal is on the chain for anyone to read.
+     * Returns the contract's error name, or null when the contract would take the key.
+     * A failure that is not a revert is thrown.
      */
     async tryAnswer(sellerKey: Hex, claimId: Hex, key: Hex): Promise<string | null> {
+      let name: string | null = null
       try {
         await publicClient.simulateContract({
           account: privateKeyToAccount(sellerKey),
@@ -331,12 +336,22 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
           functionName: 'answer',
           args: [claimId, key],
         })
-        return null
       } catch (error) {
-        const name = revertNameOf(error)
-        if (name) return name
-        throw error
+        name = revertNameOf(error)
+        if (!name) throw error
       }
+      if (name) {
+        // A set gas limit skips the estimate, which would stop a transaction that will revert.
+        const hash = await walletOf(sellerKey).writeContract({
+          address,
+          abi: SEALED_ABI,
+          functionName: 'answer',
+          args: [claimId, key],
+          gas: REFUSED_ANSWER_GAS,
+        } as never)
+        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS })
+      }
+      return name
     },
 
     /** Anyone may send it once the deadline has passed. Returns what the buyer was credited. */
@@ -533,6 +548,7 @@ export function createSealedScene({
   keys,
   facilitator,
   dropKey,
+  storeDir,
   log,
 }: {
   client: SealedClient
@@ -540,6 +556,8 @@ export function createSealedScene({
   facilitator: SellerFacilitator
   /** The switch: Seller A closes the connection when the key is asked for. */
   dropKey: () => boolean
+  /** Where the sellers keep their answers and keys, so a restart can still answer an open claim. */
+  storeDir?: string
   log?: (message: string) => void
 }) {
   const rejected = new Set<string>()
@@ -551,6 +569,7 @@ export function createSealedScene({
       facilitator,
       confirmCharged: () => Promise.resolve(false),
       dropAfterSettle: () => false,
+      ...(storeDir ? { storeFile: path.join(storeDir, `${name.toLowerCase().replace(' ', '-')}.json`) } : {}),
       sealing: { seal: createSealer(client, key, lie === undefined ? {} : { lie }), handsOverKey: () => false },
     })
   const sellerD = quiet('Seller D', keys.d)
@@ -611,6 +630,15 @@ export function createSealedPorts({
 }): SealedPorts {
   const hold = privateKeyToAccount(holdKey).address
   const fill = (gas: bigint) => client.ensureGas(buyerKey, hold, gas)
+  // The burned half waits in the contract until someone sends it. A failure here costs the buyer nothing.
+  const flushBurned = async () => {
+    try {
+      await fill(FLUSH_GAS)
+      await client.flushBurn(holdKey)
+    } catch (error) {
+      console.error('could not send the burned half:', error instanceof Error ? error.message.split('\n')[0] : error)
+    }
+  }
 
   return {
     coverageFor: (seller, value) => client.coverageFor(seller as Address, value),
@@ -659,12 +687,16 @@ export function createSealedPorts({
 
     async finalize(claimId) {
       await fill(FINALIZE_GAS)
-      return client.finalize(holdKey, claimId)
+      const paid = await client.finalize(holdKey, claimId)
+      await flushBurned()
+      return paid
     },
 
     async prove(claimId, ciphertext, key) {
       await fill(PROVE_GAS)
-      return client.prove(holdKey, claimId, ciphertext, key)
+      const paid = await client.prove(holdKey, claimId, ciphertext, key)
+      await flushBurned()
+      return paid
     },
 
     async withdraw() {

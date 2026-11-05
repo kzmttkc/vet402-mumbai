@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import type { Request, Response } from 'express'
 import type { Hex } from 'viem'
 import {
@@ -43,6 +45,8 @@ export interface SellerConfig {
   confirmCharged: (nonce: string, payer: string) => Promise<boolean>
   /** The switch: close the connection after settling and before the first response. */
   dropAfterSettle: () => boolean
+  /** With this, answers and keys survive a restart, so an open claim can still be answered. */
+  storeFile?: string
   /** With this, the paid answer is a sealed box and the key comes on a separate request. */
   sealing?: SellerSealing
 }
@@ -117,9 +121,25 @@ function parsePayment(header: string): ParsedPayment | null {
   }
 }
 
+function readStored(file: string): [string, Stored][] {
+  if (!existsSync(file)) return []
+  return Object.entries(JSON.parse(readFileSync(file, 'utf8')) as Record<string, Stored>)
+}
+
+function writeStored(file: string, stored: Map<string, Stored>): void {
+  mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.tmp`
+  writeFileSync(temporary, JSON.stringify(Object.fromEntries(stored)), { mode: 0o600 })
+  renameSync(temporary, file)
+}
+
 /** An Express handler for one seller. A sealing seller also has `key` for the key request, and `keyFor` for its lookout. */
 export function createSeller(config: SellerConfig) {
-  const stored = new Map<string, Stored>()
+  const stored = new Map<string, Stored>(config.storeFile ? readStored(config.storeFile) : [])
+  const remember = (nonce: string, item: Stored) => {
+    stored.set(nonce, item)
+    if (config.storeFile) writeStored(config.storeFile, stored)
+  }
   // Requests for the same payment are handled one at a time, so one payment is settled once.
   const queues = new Map<string, Promise<unknown>>()
 
@@ -193,7 +213,7 @@ export function createSeller(config: SellerConfig) {
         settledHeader: b64({ success: true, transaction: settled.transaction ?? '', network: ARC_CAIP2, payer: payment.from }),
       }
       // Stored under the payment nonce, before anything is sent.
-      if (config.declaresRecovery || sealed) stored.set(payment.nonce, item)
+      if (config.declaresRecovery || sealed) remember(payment.nonce, item)
 
       if (config.dropAfterSettle()) {
         // Settled, but the connection closes before the first response.
