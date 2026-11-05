@@ -20,8 +20,10 @@ export default function App() {
   const demo = useDemo(refreshAll)
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
-      <section className="rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_8px_32px_rgba(18,45,69,0.06)] backdrop-blur-xl">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10 lg:max-w-5xl">
+      <section className="rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_8px_32px_rgba(18,45,69,0.06)] backdrop-blur-xl lg:grid lg:grid-cols-2 lg:gap-8">
+        {/* On a wide screen the receipts sit beside the controls, so a run and its receipt show together. */}
+        <div>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Your balance</p>
         <div className="mt-2 flex items-baseline gap-2">
           {data ? (
@@ -43,6 +45,8 @@ export default function App() {
           act={demo.act}
           acting={demo.acting}
         />
+        </div>
+        <div className="lg:-mt-4">
         <ReceiptList receipts={receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />
 
         {failed && (
@@ -58,6 +62,7 @@ export default function App() {
             </button>
           </div>
         )}
+        </div>
       </section>
     </main>
   )
