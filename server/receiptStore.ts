@@ -25,13 +25,19 @@ export interface ReceiptRow {
   status: TransferStatus
   /** The onchain batch transaction, once Gateway reports one. */
   batchTx: string | null
+  /** Plain sentences about how the payment ended. Set by the recovery demo. */
+  outcome?: string[]
+  /** Which demo made this row, so the screen can offer the right demo button. */
+  demo?: 'a' | 'b' | 'compare'
+  /** True for rows from the comparison job. They never use the "No second charge." sentence. */
+  comparison?: boolean
 }
 
 export interface ReceiptStore {
   /** Newest first. */
   list(): ReceiptRow[]
   add(row: ReceiptRow): void
-  update(id: string, patch: Partial<Pick<ReceiptRow, 'transferId' | 'status' | 'batchTx'>>): void
+  update(id: string, patch: Partial<Pick<ReceiptRow, 'transferId' | 'status' | 'batchTx' | 'outcome'>>): void
 }
 
 const FILE_NAME = 'receipts.json'

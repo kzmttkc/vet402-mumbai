@@ -1,8 +1,11 @@
+import { useCallback } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { HoldCard } from '@/components/HoldCard'
+import { DemoCard } from '@/components/DemoCard'
 import { JobCard } from '@/components/JobCard'
 import { ReceiptList } from '@/components/ReceiptList'
 import { useBalances } from '@/hooks/useBalances'
+import { useDemo } from '@/hooks/useDemo'
 import { useReceipts } from '@/hooks/useReceipts'
 
 const formatDisplay = (value: string) =>
@@ -11,6 +14,10 @@ const formatDisplay = (value: string) =>
 export default function App() {
   const { data, failed, reload } = useBalances()
   const { receipts, reload: reloadReceipts } = useReceipts()
+  const refreshAll = useCallback(async () => {
+    await Promise.all([reload(), reloadReceipts()])
+  }, [reload, reloadReceipts])
+  const demo = useDemo(refreshAll)
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
@@ -26,8 +33,9 @@ export default function App() {
         </div>
 
         <HoldCard data={data} reload={reload} />
-        <JobCard reload={async () => { await Promise.all([reload(), reloadReceipts()]) }} />
-        <ReceiptList receipts={receipts} />
+        <JobCard reload={refreshAll} />
+        <DemoCard run={demo.run} error={demo.error} running={demo.running} start={demo.start} />
+        <ReceiptList receipts={receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />
 
         {failed && (
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--danger)]" role="alert">

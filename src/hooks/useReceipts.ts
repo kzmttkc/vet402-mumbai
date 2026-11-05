@@ -12,6 +12,10 @@ export interface Receipt {
   transferId: string | null
   status: ReceiptStatus
   batchTx: string | null
+  /** Plain sentences about how the payment ended. */
+  outcome: string[]
+  demo: 'a' | 'b' | 'compare' | null
+  comparison: boolean
 }
 
 const REFRESH_MS = 10_000

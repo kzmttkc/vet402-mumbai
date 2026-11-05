@@ -11,8 +11,8 @@ import {
 import type { ChallengeAccept, Eip3009Authorization } from '../src/existing/arc-gateway'
 import type { PayOutcome } from './jobs'
 import type { PlannedRequest } from './planner'
+import { sendOnce } from './sendOnce'
 
-const REQUEST_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_CHARS = 1_000_000
 
 export interface HoldPayer {
@@ -24,42 +24,55 @@ export interface HoldPayer {
   fetchImpl?: typeof fetch
 }
 
+/** One signed payment, ready to send. Sending it again sends the same payment, never a new one. */
+export interface PreparedPayment {
+  accept: ChallengeAccept
+  /** Atomic USDC units. */
+  amount: bigint
+  nonce: string
+  /** The wallet the payment comes from. */
+  payer: string
+  header: { name: string; value: string }
+  /** Sends the paid request once with this exact header. Never retries on its own. */
+  send(): Promise<Response>
+}
+
+export type Challenge =
+  | { kind: 'free'; body: string }
+  | { kind: 'priced'; payment: PreparedPayment }
+
 const decode = (header: string): unknown => JSON.parse(Buffer.from(header, 'base64').toString('utf8'))
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 
 /**
- * Pays one resource once from the hold, through Gateway batched settlement. This is the pay
- * route's only payment path, and it runs vet402's own Gateway code: the seller's accept must
- * pass arcGatewayAcceptWithSellerExtra, and the header is built by encodePaymentHeader.
+ * Asks for the price, runs vet402's checks, checks the hold, and signs once with the hold key.
+ * Nothing is sent yet: the caller decides when to send, and can send the same payment again.
  *
  * It runs on the server on purpose. A seller's 402 answer carries its payment terms in a
  * PAYMENT-REQUIRED header that can be around 10,000 characters, which the browser has no
  * business handling. The browser only ever gets the result.
  */
-export async function payFromHold(
+export async function preparePayment(
   { holdKey, holdAvailable, fetchImpl = fetch }: HoldPayer,
   request: PlannedRequest,
   cap: bigint,
-): Promise<PayOutcome> {
+): Promise<Challenge> {
+  const body = request.body === undefined ? undefined : JSON.stringify(request.body)
   const send = (extraHeaders: Record<string, string>) =>
-    fetchImpl(request.url, {
-      method: request.method,
-      headers: { 'Content-Type': 'application/json', ...extraHeaders },
-      body: request.body === undefined ? undefined : JSON.stringify(request.body),
-      // A catalog URL must not be able to bounce the agent to another address.
-      redirect: 'error',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
+    sendOnce(
+      request.url,
+      { method: request.method, headers: { 'Content-Type': 'application/json', ...extraHeaders }, body },
+      fetchImpl,
+    )
 
   // 1. Ask without paying. Only a 402 with payment terms moves on.
   const challenge = await send({})
   if (challenge.status !== 402) {
     if (!challenge.ok) throw new Error(`Request failed with status ${challenge.status}`)
-    // Answered without asking for money: nothing was paid.
-    const text = await readBody(challenge)
-    return { data: parseBody(text), body: text, paid: 0n, nonce: null, timesReceived: 0, transaction: '' }
+    // Answered without asking for money: nothing is paid.
+    return { kind: 'free', body: await readBody(challenge) }
   }
   const requiredHeader = challenge.headers.get('PAYMENT-REQUIRED')
   if (!requiredHeader) throw new Error('Missing PAYMENT-REQUIRED header in 402 response')
@@ -80,8 +93,8 @@ export async function payFromHold(
   if (amount > (await holdAvailable())) throw new Error('The hold does not cover this price')
 
   // 4. Sign with the hold key. The signing domain is the pinned wallet, whatever spelling the seller used.
-  const signer = new BatchEvmScheme(privateKeyToAccount(holdKey))
-  const signed = await signer.createPaymentPayload(2, {
+  const account = privateKeyToAccount(holdKey)
+  const signed = await new BatchEvmScheme(account).createPaymentPayload(2, {
     scheme: accept.scheme,
     network: accept.network,
     asset: accept.asset,
@@ -92,7 +105,6 @@ export async function payFromHold(
   })
   const payload = signed.payload as { signature: string; authorization: Eip3009Authorization }
 
-  // 5. Pay once.
   const { headerName, headerValue } = encodePaymentHeader({
     x402Version: 2,
     accept,
@@ -100,7 +112,40 @@ export async function payFromHold(
     resourceUrl: request.url,
     resource: asRecord(required.resource) ?? undefined,
   })
-  const paid = await send({ [headerName]: headerValue })
+
+  return {
+    kind: 'priced',
+    payment: {
+      accept,
+      amount,
+      nonce: payload.authorization.nonce,
+      payer: account.address,
+      header: { name: headerName, value: headerValue },
+      send: () => send({ [headerName]: headerValue }),
+    },
+  }
+}
+
+/**
+ * Pays one resource once from the hold, through Gateway batched settlement. This is the pay
+ * route's only payment path, and it runs vet402's own Gateway code: the seller's accept must
+ * pass arcGatewayAcceptWithSellerExtra, and the header is built by encodePaymentHeader.
+ */
+export async function payFromHold(payer: HoldPayer, request: PlannedRequest, cap: bigint): Promise<PayOutcome> {
+  const challenge = await preparePayment(payer, request, cap)
+  if (challenge.kind === 'free') {
+    return {
+      data: parseBody(challenge.body),
+      body: challenge.body,
+      paid: 0n,
+      nonce: null,
+      timesReceived: 0,
+      transaction: '',
+    }
+  }
+
+  const { payment } = challenge
+  const paid = await payment.send()
   if (!paid.ok) throw new Error(`Payment failed with status ${paid.status}`)
 
   const settledHeader = paid.headers.get('PAYMENT-RESPONSE')
@@ -110,20 +155,20 @@ export async function payFromHold(
   return {
     data: parseBody(text),
     body: text,
-    paid: amount,
-    nonce: payload.authorization.nonce,
+    paid: payment.amount,
+    nonce: payment.nonce,
     timesReceived: 1,
     transaction: typeof settled?.transaction === 'string' ? settled.transaction : '',
   }
 }
 
-async function readBody(res: Response): Promise<string> {
+export async function readBody(res: Response): Promise<string> {
   const text = await res.text()
   if (text.length > MAX_RESPONSE_CHARS) throw new Error('The answer was too large')
   return text
 }
 
-function parseBody(text: string): unknown {
+export function parseBody(text: string): unknown {
   try {
     return JSON.parse(text)
   } catch {

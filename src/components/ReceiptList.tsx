@@ -4,7 +4,14 @@ import { receiptStatusLine } from '@/lib/receiptStatus'
 
 const short = (value: string, keep = 10) => (value.length > keep ? `${value.slice(0, keep)}…` : value)
 
-export function ReceiptList({ receipts }: { receipts: Receipt[] }) {
+interface Props {
+  receipts: Receipt[]
+  /** Demo only: start the comparison job. */
+  onRetryAsNew: () => void
+  busy: boolean
+}
+
+export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
   if (receipts.length === 0) return null
 
   return (
@@ -27,6 +34,16 @@ export function ReceiptList({ receipts }: { receipts: Receipt[] }) {
                 >
                   {receiptStatusLine(r.status, r.batchTx)}
                 </p>
+                {r.outcome.map((line) => (
+                  <p key={line} className="mt-1 text-sm font-medium text-pretty">
+                    {line}
+                  </p>
+                ))}
+                {r.comparison && (
+                  <p className="mt-1 text-xs font-semibold text-[var(--danger)]">
+                    Comparison only. vet402 does not do this.
+                  </p>
+                )}
                 <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
                   <dt>Got back</dt>
                   <dd className="tabular-nums" title={r.responseHash}>
@@ -39,6 +56,19 @@ export function ReceiptList({ receipts }: { receipts: Receipt[] }) {
                     {r.transferId ? short(r.transferId, 13) : 'Not assigned yet'}
                   </dd>
                 </dl>
+                {r.demo === 'b' && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onRetryAsNew}
+                      className="flex min-h-11 w-full items-center justify-center rounded-full border border-[var(--border)] bg-white px-4 text-sm font-semibold hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40"
+                    >
+                      Retry as a new payment
+                    </button>
+                    <p className="mt-1 text-center text-xs text-[var(--muted)]">Demo only</p>
+                  </div>
+                )}
               </div>
             </div>
           </li>

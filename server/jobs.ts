@@ -95,6 +95,9 @@ export interface ReceiptView {
   transferId: string | null
   status: TransferStatus
   batchTx: string | null
+  outcome: string[]
+  demo: 'a' | 'b' | 'compare' | null
+  comparison: boolean
 }
 
 const LOOKUP_ATTEMPTS = 4
@@ -114,6 +117,9 @@ function toView(row: ReceiptRow): ReceiptView {
     transferId: row.transferId,
     status: row.status,
     batchTx: row.batchTx,
+    outcome: row.outcome ?? [],
+    demo: row.demo ?? null,
+    comparison: row.comparison ?? false,
   }
 }
 
@@ -238,9 +244,8 @@ export function createJobService(ports: JobPorts, receipts: ReceiptStore, now: (
   }
 
   /** Receipt rows, newest first, with any unsettled ones brought up to date from Gateway. */
-  async function listReceipts(): Promise<ReceiptView[]> {
-    const open = receipts
-      .list()
+  async function listReceipts(refresh = true): Promise<ReceiptView[]> {
+    const open = (refresh ? receipts.list() : [])
       .filter((row) => !isFinal(row.status))
       .slice(0, REFRESH_LIMIT)
 
