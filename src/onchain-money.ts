@@ -29,7 +29,7 @@
  * `toDecimals` is the only way to change one.
  */
 
-import { getUsdc, requireChain, USDC_DECIMALS } from '@/onchain-facts';
+import { getUsdc, requireChain, USDC_DECIMALS } from './onchain-facts';
 
 export type AmountErrorCode =
   | 'INVALID_DECIMALS'

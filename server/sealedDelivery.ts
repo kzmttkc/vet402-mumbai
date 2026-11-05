@@ -249,7 +249,7 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
     chainTime: async () => (await publicClient.getBlock()).timestamp,
 
     /** The key once it is on the chain, and the block it is in. Null while it is not there. */
-    async readKeyRevealed(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint } | null> {
+    async readKeyRevealed(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint; transactionHash: Hex } | null> {
       const logs = await publicClient.getContractEvents({
         address,
         abi: SEALED_ABI,
@@ -258,7 +258,7 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
         fromBlock,
       })
       const log = logs[0]
-      return log?.args.key ? { key: log.args.key, block: log.blockNumber } : null
+      return log?.args.key ? { key: log.args.key, block: log.blockNumber, transactionHash: log.transactionHash } : null
     },
 
     /** Every claim on this contract in the block range. */
@@ -319,6 +319,7 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
         deadline: event.args.deadline,
         fromBlock: receipt.blockNumber,
         gasUsed: receipt.gasUsed,
+        transactionHash: receipt.transactionHash,
       }
     },
 
@@ -611,8 +612,9 @@ export interface SealedPorts {
   /** Asks for the key with the same payment. A dropped connection comes back as null. */
   requestKey(sellerUrl: string, payment: PreparedPayment): Promise<Hex | null>
   /** Sends the claim from the hold, first adding what it needs from the buyer. */
-  claim(box: SealedBox, payment: PreparedPayment): Promise<{ claimId: Hex; deadline: bigint; fromBlock: bigint }>
-  readKey(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint } | null>
+  claim(box: SealedBox, payment: PreparedPayment): Promise<{ claimId: Hex; deadline: bigint; fromBlock: bigint; transactionHash?: Hex }>
+  /** The transaction is there for a link to the explorer. Nothing decides on it. */
+  readKey(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint; transactionHash?: Hex } | null>
   chainTime(): Promise<bigint>
   /** True once this seller's wrong key was refused by the contract. */
   wrongKeyRejected(claimId: Hex): boolean

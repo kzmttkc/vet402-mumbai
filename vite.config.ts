@@ -56,6 +56,8 @@ export default defineConfig(({ mode }) => ({
     allowedHosts: true,
     cors: true,
     proxy: {
+      // scripts/try-dispute-serve.ts runs the try function on its own port.
+      '/api/try-dispute': { target: 'http://localhost:3997', changeOrigin: true },
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
