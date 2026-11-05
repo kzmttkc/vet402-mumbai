@@ -1,0 +1,7 @@
+.prompts-local/
+node_modules/
+.env
+.env.*
+.data/
+*.key
+.DS_Store
