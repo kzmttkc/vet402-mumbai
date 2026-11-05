@@ -1,5 +1,5 @@
 // The whole sealed flow against the real contract on a local anvil, with real signatures.
-// Only Gateway and the facilitator are replaced. Nothing leaves this machine, and the keys are made fresh.
+// Only Gateway, the facilitator, Swarm and Arkiv are replaced. Nothing leaves this machine, and the keys are made fresh.
 // Run: npx bun run scripts/sealed-local-e2e.ts
 import { spawn, spawnSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
@@ -10,12 +10,14 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Server } from 'node:http'
 import express from 'express'
-import { createPublicClient, createWalletClient, http, parseAbi } from 'viem'
+import { createPublicClient, createWalletClient, http, keccak256, parseAbi } from 'viem'
 import type { Address, Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
 import { ARC_GATEWAY_DOMAIN_NAME, ARC_GATEWAY_DOMAIN_VERSION, ARC_GATEWAY_WALLET, ARC_USDC } from '../src/existing/arc-gateway'
-import { openSealedAnswer } from '../src/lib/openSealed'
+import { FROM_ARC, FROM_ARKIV, FROM_SWARM, openFromRecord, openSealedAnswer } from '../src/lib/openSealed'
+import type { SwarmWire } from '../src/lib/swarmBox'
+import { createEvidenceUploader } from '../server/swarm'
 import type { PublicSealedFile } from '../src/lib/openSealed'
 import { createDemoService } from '../server/demo'
 import type { DemoPorts, DemoRunView, DemoSeller } from '../server/demo'
@@ -236,6 +238,20 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
   const stops = scene.watchers(sellerA.keyFor).map((watcher) => watcher.start(300))
 
   try {
+    // Swarm stands in as a map from a content hash to the bytes, so the box never leaves this machine.
+    const swarmKept = new Map<string, Uint8Array>()
+    const localSwarm: SwarmWire = {
+      upload(data) {
+        const reference = keccak256(data).slice(2)
+        swarmKept.set(reference, data)
+        return Promise.resolve(reference)
+      },
+      download(reference) {
+        const data = swarmKept.get(reference)
+        return data ? Promise.resolve(data) : Promise.reject(new Error('not on the local Swarm'))
+      },
+    }
+
     // 7. The buyer's side: the demo service, signing for real with BatchEvmScheme.
     const dataDir = path.join(tmp, 'data')
     const receipts = createReceiptStore(dataDir)
@@ -252,6 +268,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       countPayments: () => Promise.resolve(0),
       sealed: createSealedPorts({ client, holdKey: keys.hold, buyerKey: keys.buyer, rejected: scene.rejected }),
       sealedPollMs: 300,
+      evidence: createEvidenceUploader({ swarm: localSwarm, contract: address, chainId: chain.id }),
     }
     const seller = (id: string, name: string, key: Hex): DemoSeller => ({ name, url: `${base}/sellers/${id}`, address: addressOf(key) })
     const sellers = {
@@ -397,6 +414,22 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     for (const { result } of aOpen) check('published screen', 'Seller A opens', result.line, "Matches the seller's promise.")
     check('published screen', 'Seller A text', aOpen[0]?.result.ok ? aOpen[0].result.text : null, JSON.stringify({ seller: 'Seller A', answer: 'Here is the answer you paid for.' }))
     check('published screen', 'Seller F opens and does not match', fOpen[0]?.result.line, "Does not match the seller's promise.")
+
+    // The same answers through the record: Arkiv's evidence (the receipt rows stand in), the box from Swarm, the key from the chain.
+    const rows = receipts.list()
+    const readEvidence = (claimId: string) =>
+      Promise.resolve(rows.find((r) => r.evidence?.claimId.toLowerCase() === claimId.toLowerCase())?.evidence?.swarmRef ?? null)
+    const recorded = await Promise.all(
+      file.answers.map(async (answer) => ({
+        answer,
+        result: await openFromRecord({ ...answer, ciphertext: '0x' }, address, { readEvidence, downloadBox: localSwarm.download }, { rpcUrl }),
+      })),
+    )
+    check('swarm', 'every sealed answer has its box on Swarm', recorded.map((o) => o.result.read), file.answers.map(() => [FROM_ARKIV, FROM_SWARM, FROM_ARC]))
+    check('swarm', 'Seller A opens from Swarm', recorded.filter((o) => o.answer.sellerName === 'Seller A').map((o) => o.result.line), ["Matches the seller's promise.", "Matches the seller's promise."])
+    check('swarm', 'Seller F opens from Swarm and does not match', recorded.find((o) => o.answer.sellerName === 'Seller F')?.result.line, "Does not match the seller's promise.")
+    const silent = rows.filter((r) => r.sellerName === 'Seller E' && r.evidence)
+    check('swarm', 'a claim with no key still has its box on Swarm', silent.length > 0, true)
 
     // The gas bounds in the code are real.
     const gasOf = async (eventName: 'Claimed' | 'KeyRevealed' | 'Silent' | 'Fraud' | 'ClaimableWithdrawn') => {
