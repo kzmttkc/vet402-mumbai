@@ -8,4 +8,4 @@ Only what I hit while building this at ETHGlobal Mumbai, November 2026, on `@ark
 * **The raw query options reject a stray field.** My first hand-written `arkiv_query` carried an extra `key` next to `select`, and the node answered with `unknown field`. The answer listed the allowed fields, which made it quick to fix. I read the shape of the request from the SDK source, because I did not find a short reference for it.
 * **A warning on every run.** `rabdi({ accessKey: "" })` prints a rate limit warning once per process, so it shows up in test output too.
 
-Live run on the event network: {{TODO}}
+Live run on the event network: `npx bun run scripts/arkiv-live.ts` passed every check on Rabdi on 2026-11-05.
