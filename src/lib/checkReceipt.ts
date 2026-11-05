@@ -8,6 +8,7 @@ export const CIRCLE_TESTNET = 'https://gateway-api-testnet.circle.com'
 
 export const COULD_NOT_READ_CIRCLE = 'Could not read Circle.'
 export const COULD_NOT_READ_ARKIV = 'Could not read Arkiv.'
+const ARKIV_ATTEMPTS = 3
 export const ARKIV_NOT_USED = 'Arkiv: not used before the event.'
 
 const READ_TIMEOUT_MS = 10_000
@@ -61,6 +62,8 @@ export async function readCircle(nonce: string, fetchImpl: typeof fetch = fetch)
 }
 
 export interface CheckDeps {
+  /** Wait between Arkiv reads after a refusal. Tests set it to 0. */
+  retryMs?: number
   fetchImpl?: typeof fetch
   /** Counts the Arkiv entities for these transfer ids. Throws when Arkiv cannot be read. Null with no writer in the build. */
   countEntities: ((transferIds: string[]) => Promise<number>) | null
@@ -78,11 +81,15 @@ async function arkivResult(transferIds: string[] | null, deps: CheckDeps): Promi
   if (transferIds === null) return COULD_NOT_READ_ARKIV
   if (transferIds.length === 0) return arkivLine(0)
   if (!deps.countEntities) return COULD_NOT_READ_ARKIV
-  try {
-    return arkivLine(await deps.countEntities(transferIds))
-  } catch {
-    return COULD_NOT_READ_ARKIV
+  // The public node turns down bursts, so a refused read is tried again before it shows as a failure.
+  for (let attempt = 0; attempt < ARKIV_ATTEMPTS; attempt++) {
+    try {
+      return arkivLine(await deps.countEntities(transferIds))
+    } catch {
+      if (attempt + 1 < ARKIV_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, (deps.retryMs ?? 1500) * (attempt + 1)))
+    }
   }
+  return COULD_NOT_READ_ARKIV
 }
 
 /** Reads Circle and Arkiv from the browser. A failed read only ever replaces its own line. */
