@@ -2,7 +2,7 @@
 
 SealedDelivery lets a seller stand behind a paid answer without holding the buyer's money. The payment settles through Circle Gateway and goes to the seller. The contract decides only what happens when the key to a sealed answer does not arrive, or opens something other than what the seller signed.
 
-Live on Arc testnet at [`0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094). `contract-metadata/SealedDelivery.json` lists earlier deployments of earlier source, and the demo does not use them.
+Live on Arc testnet at [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5), deployed by Arc Studio on 2026-11-05 at 22:20 UTC. `contract-metadata/SealedDelivery.json` lists earlier deployments of earlier source, and the demo does not use them.
 
 ## Where the idea comes from
 
@@ -61,9 +61,9 @@ Reads: `coverage(seller)` is `deposits - pendingWithdrawal`. `coverageFor(seller
 
 **A verdict repays the dispute.** A claim used about 268,000 gas, which costs more than a sub-cent price. A transaction per payment would not fit these prices, so the contract runs only when a delivery fails. `DISPUTE_COST` is the buyer's gas for going to the chain, fixed at deployment. It came from `claim`, `finalize` and `withdrawClaimable` at 25 gwei on the earlier deployment on 2026-11-05: 420,269 gas, 0.0105 USDC, so it is 10500 here.
 
-On a 0.001 USDC payment, a verdict takes 0.023 USDC from the deposit: 0.0115 to the buyer and 0.0115 burned. In the run of 2026-11-05 at 20 gwei, the same three calls cost the buyer 420,390 gas, 0.0084 USDC. The buyer got back the 0.001 price and all of that gas, and ended 0.0021 USDC ahead. The deposits went from 0.1 to 0.077 USDC.
+On a 0.001 USDC payment, a verdict takes 0.023 USDC from the deposit: 0.0115 to the buyer and 0.0115 burned. On the live contract on 2026-11-05 at 20 gwei, Seller E's `claim` and `finalize` (23:14 to 23:15 UTC) used 367,117 gas. With the 53,249 gas of a `withdrawClaimable`, that is 420,366 gas, 0.0084 USDC. The buyer got back the 0.001 price and all of that gas, and ended 0.0021 USDC ahead. In the filmed run at 25 gwei (22:43 to 22:44 UTC), the same three calls used 437,490 gas, 0.0109 USDC, and the buyer ended 0.0004 USDC short of the price it paid. The deposits went from 0.1 to 0.077 USDC after one verdict and to 0.054 after two.
 
-**Answering is cheaper than silence.** `answer` used 87,400 gas: 0.0017 USDC at 20 gwei in that run, against 0.023 USDC for silence. Silence costs at least 0.021 USDC at any price, so answering stays cheaper up to about 240 gwei.
+**Answering is cheaper than silence.** `answer` used 52,811 to 87,400 gas on 2026-11-05, at most 0.0022 USDC at 25 gwei, against 0.023 USDC for silence. Silence costs at least 0.021 USDC at any price, so answering stays cheaper up to about 240 gwei.
 
 **The deposit is one pool per seller, and verdicts draw on it first come, first served.** Nothing is reserved at claim time. Each verdict takes its amount when it lands, and later verdicts get what is left. This keeps capital light: no funds are locked per payment. At a 0.001 USDC price, a 0.1 USDC deposit covers 4 open claims.
 
@@ -71,23 +71,24 @@ On a 0.001 USDC payment, a verdict takes 0.023 USDC from the deposit: 0.0115 to 
 
 **Withdrawals wait.** `requestWithdraw` removes funds from coverage at once and starts `COOLDOWN`. Queued funds stay in `deposits`, and verdicts can take them until they leave. The constructor requires `cooldown >= maxExpiry + answerWindow`, so a seller that signs a promise and then asks to withdraw stays exposed past that claim's deadline. The proof hold keeps a fraud proof payable after an answer: each answer holds that claim's liability until `COOLDOWN - MAX_EXPIRY` after the seller's latest answer, 3600 s on this deployment.
 
-Measured on Arc testnet in the run of 2026-11-05 18:24 to 18:28 UTC, at the 20 gwei each transaction paid:
+Measured on the live contract on Arc testnet, 2026-11-05 22:21 to 23:16 UTC. Each fee is at the gas price that transaction paid, 20 to 25 gwei. Each row links one example, and [DEMO.md](../DEMO.md#contract-transactions) lists all 37 transactions.
 
-| Call | Gas | Fee in USDC |
-|---|---:|---:|
-| `claim` | 268,460 | 0.0054 |
-| `answer` | 87,400 | 0.0017 |
-| `finalize` | 98,681 | 0.0020 |
-| `prove` on a 70 byte answer | 123,426 | 0.0025 |
-| `flushBurn` | 57,278 | 0.0011 |
-| `withdrawClaimable` | 53,249 | 0.0011 |
+| Call | Gas | Fee in USDC | Example |
+|---|---:|---:|---|
+| `deposit` | 76,917 | 0.0019 | [`0xebf7b029…`](https://explorer.testnet.arc.io/tx/0xebf7b0293c574e6bd63bfed5b4ed45ecb51c97962d4d6e968da5ecbd43b6466f) |
+| `claim` | 268,376 to 268,460 | 0.0054 to 0.0067 | [`0x24182416…`](https://explorer.testnet.arc.io/tx/0x24182416082b271fe9a2a94897e4151e3a2b80bb0aeda1c991d2a3189c3e3fd6) |
+| `answer` | 52,811 to 87,400 | 0.0011 to 0.0022 | [`0x211a089a…`](https://explorer.testnet.arc.io/tx/0x211a089a2bd47d5a549accd135fa84ae36d6e49d20a9dbbb34a9d06cb590ec49) |
+| `finalize` | 81,581 to 115,781 | 0.0016 to 0.0029 | [`0xc60c0312…`](https://explorer.testnet.arc.io/tx/0xc60c0312308f03d84561f7f81671947c3095b255f6cc7a60531c178cabe8d127) |
+| `prove` on a 70 byte answer | 89,226 to 123,426 | 0.0018 to 0.0031 | [`0xe72c3f4c…`](https://explorer.testnet.arc.io/tx/0xe72c3f4cb07caf1c19757c1b1029749fc89f8c19e31004aa338547b30af3d46b) |
+| `flushBurn` | 57,278 | 0.0011 to 0.0014 | [`0xbbcf078a…`](https://explorer.testnet.arc.io/tx/0xbbcf078aa93e38ab4c01f183713c22a2686fc173b363b95d0e855d1ce594add4) |
+| `withdrawClaimable` | 53,249 | 0.0013 | [`0xdb2e65cb…`](https://explorer.testnet.arc.io/tx/0xdb2e65cb3ac1bae0ea03982d9ef797a402b77d9d55a05936e91d3a429aa59d77) |
 
 ## Limits
 
 - **The deposit is shared, first come, first served.** Nothing is reserved at claim. `coverageFor` counts open claims when read, and it can change after that. A later verdict gets what is left, which can be nothing.
 - **A seller with no deposit gets no cover.** A seller that plans to drop answers will not deposit. A claim against an empty deposit still records, and `finalize` still marks SILENT, with nothing paid. vet402 reads coverage first and does not claim when it is short.
-- **`DISPUTE_COST` is fixed at deployment.** Above about 25 gwei, the 420,390 gas of the last run costs more than 0.0105 USDC, and the verdict no longer covers the whole dispute. Arc mainnet gas is not measured.
-- **`DISPUTE_COST` is paid on a verdict only.** A seller that answers on chain owes nothing, so the buyer keeps the claim's gas: 0.0054 USDC at 20 gwei, for a key it paid 0.001 USDC to receive.
+- **`DISPUTE_COST` is fixed at deployment.** In the filmed run of 2026-11-05 at 25 gwei, Seller E's dispute (`claim`, `finalize` and `withdrawClaimable`) used 437,490 gas, 0.0109 USDC, which is more than the 0.0105 it covers. `finalize` used 81,581 to 115,781 gas in these runs, so a whole dispute is 403,278 to 437,490 gas, and above about 24 to 26 gwei the verdict no longer covers all of it. Arc mainnet gas is not measured.
+- **`DISPUTE_COST` is paid on a verdict only.** A seller that answers on chain owes nothing, so the buyer keeps the claim's gas: 0.0054 USDC at 20 gwei on 2026-11-05 23:11 UTC, for a key it paid 0.001 USDC to receive.
 - **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim. The seller then has to answer, or pay. A seller whose watcher is down for the 60 s window pays that buyer's verdict too. Set a longer `answerWindow` for real use.
 - **It never sees the payment.** `claim` checks signed intent, and settlement stays in Gateway. A seller must sign a promise only in a flow that settles before the box leaves, as `server/sellers.ts` does.
 - **A seller can commit to garbage from the start.** If `plaintextHash` is the hash of junk and the key opens that junk, the promise was kept and `prove` reverts. Judging the content belongs to a delivery check outside this contract.
@@ -96,7 +97,7 @@ Measured on Arc testnet in the run of 2026-11-05 18:24 to 18:28 UTC, at the 20 g
 - **Disputes publish the answer.** `answer` puts the key on chain, so anyone holding that ciphertext can read the answer. `prove` puts key and ciphertext on chain, so anyone can read it. Keys are per request, so other answers stay sealed.
 - **`prove` gas grows with the answer**, because it decrypts in a loop. It suits small answers.
 - **Signatures must come from EOAs.** Contract wallets are refused.
-- **Arc testnet only, with no outside audit.** Deposits are testnet money. The tests in `contracts/test` passed on 2026-11-05 (218 tests on commit `78fa3a9`).
+- **Arc testnet only, with no outside audit.** Deposits are testnet money. The tests in `contracts/test` passed on 2026-11-05 at 23:20 UTC (219 tests in 16 suites on commit `2d6d920`).
 
 ## Use it with your own x402 seller
 
@@ -110,7 +111,7 @@ You can deploy your own copy or deposit into the one above, since each seller ha
 
 3. **Serve the key separately.** Add a key route, and hand over the key only to the exact payment header that settled. Store the key and answer on disk, so a restart can still answer a claim.
 
-4. **Run a watcher.** Read `Claimed` events for your seller and call `answer(claimId, key)` before the deadline. Keep gas for it, 87,400 gas per answer on 2026-11-05.
+4. **Run a watcher.** Read `Claimed` events for your seller and call `answer(claimId, key)` before the deadline. Keep gas for it: an answer used 52,811 to 87,400 gas on 2026-11-05 between 22:35 and 23:16 UTC.
 
 5. **Tell the buyer's side.** Before paying, read `coverageFor`. After paying, check the seller's signature, the buyer, nonce, value, ciphertext hash and expiry. Ask for the key, open the box, and compare the hash. If the key does not come, send `claim` from the address that signed the payment, then read `KeyRevealed` until the deadline. `checkBox` and `createSealedPorts` in `server/sealedDelivery.ts` do this.
 
@@ -150,9 +151,10 @@ The price (`DEMO_PRICE`) and the answer (`answer`) are set inside `server/seller
 | 3 | `cooldown` | `uint256` | 7200 | Seconds a withdrawal waits. Must be at least `maxExpiry + answerWindow` |
 | 4 | `usdc` | `address` | `0x3600000000000000000000000000000000000000` | The deposit token |
 | 5 | `paymentDomainName` | `string` | `GatewayWalletBatched` | EIP-712 name of the buyer's payment signature |
-| 6 | `paymentDomainVersion` | `string` | `1` | Its version. `2` uses Gateway's salted form |
+| 6 | `paymentDomainVersion` | `string` | `1` | Its version |
 | 7 | `paymentVerifyingContract` | `address` | `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` | The Gateway Wallet |
 | 8 | `disputeCost` | `uint256` | 10500 | The buyer's cost of going to the chain, in USDC units. Set it from the gas of your chain |
+| 9 | `paymentDomainSalt` | `bytes32` | `0x0000000000000000000000000000000000000000000000000000000000000000` | Zero for an unsalted payment domain: Gateway at version `1`, or a token's own EIP-3009 domain as plain x402 signs it. Gateway's batched domain at version `2` is salted with the USDC address, so pass that address padded to 32 bytes |
 
 The chain id in the payment domain is the deployment's own, so deploy on the chain the buyer pays on. The contract has no owner, administrator or upgrade path, and these values are immutable.
 
@@ -161,10 +163,11 @@ forge create contracts/SealedDelivery.sol:SealedDelivery \
   --rpc-url https://rpc.testnet.arc.network \
   --private-key "$DEPLOYER_KEY" \
   --broadcast \
-  --constructor-args 3600 60 7200 0x3600000000000000000000000000000000000000 GatewayWalletBatched 1 0x0077777d7EBA4688BDeF3E311b846F25870A19B9 10500
+  --constructor-args 3600 60 7200 0x3600000000000000000000000000000000000000 GatewayWalletBatched 1 0x0077777d7EBA4688BDeF3E311b846F25870A19B9 10500 \
+    0x0000000000000000000000000000000000000000000000000000000000000000
 ```
 
-This repository's deployment went through Arc Studio. I checked the command above on a local anvil chain on 2026-11-05.
+This repository's deployment went through Arc Studio. I checked the command above, with the same arguments, on a local anvil chain on 2026-11-05 at 23:29 UTC.
 
 ## Tests
 

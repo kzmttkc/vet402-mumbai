@@ -16,6 +16,7 @@ Everything about Swarm below is new work at ETHGlobal Mumbai, in these commits o
 | `df6a886` | The published screen opens an answer from Arkiv, Swarm and Arc |
 | `80a0d01` | Tests for all of the above |
 | `2143ad3` | The local end to end run also keeps and opens every box through Swarm |
+| `2d6d920` | Upload through your own Bee API and postage batch with `SWARM_API_URL` and `SWARM_POSTAGE_BATCH_ID`. Merged to `main` from the `swarmstamp` branch |
 
 ## What lives where
 
@@ -37,21 +38,46 @@ That is safe here because the box is already a ciphertext. The seller sealed the
 
 ## One entity and the box it points to
 
+Seller A, 2026-11-05 23:11 UTC, on the live contract `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`. The box went up through my own Bee node with my own postage batch.
+
 | | Value |
 |---|---|
-| Arkiv entity key | {{TODO: fill in after the real run on Rabdi}} |
-| `swarm_ref` in it | {{TODO}} |
-| Open the box | `https://api.gateway.ethswarm.org/bytes/{{TODO}}` |
+| Arkiv entity key | `0x0c8a2ee0a536c341398f2f0dbd4b0006c1e578d943249b3bb84e7d5494c66162` |
+| `claim_id` in it | `0x7eeb3f36efec914a69c0d49320ec6724bed39a1e55f65b8e56a5bd275051fe62` |
+| `gateway_transfer_id` in it | `2db76ef8-52a2-4548-bbb6-3bdbc943aad9` |
+| `swarm_ref` in it | `bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0` |
+| Open the box | https://api.gateway.ethswarm.org/bytes/bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0 |
+| The claim on Arc | [`0xca9db10c…`](https://explorer.testnet.arc.io/tx/0xca9db10caa096dc345a90e92a03d5e9f3c884ca7b8e6af3714c48e0a52b04ee4), 23:11:01 UTC |
+| The key on Arc | [`0x0f6752e5…`](https://explorer.testnet.arc.io/tx/0x0f6752e5cabab8a243601cc6b79d93fbd6c1490cff61174a4a7beb3344557c95), `KeyRevealed` at 23:11:04 UTC |
 
-A box from the live check (`scripts/swarm-live.ts`, 2026-11-06), not tied to an entity, to show the read works:
+The public gateway returned the box with status 200 on 2026-11-05 at 23:24 UTC, although my node uploaded it. Its `claimId` and `contract` match the claim transaction, and its `chainId` is 5042002. The same query that README.md uses for receipts returns this entity with `vet402_evidence` in place of `vet402_receipt`.
+
+The boxes of the three other disputes in that run, Seller E at 23:15, Seller D at 23:16 and Seller F at 23:16 UTC, went up the same way. My node lists an upload tag for each of the four boxes, from 23:11:02 to 23:16:40 UTC, every chunk synced. The public gateway returned each box with status 200 at 23:24 UTC:
+
+- https://api.gateway.ethswarm.org/bytes/2a12ecc1691996d7d0af105e53b5b6ad4ff9dc99dfec72c4919fb7e2153eb3e5
+- https://api.gateway.ethswarm.org/bytes/4d4a9e9c95662d123e69c6634405861460446d7ea2941bea9db9d6561aaf0840
+- https://api.gateway.ethswarm.org/bytes/82cd27c6378f1020b0d24bb6198770f00f187b498192f1fcade04728b0688103
+
+The filmed run, 22:40 to 22:46 UTC, came before I had a batch. Its boxes went through the public gateway with bee-js's `NULL_STAMP`, as described below.
+
+A box from the live check (`scripts/swarm-live.ts`, 2026-11-05 UTC), not tied to an entity, to show the read works:
 https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e651f6e8bce5e9d35f9ad4c712
 
 ## Postage stamp, wallet and node
 
-- **Service:** the public Swarm gateway at `https://api.gateway.ethswarm.org`, through bee-js 13.2.0. This is the gateway bee-js exports as `SWARM_GATEWAY_URL`.
-- **Batch ID:** I did not buy a batch. bee-js sends its `NULL_STAMP` (64 zeros) and the gateway stamps the upload with a batch of its own. The batch belongs to the gateway, and I could not read its ID. The gateway answers `GET /stamps` with 404 (checked 2026-11-06), and the upload response carries only the reference and a tag number.
-- **Wallet that bought it:** not mine. It is whoever runs the gateway's batch.
-- Pointing `SWARM_API_URL` at your own Bee node uploads through that node instead, with no code change.
+- **Node:** my own Bee 2.8.3 light node, with its API at `127.0.0.1:1633` on my machine. The server reaches it through bee-js 13.2.0 when `SWARM_API_URL` points there.
+- **Wallet:** the node's own address on Gnosis Chain, `0x8620Bd0D7b9C1Cd5eCa426B639F2e38ba5FEdb94`. I funded it with xDAI and xBZZ through https://fund.ethswarm.org, and the node bought the batch itself.
+- **Batch ID:** `b6455d939e16dd59c5295e70b8123fe8412e224614eec41aeee0c3d3e5ecf9c0`, depth 17, amount 95011833600 per chunk, immutable.
+- **Purchase:** Gnosis Chain transaction `0xca6451b9425077d4a0a15fb588bd2c7a13fc83659dd823a71e59cbc9ac1cba12`, block 49129674, 2026-11-05 22:53 UTC, sent by the node's wallet to the Swarm postage stamp contract `0x45a1502382541cd610cc9068e88727426b696293`, which emitted `BatchCreated` for this batch.
+- **Lifetime:** `GET /stamps/<batch>` on my node answered `batchTTL` 2360122 s on 2026-11-05 at 23:24 UTC, so the batch lasts until about 2026-12-03 07:00 UTC unless I top it up.
+- **Code:** `SWARM_API_URL` names the Bee API and `SWARM_POSTAGE_BATCH_ID` the batch it stamps with (commit `2d6d920`). Without them the upload goes to the public gateway at `https://api.gateway.ethswarm.org` with bee-js's `NULL_STAMP` (64 zeros), and the gateway stamps it with a batch of its own. That batch belongs to the gateway, and its ID is not visible from outside.
+
+Which boxes went which way, all on 2026-11-05:
+
+| Run | Upload path | Stamp |
+|---|---|---|
+| The filmed run, 22:40 to 22:46 UTC | The public gateway | The gateway's own batch, through `NULL_STAMP` |
+| The second run, 23:11 to 23:16 UTC | My Bee node | `b6455d93…` |
 
 ## Files that upload to Swarm and read from it
 
@@ -69,7 +95,7 @@ https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e65
 
 ## Run one upload and one read yourself
 
-You need Node and network access. No key, no wallet and no stamp.
+You need Node and network access. No key, no wallet and no stamp. The script always uses the public gateway.
 
 ```bash
 npx bun run scripts/swarm-live.ts
@@ -103,6 +129,6 @@ If Arkiv or Swarm cannot be read, the screen opens the copy in the exported file
 ## What got in my way
 
 - bee-js 13 moved the raw data calls under `bee.data`. I first looked for `uploadData` in the types and it was not there. The current call is `bee.data.upload(batchId, data)`.
-- The gateway does not say which batch it stamped with. `GET /stamps` returns 404, so I cannot give a batch ID.
+- The public gateway does not say which batch it stamped with. `GET /stamps` there returned 404 on 2026-11-05 UTC. My own node answers `GET /stamps/<batch>` with the depth, the amount and the TTL.
 - bee-js made the published page's main script larger, from 367 kB to 447 kB before compression in my build.
 - The build prints a warning from the copy of zod that bee-js brings along, about a comment Rollup cannot place. The build still succeeds.

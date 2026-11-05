@@ -30,7 +30,7 @@ import { sealedDelivery } from '@vet402/sealed-delivery'
 
 const app = express()
 const sealed = sealedDelivery({
-  contract: '0x20ce7bbfaf66b28cb917f9331a8960eb563f2094',
+  contract: '0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5',
   sellerKey,              // signs promises, receives the payment, answers claims
   facilitator,            // the one you already use, for example Circle's BatchFacilitatorClient
   accepts,                // your x402 payment requirement, with payTo set to sellerKey's address
@@ -48,7 +48,7 @@ import { createSealedChain } from '@vet402/sealed-delivery'
 await createSealedChain({ contract, rpcUrl }).deposit(sellerKey, 100_000n) // 0.1 USDC
 ```
 
-Size the deposit as `2 * (price + DISPUTE_COST)` times the open claims you want to back. The seller address also needs gas to answer a claim: 87,400 gas per answer on Arc testnet on 2026-11-05. A route that answers with a status of 400 or more is passed through and nothing is settled. `sealed.close()` stops the lookout.
+Size the deposit as `2 * (price + DISPUTE_COST)` times the open claims you want to back. The seller address also needs gas to answer a claim: 52,811 to 87,400 gas per answer on Arc testnet on 2026-11-05 between 22:35 and 23:16 UTC. A route that answers with a status of 400 or more is passed through and nothing is settled. `sealed.close()` stops the lookout.
 
 The full example is `examples/seller.ts`.
 
@@ -72,7 +72,7 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 ## The contract
 
-Live on Arc testnet at `0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`. Each seller has its own deposit pool, so any seller can deposit into this one. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
+Live on Arc testnet at `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` since 2026-11-05 22:20 UTC. Each seller has its own deposit pool, so any seller can deposit into this one. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
 
 | # | Argument | On the live deployment | Meaning |
 |---:|---|---|---|
@@ -81,26 +81,27 @@ Live on Arc testnet at `0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`. Each seller
 | 3 | `cooldown` | 7200 | Seconds a deposit withdrawal waits. At least `maxExpiry + answerWindow` |
 | 4 | `usdc` | `0x3600000000000000000000000000000000000000` | The deposit token, a 6 decimal ERC-20 |
 | 5 | `paymentDomainName` | `GatewayWalletBatched` | EIP-712 name of the buyer's payment signature |
-| 6 | `paymentDomainVersion` | `1` | Its version. `2` means Gateway's salted form |
+| 6 | `paymentDomainVersion` | `1` | Its version |
 | 7 | `paymentVerifyingContract` | `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` | The contract the buyer's payment is signed for: the Gateway Wallet |
 | 8 | `disputeCost` | 10500 | The buyer's gas for a dispute, in USDC units |
+| 9 | `paymentDomainSalt` | `0x0000000000000000000000000000000000000000000000000000000000000000` | Zero for an unsalted payment domain. Gateway's batched domain at version `2` takes the USDC address here |
 
 ### Another chain or another USDC
 
 Deploy a copy on the chain the buyer pays on, because the payment domain takes this deployment's chain id. Three groups of arguments change:
 
 - `usdc`: the 6 decimal USDC of that chain. The SDK reads it from the contract, so deposits follow.
-- The payment domain (5, 6, 7): copy the `extra.name`, `extra.version` and `extra.verifyingContract` your x402 requirement already advertises. For Circle Gateway batching that is `GatewayWalletBatched`, version `1` or `2`, and the Gateway Wallet of that chain.
-- `disputeCost`: the gas of `claim`, `finalize` and `withdrawClaimable` together on that chain, in USDC units. On Arc testnet that was 420,269 gas, 0.0105 USDC at 25 gwei.
+- The payment domain (5, 6, 7, 9): copy the `extra.name`, `extra.version` and `extra.verifyingContract` your x402 requirement already advertises. For Circle Gateway batching that is `GatewayWalletBatched`, version `1` or `2`, and the Gateway Wallet of that chain. At version `2` Gateway salts the domain with the USDC address, so pass that address padded to 32 bytes as `paymentDomainSalt`. At version `1` pass zero.
+- `disputeCost`: the gas of `claim`, `finalize` and `withdrawClaimable` together on that chain, in USDC units. On Arc testnet that was 420,269 gas, 0.0105 USDC at 25 gwei, measured on an earlier deployment on 2026-11-05.
 
 ```bash
 forge create contracts/SealedDelivery.sol:SealedDelivery --rpc-url "$RPC" --private-key "$DEPLOYER_KEY" --broadcast \
-  --constructor-args 3600 60 7200 "$USDC" GatewayWalletBatched 1 "$GATEWAY_WALLET" "$DISPUTE_COST"
+  --constructor-args 3600 60 7200 "$USDC" GatewayWalletBatched 1 "$GATEWAY_WALLET" "$DISPUTE_COST" "$PAYMENT_DOMAIN_SALT"
 ```
 
 ## Limits
 
-- **Plain USDC payments cannot be claimed.** Version `2` always takes Gateway's salted domain. The x402 `exact` scheme signs USDC's own domain, version `2` with no salt, so `claim` refuses that signature (checked on anvil on 2026-11-06). Today the contract serves Gateway batched payments and any payment domain with another version. Plain USDC needs a contract change.
+- **One deployment serves one payment domain.** The live one takes Circle Gateway batched payments at version `1`. The x402 `exact` scheme signs the token's own EIP-3009 domain with no salt, so plain USDC payments need their own deployment with that name, version and token address and a zero `paymentDomainSalt`. `test_PlainTokenDomainVersion2HasNoSalt` checks that digest. I have not run a plain x402 claim on chain.
 - **The deposit is shared per seller, first come, first served.** Nothing is reserved at claim time. `coverageFor` is true when read and can change after that. A later verdict gets what is left, which can be nothing.
 - **The contract cannot judge what the answer means.** It checks that the key opens exactly the plaintext the seller signed. A seller that signs the hash of junk and delivers that junk has kept its promise.
 - **The payment is never seen on chain.** `claim` checks the buyer's signed intent. The middleware signs a promise only after verify and before settle, and returns the box only after settle.
