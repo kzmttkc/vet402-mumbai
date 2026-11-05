@@ -84,6 +84,8 @@ const sellerAddress = {
 const facilitator = new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin })
 // The switch: close the connection after settling and before the first response. On for the demo.
 const DROP_AFTER_SETTLE = process.env.SELLER_DROP_RESPONSE !== 'off'
+// A demo run can keep the line up, to show that nothing touches the contract when the key arrives.
+let lineStaysUp = false
 
 // With a contract address the same switch moves to the key request. Without one nothing changes.
 const sealedAddress = parseSealedAddress(process.env.SEALED_DELIVERY_ADDRESS)
@@ -98,7 +100,7 @@ const sealedScene = sealedClient && sealedKeys
       client: sealedClient,
       keys: { a: keys.sellerA, d: sealedKeys.sellerD, e: sealedKeys.sellerE, f: sealedKeys.sellerF },
       facilitator,
-      dropKey: () => DROP_AFTER_SETTLE,
+      dropKey: () => DROP_AFTER_SETTLE && !lineStaysUp,
       log: (message) => console.error(message),
     })
   : null
@@ -287,6 +289,7 @@ app.post('/demo/run', (req, res) => {
     res.status(400).json({ error: 'Pick Seller A or Seller B.' })
     return
   }
+  lineStaysUp = (req.body as { lineUp?: unknown }).lineUp === true
   startDemo(seller, res)
 })
 

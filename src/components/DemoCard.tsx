@@ -65,6 +65,12 @@ export function DemoCard({ run, error, running, start, sealed, act, acting }: Pr
       </div>
 
       {sealed && (
+        <button type="button" disabled={running} onClick={() => void start('a', true)} className={`${secondary} mt-2 w-full`}>
+          Seller A, line stays up
+        </button>
+      )}
+
+      {sealed && (
         <div className="mt-2 flex gap-2">
           <button type="button" disabled={running} onClick={() => void start('d')} className={secondary}>
             Try Seller D

@@ -37,13 +37,13 @@ export function useDemo(onChange: () => Promise<void>) {
   const runId = run?.id
 
   const start = useCallback(
-    async (kind: DemoKind) => {
+    async (kind: DemoKind, lineUp = false) => {
       setError(null)
       try {
         const res = await fetch(kind === 'compare' ? '/api/demo/compare' : '/api/demo/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(kind === 'compare' ? {} : { seller: kind }),
+          body: JSON.stringify(kind === 'compare' ? {} : { seller: kind, lineUp }),
         })
         const body = (await res.json().catch(() => null)) as (DemoRun & { error?: string }) | null
         if (!res.ok || !body) throw new Error(body?.error ?? FALLBACK_ERROR)
