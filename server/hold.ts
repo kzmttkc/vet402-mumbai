@@ -42,22 +42,25 @@ export interface HoldView {
 export function createHoldService(ports: HoldPorts, store: HoldStore) {
   let busy = false
 
-  async function returnLeftovers(): Promise<void> {
+  /** Brings the hold to exactly `amount` and returns what the buyer still has to deposit. */
+  async function shortfallAfterLeftovers(amount: bigint): Promise<bigint> {
     const before = await ports.hold()
 
-    if (before.available > 0n) {
+    // Taking money out of Gateway costs a fee, so a smaller leftover stays and only the difference is added.
+    if (before.available > amount) {
       const reserve = await ports.gasReserve()
       if (before.wallet < reserve) await ports.fundHoldWallet(reserve - before.wallet)
-      await ports.withdrawToBuyer(before.available)
+      await ports.withdrawToBuyer(before.available - amount)
     }
 
     const mid = await ports.hold()
     if (mid.wallet > 0n) await ports.sweepToBuyer()
 
     const after = await ports.hold()
-    if (after.available > 0n) {
+    if (after.available > amount) {
       throw new HoldError('LEFTOVER_NOT_RETURNED', 'The previous hold could not be returned yet.')
     }
+    return amount - after.available
   }
 
   async function start(amount: bigint): Promise<void> {
@@ -69,16 +72,17 @@ export function createHoldService(ports: HoldPorts, store: HoldStore) {
       // Until the new hold is funded, nothing should look active or used up.
       store.clear()
 
-      // The hold is exactly the chosen amount, so anything left from before goes back first.
-      await returnLeftovers()
+      // The hold is exactly the chosen amount, whatever was left from before.
+      const shortfall = await shortfallAfterLeftovers(amount)
 
-      if ((await ports.buyerWallet()) < amount) {
+      if ((await ports.buyerWallet()) < shortfall) {
         throw new HoldError('NOT_ENOUGH_BALANCE', 'Your balance is too low for this hold.')
       }
 
       store.write({ amount: amount.toString(), seenFunded: false })
+      if (shortfall === 0n) return
       try {
-        await ports.depositForHold(amount)
+        await ports.depositForHold(shortfall)
       } catch (error) {
         store.clear()
         throw error

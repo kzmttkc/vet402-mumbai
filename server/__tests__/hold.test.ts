@@ -26,6 +26,7 @@ interface FakeOptions {
   holdAvailable?: bigint
   reserve?: bigint
   withdrawWorks?: boolean
+  withdrawFee?: bigint
   depositFails?: boolean
 }
 
@@ -50,7 +51,7 @@ function fakePorts(options: FakeOptions = {}) {
     withdrawToBuyer: (amount) => {
       calls.push('withdraw')
       if (options.withdrawWorks !== false) {
-        state.available -= amount
+        state.available -= amount + (options.withdrawFee ?? 0n)
         state.buyer += amount
       }
       return Promise.resolve()
@@ -84,8 +85,31 @@ describe('starting a hold', () => {
     expect(state.buyer).toBe(usdc(95))
   })
 
-  test('sends Gateway leftovers back to the buyer before depositing', async () => {
+  test('keeps a smaller Gateway leftover and deposits only the difference', async () => {
     const { ports, state, calls } = fakePorts({ holdAvailable: usdc(2), buyer: usdc(10) })
+    const holds = createHoldService(ports, createHoldStore(dir))
+
+    await holds.start(usdc(3))
+
+    expect(calls).toEqual(['deposit'])
+    expect(state.available).toBe(usdc(3))
+    expect(state.buyer).toBe(usdc(9))
+  })
+
+  test('deposits nothing when the leftover is exactly the amount', async () => {
+    const { ports, state, calls } = fakePorts({ holdAvailable: usdc(3) })
+    const store = createHoldStore(dir)
+    const holds = createHoldService(ports, store)
+
+    await holds.start(usdc(3))
+
+    expect(calls).toEqual([])
+    expect(state.available).toBe(usdc(3))
+    expect(store.read()?.amount).toBe(usdc(3).toString())
+  })
+
+  test('takes out the excess, pays for the gas, and refills what the fee took', async () => {
+    const { ports, state, calls } = fakePorts({ holdAvailable: usdc(5), withdrawFee: usdc(0.5), buyer: usdc(10) })
     const holds = createHoldService(ports, createHoldStore(dir))
 
     await holds.start(usdc(3))
@@ -93,16 +117,15 @@ describe('starting a hold', () => {
     expect(calls).toEqual(['fund', 'withdraw', 'sweep', 'deposit'])
     expect(state.available).toBe(usdc(3))
     expect(state.wallet).toBe(0n)
-    expect(state.buyer).toBe(usdc(9))
   })
 
   test('skips the gas top-up when the hold wallet can already pay', async () => {
-    const { ports, calls } = fakePorts({ holdAvailable: usdc(2), holdWallet: usdc(1) })
+    const { ports, calls } = fakePorts({ holdAvailable: usdc(5), holdWallet: usdc(1) })
     const holds = createHoldService(ports, createHoldStore(dir))
 
     await holds.start(usdc(3))
 
-    expect(calls).toEqual(['withdraw', 'sweep', 'deposit'])
+    expect(calls).toEqual(['withdraw', 'sweep'])
   })
 
   test('sends loose wallet funds back before depositing', async () => {
@@ -116,7 +139,7 @@ describe('starting a hold', () => {
   })
 
   test('does not deposit when the leftover could not be returned', async () => {
-    const { ports, calls } = fakePorts({ holdAvailable: usdc(2), withdrawWorks: false })
+    const { ports, calls } = fakePorts({ holdAvailable: usdc(5), withdrawWorks: false })
     const store = createHoldStore(dir)
     const holds = createHoldService(ports, store)
 
