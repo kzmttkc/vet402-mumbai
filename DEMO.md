@@ -1,8 +1,78 @@
 # Demo record
 
-All rows are from Arc testnet on 2026-11-05, with times in UTC. Every payment is 0.001 USDC. The status and batch columns are what Circle's Gateway API returned for each transfer at 18:15 UTC. "completed" means settled in the batch shown.
+All rows are from Arc testnet on 2026-11-05, with times in UTC. Every payment is 0.001 USDC. The status and batch columns are what Circle's Gateway API returned for each transfer at 18:49 UTC. A status of "completed" means settled in the batch shown, and "received" means accepted and waiting for a batch.
 
-## Receipts
+## Runs on the live contract
+
+SealedDelivery at [`0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094), deployed at 18:23 UTC. Each seller deposited 0.1 USDC.
+
+| Time | Seller | Gateway transfer id | Status | Batch | Outcome on the receipt |
+|---|---|---|---|---|---|
+| 18:24:45 | Seller A | `54df1711-eb16-4cb2-8feb-2a3636ec2675` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | Charged once. Key read from Arc. Circle record: 1 transfer for this payment. |
+| 18:25:00 | Seller F | `9d3fa911-7595-4b5f-8b9e-1c504ab7b50e` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back. |
+| 18:26:09 | Seller E | `43e8770a-826d-4f21-9fe4-1214b1c0a68e` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | The seller stayed silent. Its deposit paid 0.0115 USDC back. |
+| 18:27:15 | Seller D | `1c0a0988-9a4c-4782-bfbc-64ac56428bb6` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | Wrong key rejected by the contract. The seller stayed silent. Its deposit paid 0.0115 USDC back. |
+| 18:36:01 | Seller A | `9cf02586-792d-4d80-b499-486f9894a20d` | received | not yet | Charged once. Delivered. |
+| 18:38:20 | Seller C | `edacb3b5-452a-486d-971f-ff1ccf1767f5` | received | not yet | Paid once. 65 byte answer. |
+
+Time from the start of the run:
+
+| Run | Time |
+|---|---|
+| Seller A, line up, no contract transaction | 1,120 ms |
+| Seller A, key read from the chain after a claim | 6,758 ms |
+| Seller F, key read from the chain after a claim | 12,787 ms |
+
+## Contract transactions
+
+All 18 transactions of the run. The fee is gas used times the 20 gwei each one paid, read from its receipt. Scene names come from the events each transaction left.
+
+| Time | Scene | Call | Sent by | Gas used | Fee in USDC | Transaction |
+|---|---|---|---|---:|---:|---|
+| 18:24:05 | Seller A | `deposit` | Seller A | 76,917 | 0.0015 | [`0x04152b3e…`](https://explorer.testnet.arc.io/tx/0x04152b3e50acdcf1abaac7b364dc166498891cdd92c3b141d62c8b6513cd0c6d) |
+| 18:24:08 | Seller D | `deposit` | Seller D | 76,917 | 0.0015 | [`0xd045569f…`](https://explorer.testnet.arc.io/tx/0xd045569fb6d1514caf435f17837604ea8cb5167e706a3d838005cbe04bf8ae09) |
+| 18:24:13 | Seller E | `deposit` | Seller E | 76,917 | 0.0015 | [`0xf7fb5e56…`](https://explorer.testnet.arc.io/tx/0xf7fb5e56204d65152a948f2d6cc74b2f54e4b7812af999eb41d4c3cb4397909e) |
+| 18:24:17 | Seller F | `deposit` | Seller F | 76,917 | 0.0015 | [`0x81f793ce…`](https://explorer.testnet.arc.io/tx/0x81f793cebcb3ea8b6afc4e94eae085f6944662c643789fa7875056dd8d05fd46) |
+| 18:24:42 | Seller A | `claim` | vet402 hold | 268,424 | 0.0054 | [`0xd67c5d03…`](https://explorer.testnet.arc.io/tx/0xd67c5d030004f9695035aae255e1bd66b75f8ded9a5cda6978997b4bd6ba9bf8) |
+| 18:24:44 | Seller A | `answer` | Seller A | 87,400 | 0.0017 | [`0x69391c38…`](https://explorer.testnet.arc.io/tx/0x69391c38549ab90e586b012ba944feb94c4ec664852fe81941d6f894ae59d55a) |
+| 18:24:51 | Seller F | `claim` | vet402 hold | 268,460 | 0.0054 | [`0x917d7469…`](https://explorer.testnet.arc.io/tx/0x917d74690fa2f67185d0a6efae470250045f25b407ff5cf3c70cd8e146c58bcc) |
+| 18:24:57 | Seller F | `answer` | Seller F | 87,400 | 0.0017 | [`0x118c709d…`](https://explorer.testnet.arc.io/tx/0x118c709d54106e4bcfe152024212a07453b9c51f74d649a201b06fcbe7d37140) |
+| 18:25:03 | Seller F | `prove` | vet402 hold | 123,426 | 0.0025 | [`0x47d1364e…`](https://explorer.testnet.arc.io/tx/0x47d1364ecb9c29e640e6a25829fcda33efeee668401e8a8f68564d1e7a1ba13e) |
+| 18:25:04 | Seller F | `flushBurn` | vet402 hold | 57,278 | 0.0011 | [`0x6752770d…`](https://explorer.testnet.arc.io/tx/0x6752770d58e4f334ff5a10a3b2234b4f8406e94ce073ee8ac17524f6f1f6e37e) |
+| 18:25:08 | Seller E | `claim` | vet402 hold | 268,436 | 0.0054 | [`0xc5c53a10…`](https://explorer.testnet.arc.io/tx/0xc5c53a10de47f010249539dce24000f4745fcad20d0d85a4c0d7c8a6bdaa7163) |
+| 18:26:14 | Seller D | `claim` | vet402 hold | 268,460 | 0.0054 | [`0x254c013b…`](https://explorer.testnet.arc.io/tx/0x254c013b1b7f52b9b663062ab6f2069eff06b6bf54ec529df89eb19c44fa6710) |
+| 18:26:21 | Seller D | `answer, reverted` | Seller D | 29,279 | 0.0006 | [`0x51984021…`](https://explorer.testnet.arc.io/tx/0x51984021d48067cf593d6eef56889c5296d5e756c088fc47f16149166fbdb059) |
+| 18:28:29 | Seller E | `finalize` | vet402 hold | 98,669 | 0.0020 | [`0xc41cc0cb…`](https://explorer.testnet.arc.io/tx/0xc41cc0cb903d976d4dc18a8fa252d5730646adf962e174b64f4f6b0c76f96b93) |
+| 18:28:30 | Seller E | `flushBurn` | vet402 hold | 57,278 | 0.0011 | [`0x6d18b826…`](https://explorer.testnet.arc.io/tx/0x6d18b8266515e635bd12905224835567873a2098821faab609432b5ec4b35203) |
+| 18:28:33 | Seller D | `finalize` | vet402 hold | 98,681 | 0.0020 | [`0xad945fdd…`](https://explorer.testnet.arc.io/tx/0xad945fdd6a3df5b4d4f034a481a555b2667bcd32fcac422bda4469af4c63d895) |
+| 18:28:35 | Seller D | `flushBurn` | vet402 hold | 57,278 | 0.0011 | [`0x0ca5d690…`](https://explorer.testnet.arc.io/tx/0x0ca5d690fb1d308dc2486d842a71e9de6bd2308acef6f25e41bdd3aa41b1d21a) |
+| 18:28:37 | All credits | `withdrawClaimable` | vet402 hold | 53,249 | 0.0011 | [`0x436a0d25…`](https://explorer.testnet.arc.io/tx/0x436a0d25d21e4d11e1e2f80a083e0a41efbd3ca174ad5db0ff3d427b6116fb99) |
+
+The contract read at 18:49 UTC:
+
+| Seller | Address | Deposit in USDC | `silentCount` | `fraudCount` |
+|---|---|---:|---:|---:|
+| Seller A | `0x71f8005aE7757857DC6b7418b9beC75F19546aC3` | 0.1 | 0 | 0 |
+| Seller D | `0xB9a6F77d9EFDFcF165e1259fC650fFA01b06B80D` | 0.077 | 1 | 0 |
+| Seller E | `0x2d86121923E9662D4d926d657FE91A2141BD93e8` | 0.077 | 1 | 0 |
+| Seller F | `0x1401Bd7C7FAb3FE8A429672Fc1C5371456c8445d` | 0.077 | 0 | 1 |
+
+Each verdict took 0.023 USDC, which is 2 x (0.001 + 0.0105): 0.0115 credited to the buyer and 0.0115 burned. The buyer withdrew its three credits, 0.0345 USDC, in [`0x436a0d25…`](https://explorer.testnet.arc.io/tx/0x436a0d25d21e4d11e1e2f80a083e0a41efbd3ca174ad5db0ff3d427b6116fb99).
+
+## What each scene shows
+
+- **Seller A, line up, 18:36 UTC.** The key arrived on its own request. Among the contract's 4 `Claimed` events at 18:49 UTC, none is for this payment.
+- **Seller A, 18:24 UTC.** The key request closed. vet402 sent a claim, Seller A answered on chain, and the run had the key 6,758 ms from its start. Circle's record shows 1 transfer for this payment.
+- **Seller F, 18:24 UTC.** The seller answered with a key that opens something other than what it signed. `prove` marked FRAUD.
+- **Seller E, 18:25 UTC.** The seller said nothing. After the 60 s window, `finalize` marked SILENT.
+- **Seller D, 18:26 UTC.** The seller tried a wrong key, the contract reverted it, and the failed transaction stays on the chain. It then said nothing and `finalize` marked SILENT.
+- **Seller C, 18:38 UTC.** vet402 paid Seller C once. About 100 s later it read "Seller C: No recent delivery from this seller. Not paid." and offered the next listing, BotPay, which I did not pay. Seller C's Arkiv entity uses a short lifetime for this demo, and every other seller's lasts 7 days.
+
+These sellers are mine. A healthy seller answers, so every payout above comes from a seller I stopped or told to cheat.
+
+## Earlier runs
+
+The receipt list also holds these rows. The Seller A and Seller B rows came before any contract was deployed, and the two Seller B rows at 16:04 are the comparison: a retry with a new signature paid again. The rows from 17:49 to 17:53 ran on an earlier deployment, [`0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2`](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2), with a 0.01 USDC deposit and no dispute cost, so each verdict there paid 0.001 USDC back. The Seller F row at 17:49:19 ended before any claim, and I did not record why it stopped there.
 
 | Time | Seller | Gateway transfer id | Status | Batch | Outcome on the receipt |
 |---|---|---|---|---|---|
@@ -16,85 +86,30 @@ All rows are from Arc testnet on 2026-11-05, with times in UTC. Every payment is
 | 17:52:19 | Seller E | `c1a0c172-8687-4e26-8d4d-ceb24f9b8516` | completed | [`0xddbab659…`](https://explorer.testnet.arc.io/tx/0xddbab659d84be4606e4576450121a372b83c7a7ddb86fe4600b067394d365a5f) | The seller stayed silent. Its deposit paid 0.001 USDC back. |
 | 17:53:44 | Seller D | `af62782f-6acc-4be3-91bf-ae0277441745` | completed | [`0xddbab659…`](https://explorer.testnet.arc.io/tx/0xddbab659d84be4606e4576450121a372b83c7a7ddb86fe4600b067394d365a5f) | Wrong key rejected by the contract. The seller stayed silent. Its deposit paid 0.001 USDC back. |
 
-The two Seller B rows at 16:04 are the comparison: a retry with a new signature paid again. The Seller F row at 17:49:19 ended before any claim. I kept it in the record, and I did not record why it stopped there. The Seller F run at 17:51:07 is the one that went through.
-
-## Contract transactions
-
-SealedDelivery at [`0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2`](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2). The fee is gas used times the 25 gwei each of these transactions paid.
-
-| Time | Scene | Call | Sent by | Gas used | Fee in USDC | Transaction |
-|---|---|---|---|---:|---:|---|
-| 17:48:27 | Seller A | `deposit` | Seller A | 76,905 | 0.0019 | [`0xb74ac810…`](https://explorer.testnet.arc.io/tx/0xb74ac810b86ae0a43c84a8e699ccda27c7ad626097118af3541535504be1c55b) |
-| 17:48:30 | Seller D | `deposit` | Seller D | 76,905 | 0.0019 | [`0x7bb5b99f…`](https://explorer.testnet.arc.io/tx/0x7bb5b99f7baf6a8778edeb873038d17655d17c6fba76fd12b85588f24d0b02fa) |
-| 17:48:35 | Seller E | `deposit` | Seller E | 76,905 | 0.0019 | [`0x3f6961a8…`](https://explorer.testnet.arc.io/tx/0x3f6961a8e4272d6c7597649b151d37d96807b95df7f00f47f22eed1737ba9217) |
-| 17:48:39 | Seller F | `deposit` | Seller F | 76,905 | 0.0019 | [`0xaa8c1fa4…`](https://explorer.testnet.arc.io/tx/0xaa8c1fa4ef61d60d44b83fc5a167a7597aa3b57d73d76f883ca615db3f84cd8e) |
-| 17:49:01 | Seller A | `claim` | vet402 hold | 268,269 | 0.0067 | [`0x110749e4…`](https://explorer.testnet.arc.io/tx/0x110749e4ede9ad6cdc2f0579f4819dd752167a72f0f2a8b1c735448ac90245c2) |
-| 17:49:05 | Seller A | `answer` | Seller A | 87,355 | 0.0022 | [`0xf83c4872…`](https://explorer.testnet.arc.io/tx/0xf83c4872ec5e23c14a5d8d5e7ede1434ee04824fd43120121be961b06978f8c8) |
-| 17:51:00 | Seller F | `claim` | vet402 hold | 268,305 | 0.0067 | [`0x958a3d1d…`](https://explorer.testnet.arc.io/tx/0x958a3d1d8288e2b83b3f260b06bad539f836224092fbe55d992412798efc2244) |
-| 17:51:06 | Seller F | `answer` | Seller F | 87,355 | 0.0022 | [`0xf5ed51eb…`](https://explorer.testnet.arc.io/tx/0xf5ed51eb0455afd233e0e567a451832911ced19c1178afce1955c2fc1428c820) |
-| 17:51:10 | Seller F | `prove` | vet402 hold | 123,414 | 0.0031 | [`0xd74eee02…`](https://explorer.testnet.arc.io/tx/0xd74eee02e9f7f8714ac33a64b140eee26826a7333b4097c65b24057699d88c1b) |
-| 17:51:12 | Seller F | `flushBurn` | vet402 hold | 57,233 | 0.0014 | [`0xd5b8e351…`](https://explorer.testnet.arc.io/tx/0xd5b8e3510fa64e985eeca64c0edfe8b852f58d5ad47d7ef47fd7683b7b461a09) |
-| 17:51:17 | Seller E | `claim` | vet402 hold | 268,329 | 0.0067 | [`0x5ef6c066…`](https://explorer.testnet.arc.io/tx/0x5ef6c066a4cd2090a35e20fb92d921d3442d6a33821cb7a2d9c3b5940f02afee) |
-| 17:52:39 | Seller E | `finalize` | vet402 hold | 98,681 | 0.0025 | [`0x89f03886…`](https://explorer.testnet.arc.io/tx/0x89f03886270480150bbdbf08e6d99eecd14c180b395db98e3b93350bc9932a4e) |
-| 17:52:40 | Seller E | `flushBurn` | vet402 hold | 57,233 | 0.0014 | [`0x62334f53…`](https://explorer.testnet.arc.io/tx/0x62334f53881b0a32739782ed795c2b82eaf6e9b1c036b1cfb9c6f67319f0916e) |
-| 17:52:44 | Seller D | `claim` | vet402 hold | 268,317 | 0.0067 | [`0xe458fddb…`](https://explorer.testnet.arc.io/tx/0xe458fddb561de5fb6425cf7c2775b26a465623d138187ed577d1d868f3528200) |
-| 17:52:50 | Seller D | `answer, reverted` | Seller D | 29,234 | 0.0007 | [`0x5ec88c38…`](https://explorer.testnet.arc.io/tx/0x5ec88c38d1ce2ae44de817e5ba932ab559e0025b63cd135d01f4625e31e023ab) |
-| 17:55:01 | Seller D | `finalize` | vet402 hold | 98,681 | 0.0025 | [`0x3c4414d4…`](https://explorer.testnet.arc.io/tx/0x3c4414d4572b34f034b2e675406c0ebdafd1b7bf9c563f39dc8900c1db24bf5d) |
-| 17:55:02 | Seller D | `flushBurn` | vet402 hold | 57,233 | 0.0014 | [`0xdf33813c…`](https://explorer.testnet.arc.io/tx/0xdf33813c0648391e5bfc6ef36472e8345243a0ef515c55eb10d8d013661e20a3) |
-| 17:55:39 | All credits | `withdrawClaimable` | vet402 hold | 53,271 | 0.0013 | [`0x6f06623e…`](https://explorer.testnet.arc.io/tx/0x6f06623e2c72f1aaf3e4e19ff2ba9a3ef6e8a9a32bea258da64bf3879fb95c40) |
-
-The contract read on 2026-11-05 at 18:15 UTC:
-
-| Seller | Address | Deposit in USDC | `silentCount` | `fraudCount` |
-|---|---|---:|---:|---:|
-| Seller A | `0x71f8005aE7757857DC6b7418b9beC75F19546aC3` | 0.010 | 0 | 0 |
-| Seller D | `0xB9a6F77d9EFDFcF165e1259fC650fFA01b06B80D` | 0.008 | 1 | 0 |
-| Seller E | `0x2d86121923E9662D4d926d657FE91A2141BD93e8` | 0.008 | 1 | 0 |
-| Seller F | `0x1401Bd7C7FAb3FE8A429672Fc1C5371456c8445d` | 0.008 | 0 | 1 |
-
-Each seller deposited 0.01 USDC. Each verdict took 0.002 USDC: 0.001 credited to the buyer and 0.001 burned.
-
-## What each scene shows
-
-- **Seller A, 16:03 UTC.** The first response was lost after settlement. vet402 asked again with the same payment and got the stored answer. Circle's record shows 1 transfer for this payment.
-- **Seller A, 17:49 UTC.** The key request closed. vet402 sent a claim, Seller A answered on chain, and the run read the key from Arc in 9.4 s. Circle's record shows 1 transfer for this payment.
-- **Seller F, 17:51 UTC.** The seller answered with a key that opens something other than what it signed. `prove` marked FRAUD.
-- **Seller E, 17:51 UTC.** The seller said nothing. After the 60 s window, `finalize` marked SILENT.
-- **Seller D, 17:52 UTC.** The seller tried a wrong key, the contract reverted it, and the failed transaction stays on the chain. It then said nothing and `finalize` marked SILENT.
-- **Seller B, 16:03 UTC.** The seller declares no recovery. On its own run, vet402 stopped at "Charged once. Nothing delivered. No second charge." The comparison shows what a retry with a new signature does instead.
-
-These sellers are mine. A healthy seller answers, so every payout above comes from a seller I stopped on purpose.
-
-## Still to record
-
-- Return to hold on the screen: `{{TODO: run, amounts, time}}`. The `withdrawClaimable` step has run (table above).
-- Seller C and the delivery check: `{{TODO: run, receipt, time}}`.
-- The normal path on Arc testnet with `SELLER_DROP_RESPONSE=off`: `{{TODO: transfer id, claim count, time}}`. It has run on a local anvil chain with `scripts/sealed-local-e2e.ts`.
+The 25 gwei figures behind `DISPUTE_COST` come from that earlier deployment: claim [`0xe458fddb…`](https://explorer.testnet.arc.io/tx/0xe458fddb561de5fb6425cf7c2775b26a465623d138187ed577d1d868f3528200) (268,317 gas), finalize [`0x89f03886…`](https://explorer.testnet.arc.io/tx/0x89f03886270480150bbdbf08e6d99eecd14c180b395db98e3b93350bc9932a4e) (98,681 gas) and withdrawClaimable [`0x6f06623e…`](https://explorer.testnet.arc.io/tx/0x6f06623e2c72f1aaf3e4e19ff2ba9a3ef6e8a9a32bea258da64bf3879fb95c40) (53,271 gas), 0.0105 USDC together.
 
 # Integration debrief
 
 ## World ID
 
-On 2026-11-05 the staging Simulator passed the budget approval, the hold approval, the refusal of an approval made for another hold, and Cancel.
+What ran on 2026-11-05 in the staging Simulator: "Budget set.", a hold of 0.02 USDC, "Not approved: this approval is for another hold." for a proof from another hold, and "Not approved. Nothing was held or paid." for Cancel request. It has not run in the real World App.
 
 ### Time to first success
 
-{{TODO}}
+About 25 minutes, from handing over the instruction to "Budget set." on staging, 2026-11-05 16:05 to 16:29 UTC.
 
 ### Friction
 
-From the staging Simulator on 2026-11-04:
-
+- The Simulator's Cancel does not reach the app, so I put Cancel request in the app.
 - Pasting the request URL opens the confirmation screen without a press on Continue. One extra press closes it, and the request is used up.
-- The Continue button on the confirmation screen sits below the visible area. I pressed it through the page's DOM.
-- The app's tab has to stay in front during the approval. In a background tab, the screen does not move on.
-
-From the demo run: {{TODO}}
+- The Continue button on the confirmation screen is cut off at the bottom.
+- The app's tab has to stay in front during the approval. In a background tab the screen does not move on (seen on 2026-11-04).
+- I made a hold above the budget fail on purpose, so a 0.05 USDC request against a 0.02 USDC budget reads "Not approved." That is this app's rule, and a tester should expect it.
 
 ### Missing capability or documentation
 
-{{TODO}}
+Selfie Check returned `credential_unavailable` on staging for both request and createSession (2026-10-28 UTC). Only `proof_of_human` passes there. The Simulator's screen reads "Unique device" while the returned identifier is `proof_of_human`.
 
 ### The one improvement with the greatest impact
 
-{{TODO}}
+Send the Simulator's Cancel back to the app.
