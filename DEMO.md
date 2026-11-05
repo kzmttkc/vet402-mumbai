@@ -192,6 +192,8 @@ Time from the start of those runs:
 
 What ran on 2026-11-05 in the staging Simulator: "Budget set.", a hold of 0.02 USDC, "Not approved: this approval is for another hold." for a proof from another hold, and "Not approved. Nothing was held or paid." for Cancel request. It has not run in the real World App.
 
+What ran in production on 2026-11-05 with the real World App on iOS: "Budget set." at 22:16 UTC, "Held 1 USDC for this job." at 22:16 UTC and again at 23:25 UTC for the video, and "Not approved. Nothing was held or paid." for Cancel request at 23:23 UTC. The verified result reads environment production, protocol 4.0, proof_of_human.
+
 ### Time to first success
 
 About 25 minutes, from handing over the instruction to "Budget set." on staging, 2026-11-05 16:05 to 16:29 UTC.

@@ -170,7 +170,7 @@ The moment that needs a person is the hold. vet402 pays with my money and its ke
 
 One session is created per budget. Each hold then needs a session proof of that session, with the hold's id and amount as its signal. The backend signs each request and sends each result to World's verify endpoint before it creates a hold. It accepts a proof only if the session matches the stored one in full, the signal matches this hold, and the session nullifier has never been used. An approval made for another hold reads "Not approved: this approval is for another hold." Cancel request reads "Not approved. Nothing was held or paid."
 
-The demo runs in World's staging Simulator and has not run in the real World App. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
+It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my Orb-verified World App on iOS, and the verified result reads environment production, protocol 4.0, proof_of_human. The demo video shows the production approval filmed at 23:25 UTC. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
 ## After judging
 
