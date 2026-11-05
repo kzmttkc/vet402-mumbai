@@ -276,7 +276,7 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerA, buyer, V, N1, KEY, PLAIN, false);
         sd.answer(id, KEY);
         vm.prank(sellerA);
-        vm.expectRevert(SealedDelivery.ProofWindowOpen.selector);
+        vm.expectRevert(SealedDelivery.LiabilityOpen.selector);
         sd.withdrawDeposit();
         sd.prove(id, ct, KEY);
         assertGt(sd.claimable(buyer), 0, "the proof was paid from the deposit");
@@ -292,5 +292,19 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
         vm.warp(block.timestamp + COOLDOWN - MAX_EXPIRY);
         _withdraw(sellerA);
         assertEq(sd.deposits(sellerA), 0);
+    }
+
+    function test_ProofHoldStopsOnlyTheAnsweredShare() public {
+        _fund(sellerA, 10 * V);
+        _request(sellerA, 10 * V);
+        vm.warp(T0 + COOLDOWN);
+        (bytes32 id,) = _sealedClaim(sellerA, buyer, V, N1, KEY, PLAIN, false);
+        sd.answer(id, KEY);
+        _withdraw(sellerA);
+        assertEq(usdc.balanceOf(sellerA), 8 * V, "a buyer's answer holds back only twice its own payment");
+        assertEq(sd.deposits(sellerA), 2 * V);
+        vm.warp(block.timestamp + COOLDOWN - MAX_EXPIRY);
+        _withdraw(sellerA);
+        assertEq(usdc.balanceOf(sellerA), 10 * V);
     }
 }
