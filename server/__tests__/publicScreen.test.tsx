@@ -118,7 +118,8 @@ describe('the published screen', () => {
     )
     const text = `${textOf(renderToStaticMarkup(<PublicApp />))} ${textOf(rows)}`
     expect(text).toContain('Check a receipt')
-    expect(text).not.toMatch(/wallet|\bgas\b|signature|\barc\b|ethereum|\bbase\b|polygon|solana|0x[0-9a-f]{40}(?![0-9a-f])/i)
+    // The Arc Studio badge comes with the template and stays on purpose.
+    expect(text.replace('Built with Arc Studio', '')).not.toMatch(/wallet|\bgas\b|signature|\barc\b|ethereum|\bbase\b|polygon|solana|0x[0-9a-f]{40}(?![0-9a-f])/i)
   })
 })
 
