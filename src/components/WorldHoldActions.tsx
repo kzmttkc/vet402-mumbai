@@ -49,6 +49,12 @@ export function WorldHoldActions({
 
       {waiting ? (
         <>
+          {world.qr && (
+            <figure className="flex flex-col items-center gap-2 rounded-2xl border border-[var(--border)] bg-white p-4">
+              <img src={world.qr} alt="QR code for this approval request" width={224} height={224} className="h-56 w-56" />
+              <figcaption className="text-center text-sm text-[var(--muted)]">Scan with World App on your phone</figcaption>
+            </figure>
+          )}
           {world.canCopy && (
             <button type="button" onClick={() => void copy()} className={secondaryButton}>
               {copied ? <Check size={16} aria-hidden /> : <Copy size={16} aria-hidden />}
