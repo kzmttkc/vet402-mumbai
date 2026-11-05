@@ -16,6 +16,8 @@ export interface TransferInfo {
 export interface PayOutcome {
   /** The seller's answer. */
   data: unknown
+  /** The answer exactly as it arrived, as text. The receipt's hash and size are taken over this. */
+  body?: string
   /** Atomic USDC units actually paid. */
   paid: bigint
   /** The payment's unique nonce. */
@@ -210,7 +212,7 @@ export function createJobService(ports: JobPorts, receipts: ReceiptStore, now: (
   async function recordReceipt(approved: Plan, paid: PayOutcome): Promise<void> {
     if (paid.paid <= 0n) return
 
-    const body = responseBody(paid.data)
+    const body = paid.body ?? responseBody(paid.data)
     let transfer: TransferInfo | null = null
     try {
       if (paid.nonce) transfer = await ports.findTransfer(paid.nonce, LOOKUP_ATTEMPTS)

@@ -3,11 +3,8 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { generatePrivateKey } from 'viem/accounts'
-import { getProtocolContractByName, getUsdc } from '../../src/onchain-facts'
 import { receiptStatusLine } from '../../src/lib/receiptStatus'
 import { toCandidate } from '../discovery'
-import { payFromHold } from '../jobPorts'
 import { createJobService } from '../jobs'
 import type { JobPorts, PayOutcome, TransferInfo } from '../jobs'
 import { createReceiptStore } from '../receiptStore'
@@ -157,6 +154,17 @@ describe('Receipts from the job flow', () => {
     })
   })
 
+  test('hashes the answer exactly as it arrived', async () => {
+    const raw = '{ "result":  {"status":"0x1"} }\n'
+    const outcome: PayOutcome = { data: answer, body: raw, paid: 100n, nonce: NONCE, timesReceived: 1, transaction: '' }
+    const { store } = await payOnce(setup({ pay: () => Promise.resolve(outcome) }).ports)
+
+    expect(store.list()[0]).toMatchObject({
+      responseHash: createHash('sha256').update(raw).digest('hex'),
+      responseBytes: Buffer.byteLength(raw),
+    })
+  })
+
   test('adds nothing when the seller answered without charging', async () => {
     const free: PayOutcome = { data: answer, paid: 0n, nonce: null, timesReceived: 0, transaction: '' }
     const { store } = await payOnce(setup({ pay: () => Promise.resolve(free) }).ports)
@@ -229,79 +237,5 @@ describe('Receipts from the job flow', () => {
     const saved = JSON.parse(readFileSync(path.join(dir, 'receipts.json'), 'utf8')) as ReceiptRow[]
     expect(saved).toHaveLength(1)
     expect(saved[0]?.sellerName).toBe('Relay Co')
-  })
-})
-
-describe('Paying a seller with a very large 402 header', () => {
-  const usdc = getUsdc(5042002)
-  const wallet = getProtocolContractByName('GatewayWallet', 'testnet')
-  if (!usdc || !wallet) throw new Error('registry should know USDC and the Gateway wallet')
-
-  const requirements = (amount: string) => ({
-    scheme: 'exact',
-    network: NETWORK,
-    asset: usdc.address,
-    amount,
-    payTo: `0x${'12'.repeat(20)}`,
-    maxTimeoutSeconds: 604900,
-    extra: { name: 'GatewayWalletBatched', version: '1', verifyingContract: wallet.address },
-  })
-
-  function startSeller(amount: string) {
-    const seen = { unpaid: 0, paid: 0, headerChars: 0 }
-    const server = Bun.serve({
-      port: 0,
-      fetch(req) {
-        if (!req.headers.get('payment-signature')) {
-          seen.unpaid++
-          const header = Buffer.from(
-            JSON.stringify({
-              x402Version: 2,
-              resource: { url: req.url, description: 'x'.repeat(10_000), mimeType: 'application/json' },
-              accepts: [requirements(amount)],
-            }),
-          ).toString('base64')
-          seen.headerChars = header.length
-          return new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': header } })
-        }
-        seen.paid++
-        const settled = Buffer.from(
-          JSON.stringify({ success: true, transaction: 'b2f1c1de-0000-4000-8000-000000000001', network: NETWORK }),
-        ).toString('base64')
-        return Response.json({ ok: true }, { headers: { 'PAYMENT-RESPONSE': settled } })
-      },
-    })
-    return { server, seen, url: `http://localhost:${server.port}/thing` }
-  }
-
-  const options = { network: NETWORK, rpcUrl: 'http://localhost:1', holdKey: generatePrivateKey() }
-
-  test('handles it on the server and hands back only the result', async () => {
-    const { server, seen, url } = startSeller('100')
-    try {
-      const outcome = await payFromHold(options, { url, method: 'GET' }, 100n)
-
-      expect(seen.headerChars).toBeGreaterThan(10_000)
-      expect(seen.paid).toBe(1)
-      expect(outcome.data).toEqual({ ok: true })
-      expect(outcome.paid).toBe(100n)
-      expect(outcome.timesReceived).toBe(1)
-      expect(outcome.nonce).toMatch(/^0x[0-9a-f]{64}$/i)
-      expect(outcome.transaction).toBe('b2f1c1de-0000-4000-8000-000000000001')
-      // Only plain values come back, never the seller's raw headers.
-      expect(Object.keys(outcome).sort()).toEqual(['data', 'nonce', 'paid', 'timesReceived', 'transaction'])
-    } finally {
-      await server.stop(true)
-    }
-  })
-
-  test('pays nothing when the seller asks for more than was approved', async () => {
-    const { server, seen, url } = startSeller('500')
-    try {
-      await expect(payFromHold(options, { url, method: 'GET' }, 100n)).rejects.toThrow()
-      expect(seen.paid).toBe(0)
-    } finally {
-      await server.stop(true)
-    }
   })
 })

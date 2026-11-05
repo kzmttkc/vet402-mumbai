@@ -28,7 +28,7 @@ const holds = createHoldService(
 )
 
 const jobs = createJobService(
-  createJobPorts({ network: `eip155:${ARC_TESTNET_CHAIN_ID}`, rpcUrl: RPC_URL, holdKey: keys.hold, holdClient }),
+  createJobPorts({ network: `eip155:${ARC_TESTNET_CHAIN_ID}`, holdKey: keys.hold, holdClient }),
   createReceiptStore(DATA_DIR),
 )
 
