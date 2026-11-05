@@ -28,15 +28,26 @@ export interface ReceiptRow {
   /** Plain sentences about how the payment ended. Set by the recovery demo. */
   outcome?: string[]
   /** Which demo made this row, so the screen can offer the right demo button. */
-  demo?: 'a' | 'b' | 'compare'
+  demo?: 'a' | 'b' | 'compare' | 'd' | 'e' | 'f'
   /** True for rows from the comparison job. They never use the "No second charge." sentence. */
   comparison?: boolean
+  /** The sealed answer whose key was read from the chain, so anyone can open it again. */
+  sealed?: SealedRecord
   /** The payment entity's key on Arkiv, once written. Never shown. */
   arkivPaymentKey?: string
   /** The settlement entity's key on Arkiv, once written. Never shown. */
   arkivSettlementKey?: string
   /** True once this delivery reached the seller's entity on Arkiv. Never shown. */
   arkivSellerDone?: boolean
+}
+
+/** Only what opening the answer again needs. The key itself stays on the chain. */
+export interface SealedRecord {
+  ciphertext: string
+  claimId: string
+  plaintextHash: string
+  /** The block that holds the key, as a decimal string. */
+  keyBlock: string
 }
 
 export interface ReceiptStore {

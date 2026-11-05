@@ -8,16 +8,17 @@ import { requireChain } from '../src/onchain-facts'
 import { AmountError, formatUsdc, parseUsdc } from '../src/onchain-money'
 import { createHoldService, HoldError } from './hold'
 import { createHoldStore } from './holdStore'
-import { loadKeys } from './keys'
+import { loadKeys, loadSealedSellerKeys } from './keys'
 import { createHoldPorts } from './ports'
 import { createJobPorts } from './jobPorts'
 import { createJobService, JobError } from './jobs'
 import { createReceiptStore } from './receiptStore'
 import { readOnePayment } from './circleRecord'
 import { createDemoService, DemoError, SELLER_C_EXTRA_HOLD } from './demo'
-import type { DemoKind } from './demo'
+import type { DemoAction, DemoKind } from './demo'
 import { createDemoPorts } from './demoPorts'
 import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
+import { ARC_NET, createSealedDelivery, createSealedPorts, createSealedScene, parseSealedAddress } from './sealedDelivery'
 import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl } from './arkiv'
 import type { Plan } from './planner'
 import type { Hex } from 'viem'
@@ -84,6 +85,23 @@ const facilitator = new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).o
 // The switch: close the connection after settling and before the first response. On for the demo.
 const DROP_AFTER_SETTLE = process.env.SELLER_DROP_RESPONSE !== 'off'
 
+// With a contract address the same switch moves to the key request. Without one nothing changes.
+const sealedAddress = parseSealedAddress(process.env.SEALED_DELIVERY_ADDRESS)
+// SEALED_RPC_URL points the contract calls at another node, for a local run.
+const sealedClient = sealedAddress
+  ? createSealedDelivery({ address: sealedAddress, net: { ...ARC_NET, rpcUrl: process.env.SEALED_RPC_URL ?? ARC_NET.rpcUrl } })
+  : null
+const sealedKeys = sealedClient ? loadSealedSellerKeys() : null
+const sealedScene = sealedClient && sealedKeys
+  ? createSealedScene({
+      client: sealedClient,
+      keys: { a: keys.sellerA, d: sealedKeys.sellerD, e: sealedKeys.sellerE, f: sealedKeys.sellerF },
+      facilitator,
+      dropKey: () => DROP_AFTER_SETTLE,
+      log: (message) => console.error(message),
+    })
+  : null
+
 const sellerA = createSeller({
   name: 'Seller A',
   payTo: sellerAddress.a,
@@ -91,7 +109,8 @@ const sellerA = createSeller({
   facilitator,
   confirmCharged: async (nonce, payer) =>
     (await readOnePayment(nonce, { seller: sellerAddress.a, payer, amount: DEMO_PRICE.toString() })).ok,
-  dropAfterSettle: () => DROP_AFTER_SETTLE,
+  dropAfterSettle: () => !sealedScene && DROP_AFTER_SETTLE,
+  ...(sealedScene ? { sealing: sealedScene.sellerASealing } : {}),
 })
 // Seller B declares nothing: it settles, and it has no way to give the same answer again.
 const sellerB = createSeller({
@@ -113,13 +132,25 @@ const sellerC = createSeller({
   dropAfterSettle: () => false,
 })
 
-const demoPorts = createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient })
+const demoPorts = {
+  ...createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient }),
+  ...(sealedClient && sealedScene
+    ? { sealed: createSealedPorts({ client: sealedClient, holdKey: keys.hold, buyerKey: keys.buyer, rejected: sealedScene.rejected }) }
+    : {}),
+}
 
 const demos = createDemoService(
   demoPorts,
   {
     a: { name: 'Seller A', url: `http://127.0.0.1:${PORT}/sellers/a`, address: sellerAddress.a },
     b: { name: 'Seller B', url: `http://127.0.0.1:${PORT}/sellers/b`, address: sellerAddress.b },
+    ...(sealedKeys
+      ? {
+          d: { name: 'Seller D', url: `http://127.0.0.1:${PORT}/sellers/d`, address: privateKeyToAccount(sealedKeys.sellerD).address },
+          e: { name: 'Seller E', url: `http://127.0.0.1:${PORT}/sellers/e`, address: privateKeyToAccount(sealedKeys.sellerE).address },
+          f: { name: 'Seller F', url: `http://127.0.0.1:${PORT}/sellers/f`, address: privateKeyToAccount(sealedKeys.sellerF).address },
+        }
+      : {}),
   },
   receiptStore,
 )
@@ -225,6 +256,16 @@ const sellerRoute = (handler: (req: express.Request, res: express.Response) => P
 app.get('/sellers/a', sellerRoute(sellerA))
 app.get('/sellers/b', sellerRoute(sellerB))
 app.get('/sellers/c', sellerRoute(sellerC))
+if (sealedScene) {
+  app.get('/sellers/a/key', sellerRoute(sellerA.key))
+  app.get('/sellers/d', sellerRoute(sealedScene.sellerD))
+  app.get('/sellers/d/key', sellerRoute(sealedScene.sellerD.key))
+  app.get('/sellers/e', sellerRoute(sealedScene.sellerE))
+  app.get('/sellers/e/key', sellerRoute(sealedScene.sellerE.key))
+  app.get('/sellers/f', sellerRoute(sealedScene.sellerF))
+  app.get('/sellers/f/key', sellerRoute(sealedScene.sellerF.key))
+  for (const watcher of sealedScene.watchers(sellerA.keyFor)) watcher.start()
+}
 
 function startDemo(kind: DemoKind, res: express.Response) {
   try {
@@ -240,12 +281,32 @@ function startDemo(kind: DemoKind, res: express.Response) {
 
 app.post('/demo/run', (req, res) => {
   const seller = (req.body as { seller?: unknown })?.seller
-  if (seller !== 'a' && seller !== 'b') {
+  const sealedOnly = seller === 'd' || seller === 'e' || seller === 'f'
+  if (seller !== 'a' && seller !== 'b' && !(sealedOnly && sealedScene)) {
     res.status(400).json({ error: 'Pick Seller A or Seller B.' })
     return
   }
   startDemo(seller, res)
 })
+
+// Which sellers the screen may offer.
+app.get('/demo/options', (_req, res) => {
+  res.json({ sealed: sealedScene !== null })
+})
+
+// The buttons on a stopped run. Anyone may send finalize once the deadline has passed.
+const demoActions: DemoAction[] = ['finalize', 'prove', 'withdraw']
+for (const action of demoActions) {
+  app.post(`/demo/runs/:id/${action}`, async (req, res) => {
+    try {
+      res.json(await demos.act(req.params.id, action))
+    } catch (error) {
+      res.status(error instanceof DemoError && error.code === 'UNAVAILABLE' ? 409 : 502).json({
+        error: error instanceof Error ? error.message : 'The demo could not finish. Please try again.',
+      })
+    }
+  })
+}
 
 // Demo only: shows what signing a fresh payment would cost. vet402 does not do this.
 app.post('/demo/compare', (_req, res) => startDemo('compare', res))

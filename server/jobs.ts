@@ -103,7 +103,7 @@ export interface ReceiptView {
   status: TransferStatus
   batchTx: string | null
   outcome: string[]
-  demo: 'a' | 'b' | 'compare' | null
+  demo: 'a' | 'b' | 'compare' | 'd' | 'e' | 'f' | null
   comparison: boolean
 }
 
