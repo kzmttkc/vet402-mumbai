@@ -47,6 +47,8 @@ export interface TryWireOptions {
   topUpHold?: () => Promise<void>
   /** How often Seller A's lookout reads the chain. */
   watchMs?: number
+  /** How often the agent reads the chain for the key. */
+  pollMs?: number
   log?: (message: string) => void
 }
 
@@ -63,7 +65,7 @@ export function createTryPorts(options: TryWireOptions): TryPorts {
 
   return {
     contract: options.sealedAddress,
-    demo: { ...options.demo, sealed, sealedPollMs: 1000 },
+    demo: { ...options.demo, sealed, sealedPollMs: options.pollMs ?? 1000 },
     log,
 
     async openSeller() {
