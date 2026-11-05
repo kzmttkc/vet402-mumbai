@@ -1,5 +1,4 @@
-// W  sealed.answers.sort((a, b) => a.sellerName.localeCompare(b.sellerName))
-rites the receipt list and statuses to public/static/ for the published screen.
+// Writes the receipt list and statuses to public/static/ for the published screen.
 // Run before a build: npx bun run scripts/export-public.ts [--data <folder>] [--out <folder>]
 // Every field is named here. A new field on the receipt row stays out until someone adds it on purpose.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -91,6 +90,8 @@ export function toPublic(rows: ReceiptRow[], sealedContract: string | null = nul
       })
     }
   })
+
+  sealed.answers.sort((a, b) => a.sellerName.localeCompare(b.sellerName))
 
   const event = pickEventPayment(rows)
   const check: CheckFile = { eventNonce: event?.nonce ?? null, eventTransferId: event?.transferId ?? null }
