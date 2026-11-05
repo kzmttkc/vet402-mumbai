@@ -6,9 +6,12 @@ import { privateKeyToAccount } from 'viem/accounts'
 import type { Hex } from 'viem'
 
 // Only the derived address goes into the page. The key itself is never handed to the bundle.
+// A build without the key (the public deploy) can name the address directly in ARKIV_WRITER_ADDRESS.
 function writerAddress(mode: string): string {
   const key = process.env.ARKIV_WRITER_KEY ?? loadEnv(mode, process.cwd(), 'ARKIV_').ARKIV_WRITER_KEY
-  return key && /^0x[0-9a-fA-F]{64}$/.test(key) ? privateKeyToAccount(key as Hex).address : ''
+  if (key && /^0x[0-9a-fA-F]{64}$/.test(key)) return privateKeyToAccount(key as Hex).address
+  const address = process.env.ARKIV_WRITER_ADDRESS ?? ''
+  return /^0x[0-9a-fA-F]{40}$/.test(address) ? address : ''
 }
 
 export default defineConfig(({ mode }) => ({
