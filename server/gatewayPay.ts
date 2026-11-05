@@ -146,7 +146,10 @@ export async function payFromHold(payer: HoldPayer, request: PlannedRequest, cap
 
   const { payment } = challenge
   const paid = await payment.send()
-  if (!paid.ok) throw new Error(`Payment failed with status ${paid.status}`)
+  if (!paid.ok) {
+    const reason = (await paid.text().catch(() => '')).slice(0, 300)
+    throw new Error(`Payment failed with status ${paid.status}: ${reason}`)
+  }
 
   const settledHeader = paid.headers.get('PAYMENT-RESPONSE')
   const settled = settledHeader ? asRecord(decode(settledHeader)) : null
