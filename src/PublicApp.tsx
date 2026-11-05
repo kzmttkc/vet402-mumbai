@@ -1,5 +1,6 @@
 import { CheckReceipt } from '@/components/CheckReceipt'
 import { ReceiptList } from '@/components/ReceiptList'
+import { StudioWatermark } from '@/components/StudioBadge'
 import { useReceipts } from '@/hooks/useReceipts'
 
 const payNothing = () => {}
@@ -15,6 +16,7 @@ export function PublicApp() {
         <CheckReceipt />
         <ReceiptList receipts={receipts} onRetryAsNew={payNothing} busy={false} />
       </section>
+      <StudioWatermark />
     </main>
   )
 }
