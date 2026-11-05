@@ -1,44 +1,30 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ReceiptStatus } from '@/lib/receiptStatus'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { loadReceipts } from '@/lib/publicData'
+import type { ReceiptView } from '@/lib/publicData'
 
-export interface Receipt {
-  id: string
-  at: string
-  amount: string
-  sellerName: string
-  responseHash: string
-  responseBytes: number
-  timesReceived: number
-  transferId: string | null
-  status: ReceiptStatus
-  batchTx: string | null
-  /** Plain sentences about how the payment ended. */
-  outcome: string[]
-  demo: 'a' | 'b' | 'compare' | null
-  comparison: boolean
-}
+export type Receipt = ReceiptView
 
 const REFRESH_MS = 10_000
 
 export function useReceipts() {
   const [receipts, setReceipts] = useState<Receipt[]>([])
+  const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
   const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/receipts')
-      if (!res.ok) return
-      setReceipts(((await res.json()) as { receipts: Receipt[] }).receipts)
-    } catch {
-      // Keep showing what we have. The next refresh tries again.
-    }
+    const loaded = await loadReceipts()
+    // Neither answered. Keep showing what we have, and the next refresh tries again.
+    if (!loaded) return
+    setReceipts(loaded.receipts)
+    // The exported files do not change on a published page, so there is nothing to refresh.
+    if (loaded.source === 'static' && import.meta.env.PROD) clearInterval(timer.current)
   }, [])
 
   useEffect(() => {
     const first = setTimeout(() => void load(), 0)
-    const timer = setInterval(() => void load(), REFRESH_MS)
+    timer.current = setInterval(() => void load(), REFRESH_MS)
     return () => {
       clearTimeout(first)
-      clearInterval(timer)
+      clearInterval(timer.current)
     }
   }, [load])
 

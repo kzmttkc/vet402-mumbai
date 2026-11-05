@@ -1,7 +1,7 @@
 import { Receipt as ReceiptIcon } from 'lucide-react'
 import type { Receipt } from '@/hooks/useReceipts'
 import { useWriter } from '@/hooks/useWriter'
-import { receiptStatusLine } from '@/lib/receiptStatus'
+import { COMPARISON_LINE, receiptStatusLine } from '@/lib/receiptStatus'
 
 const short = (value: string, keep = 10) => (value.length > keep ? `${value.slice(0, keep)}…` : value)
 
@@ -49,17 +49,19 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
                   </p>
                 ))}
                 {r.comparison && (
-                  <p className="mt-1 text-xs font-semibold text-[var(--danger)]">
-                    Comparison only. vet402 does not do this.
-                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--danger)]">{COMPARISON_LINE}</p>
                 )}
                 <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
                   <dt>Got back</dt>
                   <dd className="tabular-nums" title={r.responseHash}>
                     {r.responseBytes} bytes, fingerprint {short(r.responseHash)}
                   </dd>
-                  <dt>Received</dt>
-                  <dd className="tabular-nums">{r.timesReceived === 1 ? 'once' : `${r.timesReceived} times`}</dd>
+                  {r.timesReceived !== null && (
+                    <>
+                      <dt>Received</dt>
+                      <dd className="tabular-nums">{r.timesReceived === 1 ? 'once' : `${r.timesReceived} times`}</dd>
+                    </>
+                  )}
                   <dt>Transfer</dt>
                   <dd className="tabular-nums" title={r.transferId ?? undefined}>
                     {r.transferId ? short(r.transferId, 13) : 'Not assigned yet'}
