@@ -338,7 +338,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       check(label, 'stops at the button', run.action, 'finalize')
       check(label, 'receipt before the button', row?.outcome, first)
       const pressed = await demos.act(run.id, 'finalize')
-      if (holdsBurnBack) await client.flushBurn(keys.deployer)
+      // The button already sent the burned half on, and the check below reads that.
       const after = receipts.list().find((r) => r.id === row?.id)
       check(label, 'receipt', after?.outcome, [...first, 'The seller stayed silent. Its deposit paid 0.001 USDC back.'])
       check(label, 'the buyer is credited 1x', (await client.claimable(hold)) - claimableBefore, DEMO_PRICE)
