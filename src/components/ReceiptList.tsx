@@ -1,5 +1,6 @@
 import { Receipt as ReceiptIcon } from 'lucide-react'
 import type { Receipt } from '@/hooks/useReceipts'
+import { useWriter } from '@/hooks/useWriter'
 import { receiptStatusLine } from '@/lib/receiptStatus'
 
 const short = (value: string, keep = 10) => (value.length > keep ? `${value.slice(0, keep)}…` : value)
@@ -12,11 +13,19 @@ interface Props {
 }
 
 export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
+  const writer = useWriter()
   if (receipts.length === 0) return null
 
   return (
     <div className="mt-4">
-      <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Receipts</p>
+      <div className="flex items-baseline justify-between gap-3 px-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Receipts</p>
+        {writer && (
+          <a href="/receipts.html" className="text-xs font-semibold text-[var(--ink)] underline">
+            Open receipts
+          </a>
+        )}
+      </div>
       <ul className="mt-2 space-y-2">
         {receipts.map((r) => (
           <li key={r.id} className="rounded-2xl bg-[var(--surface-muted)] p-4">

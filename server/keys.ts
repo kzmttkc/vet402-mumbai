@@ -5,7 +5,12 @@ import type { Hex } from 'viem'
 
 const DEFAULT_ENV_PATH = path.resolve(import.meta.dirname, '../.env')
 
-type KeyName = 'BUYER_PRIVATE_KEY' | 'HOLD_PRIVATE_KEY' | 'SELLER_A_PRIVATE_KEY' | 'SELLER_B_PRIVATE_KEY'
+type KeyName =
+  | 'BUYER_PRIVATE_KEY'
+  | 'HOLD_PRIVATE_KEY'
+  | 'SELLER_A_PRIVATE_KEY'
+  | 'SELLER_B_PRIVATE_KEY'
+  | 'SELLER_C_PRIVATE_KEY'
 
 type Env = Record<string, string | undefined>
 
@@ -40,6 +45,7 @@ export interface Keys {
   /** Each demo seller has its own key, separate from every other wallet here. */
   sellerA: Hex
   sellerB: Hex
+  sellerC: Hex
 }
 
 // `env` and `envPath` are parameters so tests can use a plain object and a temporary file
@@ -50,6 +56,7 @@ export function loadKeys(env: Env = process.env, envPath: string = DEFAULT_ENV_P
     hold: loadOrCreate('HOLD_PRIVATE_KEY', env, envPath),
     sellerA: loadOrCreate('SELLER_A_PRIVATE_KEY', env, envPath),
     sellerB: loadOrCreate('SELLER_B_PRIVATE_KEY', env, envPath),
+    sellerC: loadOrCreate('SELLER_C_PRIVATE_KEY', env, envPath),
   }
 
   const addresses = Object.values(keys).map((key) => privateKeyToAccount(key).address)

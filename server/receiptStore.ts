@@ -31,13 +31,27 @@ export interface ReceiptRow {
   demo?: 'a' | 'b' | 'compare'
   /** True for rows from the comparison job. They never use the "No second charge." sentence. */
   comparison?: boolean
+  /** The payment entity's key on Arkiv, once written. Never shown. */
+  arkivPaymentKey?: string
+  /** The settlement entity's key on Arkiv, once written. Never shown. */
+  arkivSettlementKey?: string
+  /** True once this delivery reached the seller's entity on Arkiv. Never shown. */
+  arkivSellerDone?: boolean
 }
 
 export interface ReceiptStore {
   /** Newest first. */
   list(): ReceiptRow[]
   add(row: ReceiptRow): void
-  update(id: string, patch: Partial<Pick<ReceiptRow, 'transferId' | 'status' | 'batchTx' | 'outcome'>>): void
+  update(
+    id: string,
+    patch: Partial<
+      Pick<
+        ReceiptRow,
+        'transferId' | 'status' | 'batchTx' | 'outcome' | 'arkivPaymentKey' | 'arkivSettlementKey' | 'arkivSellerDone'
+      >
+    >,
+  ): void
 }
 
 const FILE_NAME = 'receipts.json'

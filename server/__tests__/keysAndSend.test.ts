@@ -22,12 +22,12 @@ afterEach(() => {
 })
 
 describe('Keys', () => {
-  test('makes four different keys, and the hold key is never a seller', () => {
+  test('makes five different keys, and the hold key is never a seller', () => {
     const env: Record<string, string | undefined> = {}
     const keys = loadKeys(env, path.join(dir, '.env'))
 
     const addresses = Object.values(keys).map((k) => privateKeyToAccount(k).address)
-    expect(new Set(addresses).size).toBe(4)
+    expect(new Set(addresses).size).toBe(5)
     expect(keys.hold).not.toBe(keys.sellerA)
     expect(keys.hold).not.toBe(keys.sellerB)
     expect(readdirSync(dir)).toEqual(['.env'])
@@ -39,7 +39,7 @@ describe('Keys', () => {
     const first = loadKeys({}, file)
     const second = loadKeys({}, file)
     expect(second).toEqual(first)
-    expect(readFileSync(file, 'utf8').match(/PRIVATE_KEY=/g)).toHaveLength(4)
+    expect(readFileSync(file, 'utf8').match(/PRIVATE_KEY=/g)).toHaveLength(5)
   })
 
   test('refuses to start if the hold key is also a seller', () => {

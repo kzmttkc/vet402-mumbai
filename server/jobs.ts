@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { formatUsdc } from '../src/onchain-money'
+import { NOT_PAID } from './arkiv'
+import type { DeliveryCheck, SellerCheck } from './arkiv'
 import type { Candidate } from './discovery'
-import { isPaymentJob, planJob } from './planner'
-import type { LatestReceipt, Plan, PlanFailure, PlannedRequest } from './planner'
+import { isPaymentJob, planCheapest, planJob } from './planner'
+import type { LatestReceipt, Plan, PlanFailure, PlanOutcome, PlannedRequest } from './planner'
 import type { ReceiptRow, ReceiptStore, TransferStatus } from './receiptStore'
+import { SELLER_C_NAME } from './sellers'
 
 /** What Gateway says about one transfer. */
 export interface TransferInfo {
@@ -74,6 +77,10 @@ export interface PlanView {
   /** USDC, as a decimal string. */
   amount: string
   covered: boolean
+  /** One sentence per seller the agent passed over, shown above the card. Absent when there are none. */
+  notices?: string[]
+  /** What the delivery check found. Absent when Arkiv is off. */
+  delivery?: string
 }
 
 export interface JobResult {
@@ -151,7 +158,23 @@ function describeAnswer(data: unknown): string {
   return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}…` : text
 }
 
-export function createJobService(ports: JobPorts, receipts: ReceiptStore, now: () => number = Date.now) {
+export interface JobOptions {
+  /** Reads a seller from Arkiv before the approval card. Absent when Arkiv is off. */
+  sellerCheck?: SellerCheck
+  /** The plan for the Seller C scene. It is ours, so it never comes from the catalog. */
+  sellerCPlan?: Plan
+}
+
+// Each passed-over seller costs a read, so a catalog full of them cannot keep the screen waiting.
+const MAX_SELLERS_CHECKED = 5
+const SCENE_JOB = 'Give me one short answer.'
+
+export function createJobService(
+  ports: JobPorts,
+  receipts: ReceiptStore,
+  now: () => number = Date.now,
+  { sellerCheck, sellerCPlan }: JobOptions = {},
+) {
   const plans = new Map<string, Stored>()
   let busy = false
 
@@ -161,23 +184,60 @@ export function createJobService(ports: JobPorts, receipts: ReceiptStore, now: (
 
   async function plan(job: string): Promise<PlanView> {
     sweep()
-    const candidates = await ports.candidates()
+    const candidates = listings(await ports.candidates())
     // Only look at payment history when the job is about it, and then only once.
     const latest = isPaymentJob(job) ? await ports.latestReceipt() : null
 
-    const outcome = planJob(job, candidates, latest)
-    if (!outcome.ok) throw new JobError(outcome.reason)
+    return firstDeliverable(candidates, [], (pool) => planJob(job, pool, latest))
+  }
 
+  // Only the scene may buy from Seller C, and nothing in the catalog may pass as it.
+  const listings = (candidates: Candidate[]) => candidates.filter((c) => c.sellerName !== SELLER_C_NAME)
+
+  const skipNotice = (seller: string) => `${seller}: ${NOT_PAID}`
+
+  /** Plans, reads the chosen seller, and moves on to the next listing while the answer is "do not pay". */
+  async function firstDeliverable(
+    candidates: Candidate[],
+    notices: string[],
+    next: (pool: Candidate[]) => PlanOutcome,
+  ): Promise<PlanView> {
+    let pool = candidates
+    for (let checked = 0; checked < MAX_SELLERS_CHECKED; checked++) {
+      const outcome = next(pool)
+      if (!outcome.ok) throw new JobError(outcome.reason)
+      const check = sellerCheck ? await sellerCheck(outcome.plan.sellerName) : null
+      if (check?.kind !== 'expired') return present(outcome.plan, notices, check)
+      notices.push(skipNotice(outcome.plan.sellerName))
+      const skipped = outcome.plan.sellerName
+      pool = pool.filter((c) => c.sellerName !== skipped)
+    }
+    throw new JobError('NO_SELLER')
+  }
+
+  async function present(approved: Plan, notices: string[], check: DeliveryCheck | null): Promise<PlanView> {
     const id = randomUUID()
-    plans.set(id, { plan: outcome.plan, expiresAt: now() + PLAN_TTL_MS })
-
+    plans.set(id, { plan: approved, expiresAt: now() + PLAN_TTL_MS })
     return {
       id,
-      sellerName: outcome.plan.sellerName,
-      summary: outcome.plan.summary,
-      amount: formatUsdc(outcome.plan.amount),
-      covered: (await ports.holdAvailable()) >= outcome.plan.amount,
+      sellerName: approved.sellerName,
+      summary: approved.summary,
+      amount: formatUsdc(approved.amount),
+      covered: (await ports.holdAvailable()) >= approved.amount,
+      ...(notices.length > 0 ? { notices } : {}),
+      ...(check ? { delivery: check.line } : {}),
     }
+  }
+
+  /** The normal flow, with Seller C as the first candidate and the cheapest Discovery listing next. */
+  async function planSellerScene(): Promise<PlanView> {
+    sweep()
+    if (!sellerCPlan || !sellerCheck) throw new JobError('NO_SELLER')
+    const first = await sellerCheck(sellerCPlan.sellerName)
+    if (first.kind !== 'expired') return present(sellerCPlan, [], first)
+    return firstDeliverable(listings(await ports.candidates()), [skipNotice(sellerCPlan.sellerName)], (pool) =>
+      planCheapest(SCENE_JOB, pool),
+    )
   }
 
   async function approve(id: string): Promise<JobResult> {
@@ -270,5 +330,5 @@ export function createJobService(ports: JobPorts, receipts: ReceiptStore, now: (
     return receipts.list().map(toView)
   }
 
-  return { plan, approve, listReceipts }
+  return { plan, planSellerScene, approve, listReceipts }
 }

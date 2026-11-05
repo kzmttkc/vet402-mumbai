@@ -6,6 +6,10 @@ export interface PlanView {
   summary: string
   amount: string
   covered: boolean
+  /** One sentence per seller the agent passed over. */
+  notices?: string[]
+  /** What the delivery check found. */
+  delivery?: string
 }
 
 export interface JobResult {
@@ -50,6 +54,18 @@ export function useJob(onPaid: () => Promise<void>) {
     }
   }, [])
 
+  // Demo only: the expiry scene. It is the normal flow from the approval card on.
+  const askSellerC = useCallback(async () => {
+    setError(null)
+    setState({ step: 'planning' })
+    try {
+      setState({ step: 'asking', plan: await post<PlanView>('/api/demo/seller-c') })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : FALLBACK_ERROR)
+      setState({ step: 'idle' })
+    }
+  }, [])
+
   const approve = useCallback(
     async (plan: PlanView) => {
       setError(null)
@@ -71,5 +87,5 @@ export function useJob(onPaid: () => Promise<void>) {
     setState({ step: 'idle' })
   }, [])
 
-  return { state, error, ask, approve, reset }
+  return { state, error, ask, askSellerC, approve, reset }
 }
