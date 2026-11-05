@@ -50,6 +50,7 @@ export function mountWorld(app: express.Express, { env, dataDir, createHold, fet
   const world = createWorldService({
     appId: config.appId,
     rpId: config.rpId,
+    environment: config.environment,
     ports: createWorldPorts(config, createHold, fetchImpl),
     store: createWorldStore(dataDir),
   })
