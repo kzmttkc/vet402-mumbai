@@ -45,14 +45,14 @@ export function ReceiptsPage() {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
-    let stopped = false
+    const life = new AbortController()
 
     void findWriter().then((writer) => {
-      if (stopped || !writer) return
+      if (life.signal.aborted || !writer) return
       const feed = createReceiptsFeed(createArkivReader(writer), savedRows)
       const tick = async () => {
         const next = await feed.refresh()
-        if (stopped) return
+        if (life.signal.aborted) return
         setState(next)
         timer.current = setTimeout(() => void tick(), READ_EVERY_MS)
       }
@@ -60,7 +60,7 @@ export function ReceiptsPage() {
     })
 
     return () => {
-      stopped = true
+      life.abort()
       clearTimeout(timer.current)
     }
   }, [])
