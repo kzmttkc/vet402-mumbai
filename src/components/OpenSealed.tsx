@@ -19,7 +19,7 @@ function publicSources(): EvidenceSources {
 
 /** Opens a sealed answer in the browser, with the key read straight from the chain. Nothing here can pay. */
 export function OpenSealed() {
-  const sources = useMemo(publicSources, [])
+  const sources = useMemo(() => publicSources(), [])
   const [file, setFile] = useState<PublicSealedFile>({ contract: null, answers: [] })
   const [results, setResults] = useState<Record<string, OpenResult>>({})
   const [opening, setOpening] = useState<string | null>(null)
