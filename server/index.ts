@@ -21,6 +21,7 @@ import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
 import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl } from './arkiv'
 import type { Plan } from './planner'
 import type { Hex } from 'viem'
+import { mountWorld } from './worldRoutes'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
 const RPC_URL = requireChain(ARC_TESTNET_CHAIN_ID).rpcUrls[0]
@@ -147,6 +148,9 @@ app.get('/balances', async (_req, res) => {
     res.status(502).json({ error: 'Could not load balances' })
   }
 })
+
+// With the WORLD_* variables set, this takes over the hold route. Without them nothing changes.
+mountWorld(app, { env: process.env, dataDir: DATA_DIR, createHold: (amount) => holds.start(amount) })
 
 app.post('/hold', async (req, res) => {
   let amount: bigint

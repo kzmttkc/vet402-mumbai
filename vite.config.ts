@@ -44,6 +44,7 @@ export default defineConfig(({ mode }) => ({
       'framer-motion',
       'lucide-react',
       'sonner',
+      '@worldcoin/idkit-core',
       'clsx',
       'tailwind-merge',
       'vite-plugin-node-polyfills/shims/buffer',
