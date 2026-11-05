@@ -32,6 +32,6 @@
     }
   },
   "include": ["src", "scripts", "server"],
-  "exclude": ["server/__tests__"]
+  "exclude": ["server/__tests__", "scripts/compass-deploy.ts"]
 }
 
