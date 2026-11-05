@@ -1,0 +1,19 @@
+{
+  "note": "Real payload from @circle-fin/x402-batching BatchEvmScheme with a throwaway key",
+  "domain": {
+    "name": "GatewayWalletBatched",
+    "version": "1",
+    "chainId": 5042002,
+    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"
+  },
+  "authorization": {
+    "from": "0x22549dd29800c5895d361C7fDAc40a32AA6c6060",
+    "to": "0xb5d52529a8F33d1316f75BE0061BC5f0af285aaE",
+    "value": "1000",
+    "validAfter": "1793893361",
+    "validBefore": "1794498861",
+    "nonce": "0x48bdb6ce222a5cdbee73c945361a6848137df3c5869eed2375bb871e3cb5272b"
+  },
+  "signature": "0xa065a4fbf31d710ca0bdd64b75fb346a9fc8e5ca134fc36aa8e4386cdfa356140f9e39d59b7e016a2e284007a19589d4fdcce81580e6250785a3c2312f89b0331b",
+  "signer": "0x22549dd29800c5895d361C7fDAc40a32AA6c6060"
+}
