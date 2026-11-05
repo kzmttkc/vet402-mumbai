@@ -19,9 +19,25 @@ contract MockUSDC is ERC20 {
 }
 
 /// Exposes the internal signature helpers for the EIP-3009 vector test.
+/// Gateway's batched domain at version "2" is salted with the token. Version "1" is not.
+function _gatewaySalt(string memory version, address usdc) pure returns (bytes32) {
+    return keccak256(bytes(version)) == keccak256("2") ? bytes32(uint256(uint160(usdc))) : bytes32(0);
+}
+
+/// The same contract set up for a token's own EIP-3009 domain, as plain x402 signs it: no salt at any version.
+contract SealedDeliveryPlainDomainHarness is SealedDelivery {
+    constructor(address usdc, string memory name, string memory version, address verifyingContract)
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, bytes32(0))
+    {}
+
+    function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
+        return _paymentDigest(a);
+    }
+}
+
 contract SealedDeliveryHarness is SealedDelivery {
     constructor(address usdc, string memory name, string memory version, address verifyingContract)
-        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0)
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, _gatewaySalt(version, usdc))
     {}
 
     function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
@@ -78,7 +94,7 @@ abstract contract SDHelpers is Test {
     uint256 internal disputeCost;
 
     function _deploy(uint256 maxExpiry, uint256 window, uint256 cooldown) internal returns (SealedDelivery) {
-        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET, disputeCost);
+        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET, disputeCost, bytes32(0));
     }
 
     function _sdDomain() internal view returns (bytes32) {

@@ -354,6 +354,6 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
 
     function test_DisputeCost_RefusesAnImpossibleValue() public {
         vm.expectRevert(SealedDelivery.InvalidDisputeCost.selector);
-        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint256).max);
+        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint256).max, bytes32(0));
     }
 }

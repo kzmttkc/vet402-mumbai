@@ -159,7 +159,8 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         string memory paymentDomainName,
         string memory paymentDomainVersion,
         address paymentVerifyingContract,
-        uint256 disputeCost
+        uint256 disputeCost,
+        bytes32 paymentDomainSalt
     ) EIP712("SealedDelivery", "1") {
         if (maxExpiry == 0) revert InvalidMaxExpiry();
         if (answerWindow == 0) revert InvalidAnswerWindow();
@@ -173,10 +174,10 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         USDC = IERC20(usdc);
         bytes32 nameHash = keccak256(bytes(paymentDomainName));
         bytes32 versionHash = keccak256(bytes(paymentDomainVersion));
-        PAYMENT_DOMAIN_SEPARATOR = versionHash == keccak256("2")
+        // Gateway's batched domain carries a salt. A token's own EIP-3009 domain, as plain x402 uses, does not.
+        PAYMENT_DOMAIN_SEPARATOR = paymentDomainSalt != bytes32(0)
             ? keccak256(abi.encode(
-                SALTED_DOMAIN_TYPEHASH, nameHash, versionHash, block.chainid, paymentVerifyingContract,
-                bytes32(uint256(uint160(usdc)))
+                SALTED_DOMAIN_TYPEHASH, nameHash, versionHash, block.chainid, paymentVerifyingContract, paymentDomainSalt
             ))
             : keccak256(abi.encode(DOMAIN_TYPEHASH, nameHash, versionHash, block.chainid, paymentVerifyingContract));
     }

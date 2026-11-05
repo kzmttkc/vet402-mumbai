@@ -64,6 +64,7 @@ const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   paymentDomainVersion: ARC_GATEWAY_DOMAIN_VERSION,
   paymentVerifyingContract: ARC_GATEWAY_WALLET,
   disputeCost: DISPUTE_COST,
+  paymentDomainSalt: `0x${'0'.repeat(64)}`,
 }
 
 /** Builds the arguments from the artifact, so a constructor with more inputs needs only a new value above. */

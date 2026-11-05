@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {SealedDelivery} from "../SealedDelivery.sol";
-import {SealedDeliveryHarness} from "./SealedDelivery.Base.t.sol";
+import {SealedDeliveryHarness, SealedDeliveryPlainDomainHarness} from "./SealedDelivery.Base.t.sol";
 
 /// EIP-3009 TransferWithAuthorization vector from the real Circle x402 batching scheme.
 contract SealedDeliveryVectorTest is Test {
@@ -161,5 +161,22 @@ contract SealedDeliveryVectorTest is Test {
         // The salt is the asset: another asset's deployment rejects this signature.
         SealedDeliveryHarness otherAsset = new SealedDeliveryHarness(address(0xA55E7), v.name, v.version, v.verifyingContract);
         assertFalse(otherAsset.isValidSignature(otherAsset.paymentDigest(_auth()), v.signature, v.signer));
+    }
+
+    /// Plain x402 signs with the token's own domain: name "USD Coin", version "2", chain id and the token
+    /// address, with no salt. A contract deployed with a zero salt checks exactly that digest.
+    function test_PlainTokenDomainVersion2HasNoSalt() public {
+        SealedDeliveryPlainDomainHarness plain =
+            new SealedDeliveryPlainDomainHarness(ASSET, "USD Coin", "2", ASSET);
+        SealedDelivery.PaymentAuth memory a = SealedDelivery.PaymentAuth(address(0xA11CE), address(0xB0B), 1000, 0, 4102444800, bytes32(uint256(7)));
+        bytes32 domain = keccak256(abi.encode(
+            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+            keccak256("USD Coin"), keccak256("2"), block.chainid, ASSET
+        ));
+        bytes32 structHash = keccak256(abi.encode(
+            keccak256("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"),
+            a.from, a.to, a.value, a.validAfter, a.validBefore, a.nonce
+        ));
+        assertEq(plain.paymentDigest(a), keccak256(abi.encodePacked("\x19\x01", domain, structHash)));
     }
 }
