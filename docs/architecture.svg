@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1090" width="1600" height="1090" font-family="Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1120" width="1600" height="1120" font-family="Helvetica, Arial, sans-serif">
   <title>vet402 on Arc architecture</title>
-  <desc>Screen, backend, Circle Discovery, Circle Gateway, an x402 seller, SealedDelivery on Arc, Arkiv and World ID. The normal path sends 0 SealedDelivery transactions. A claim appears only in a dispute.</desc>
+  <desc>Screen, backend, Circle Discovery, Circle Gateway, an x402 seller, SealedDelivery on Arc, Arkiv and World ID. A normal payment sends 0 transactions to SealedDelivery. A claim appears only in a dispute.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1f2d3d"/></marker>
     <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#b3261e"/></marker>
   </defs>
-  <rect width="1600" height="1090" fill="#ffffff"/>
+  <rect width="1600" height="1120" fill="#ffffff"/>
   <text x="50" y="58" font-size="36" font-weight="700" fill="#1f2d3d">vet402 on Arc: one payment, and what happens if the answer is lost</text>
 
   <!-- Arc band -->
@@ -111,12 +111,13 @@
   </g>
 
   <!-- Two paths -->
-  <rect x="50" y="825" width="1500" height="110" rx="12" fill="#eaf6ec" stroke="#2e7d32" stroke-width="2"/>
-  <text x="74" y="868" font-size="25" font-weight="700" fill="#1b5e20">Normal path: 0 SealedDelivery transactions</text>
-  <text x="74" y="908" font-size="22" fill="#1f2d3d">Box, then key over HTTP. vet402 and the seller send no transaction for that payment. Circle settles it in a shared batch.</text>
+  <rect x="50" y="825" width="1500" height="130" rx="12" fill="#eaf6ec" stroke="#2e7d32" stroke-width="2"/>
+  <text x="74" y="866" font-size="25" font-weight="700" fill="#1b5e20">Normal path: 0 transactions to SealedDelivery. Measured 1.1 s on Arc testnet, 2026-11-05 18:36 UTC</text>
+  <text x="74" y="904" font-size="22" fill="#1f2d3d">vet402 reads coverageFor, gets the box, then gets the key over HTTP. It and the seller send no transaction for that</text>
+  <text x="74" y="934" font-size="22" fill="#1f2d3d">payment. Circle settles it in a shared batch.</text>
 
-  <rect x="50" y="950" width="1500" height="120" rx="12" fill="#fdecea" stroke="#b3261e" stroke-width="2"/>
-  <text x="74" y="992" font-size="25" font-weight="700" fill="#b3261e">Dispute path only: the key did not arrive, so vet402 sends claim</text>
-  <text x="74" y="1030" font-size="22" fill="#1f2d3d">The seller answers on Arc, or silence or a false answer takes 2x the price from its deposit: half to the buyer, half burned.</text>
-  <text x="74" y="1058" font-size="20" fill="#1f2d3d">Measured on 2026-11-05: claim 268,317 gas x 25 gwei = 0.0067 USDC.</text>
+  <rect x="50" y="970" width="1500" height="130" rx="12" fill="#fdecea" stroke="#b3261e" stroke-width="2"/>
+  <text x="74" y="1011" font-size="25" font-weight="700" fill="#b3261e">Dispute path only: the key did not arrive, so vet402 sends one claim</text>
+  <text x="74" y="1049" font-size="22" fill="#1f2d3d">The seller puts the key on Arc within 60 s. Silence or a false answer takes 2 x (price + 0.0105 USDC) from its deposit.</text>
+  <text x="74" y="1081" font-size="20" fill="#1f2d3d">Half goes to the buyer, the rest is burned. Measured 2026-11-05 18:26 UTC: claim 268,460 gas x 20 gwei = 0.0054 USDC.</text>
 </svg>
