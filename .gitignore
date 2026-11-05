@@ -5,3 +5,9 @@ node_modules/
 .data/
 *.key
 .DS_Store
+contracts/out/
+contracts/cache/
+lib/
+.arc-studio/
+.agents/
+dist/
