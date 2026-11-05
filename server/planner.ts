@@ -114,6 +114,26 @@ function receiptPlan(candidate: Candidate, batchTx: string): Plan {
   }
 }
 
+const lookupPlan = (candidate: Candidate, request: PlannedRequest): Plan => ({
+  kind: 'lookup',
+  sellerName: candidate.sellerName,
+  summary: SUMMARIES[candidate.category] ?? DEFAULT_SUMMARY,
+  amount: candidate.amount,
+  request,
+})
+
+/** The cheapest listing that can take this job, whatever its words say. Used by the Seller C scene. */
+export function planCheapest(job: string, candidates: Candidate[]): PlanOutcome {
+  const usable = candidates
+    .filter((c) => isSafeResource(c.resource) && !isRelay(c))
+    .sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0))
+  for (const candidate of usable) {
+    const request = genericRequest(candidate, job)
+    if (request) return { ok: true, plan: lookupPlan(candidate, request) }
+  }
+  return { ok: false, reason: 'NO_SELLER' }
+}
+
 export function planJob(job: string, candidates: Candidate[], latest: LatestReceipt | null): PlanOutcome {
   const text = job.trim()
   if (!text) return { ok: false, reason: 'EMPTY_JOB' }
@@ -147,14 +167,5 @@ export function planJob(job: string, candidates: Candidate[], latest: LatestRece
 
   if (!best) return { ok: false, reason: 'NO_SELLER' }
 
-  return {
-    ok: true,
-    plan: {
-      kind: 'lookup',
-      sellerName: best.candidate.sellerName,
-      summary: SUMMARIES[best.candidate.category] ?? DEFAULT_SUMMARY,
-      amount: best.candidate.amount,
-      request: best.request,
-    },
-  }
+  return { ok: true, plan: lookupPlan(best.candidate, best.request) }
 }

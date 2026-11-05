@@ -14,10 +14,13 @@ import { createJobPorts } from './jobPorts'
 import { createJobService, JobError } from './jobs'
 import { createReceiptStore } from './receiptStore'
 import { readOnePayment } from './circleRecord'
-import { createDemoService, DemoError } from './demo'
+import { createDemoService, DemoError, SELLER_C_EXTRA_HOLD } from './demo'
 import type { DemoKind } from './demo'
 import { createDemoPorts } from './demoPorts'
-import { createSeller, DEMO_PRICE } from './sellers'
+import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
+import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl } from './arkiv'
+import type { Plan } from './planner'
+import type { Hex } from 'viem'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
 const RPC_URL = requireChain(ARC_TESTNET_CHAIN_ID).rpcUrls[0]
@@ -35,17 +38,46 @@ const holds = createHoldService(
   createHoldStore(DATA_DIR),
 )
 
-const receiptStore = createReceiptStore(DATA_DIR)
+const localReceipts = createReceiptStore(DATA_DIR)
+
+// With no writer key the app runs on the local store alone, exactly as before.
+const ARKIV_KEY = /^0x[0-9a-fA-F]{64}$/.test(process.env.ARKIV_WRITER_KEY ?? '')
+  ? (process.env.ARKIV_WRITER_KEY as Hex)
+  : null
+const arkivLog = (message: string) => console.error(message)
+const arkivScrub = createScrubber([process.env.ARKIV_ACCESS_KEY ?? '', process.env.ARKIV_WRITER_KEY ?? ''])
+const arkiv = ARKIV_KEY ? createArkivWire({ writerKey: ARKIV_KEY, accessKey: process.env.ARKIV_ACCESS_KEY ?? '' }) : null
+const arkivSink = arkiv
+  ? createArkivSink({
+      wire: arkiv.wire,
+      store: localReceipts,
+      sellerTtlSeconds: parseSellerTtl(process.env.SELLER_TTL_SECONDS),
+      log: arkivLog,
+      scrub: arkivScrub,
+    })
+  : null
+const receiptStore = arkivSink?.store ?? localReceipts
+
+const sellerCPlan: Plan = {
+  kind: 'lookup',
+  sellerName: SELLER_C_NAME,
+  summary: 'Takes care of this job for you.',
+  amount: DEMO_PRICE,
+  request: { url: `http://127.0.0.1:${PORT}/sellers/c`, method: 'GET' },
+}
 
 const jobs = createJobService(
   createJobPorts({ network: `eip155:${ARC_TESTNET_CHAIN_ID}`, holdKey: keys.hold, holdClient }),
   receiptStore,
+  undefined,
+  arkiv ? { sellerCheck: createSellerCheck(arkiv.wire, arkivLog, arkivScrub), sellerCPlan } : {},
 )
 
 // The demo sellers. Each has its own key, and the hold key is never one of them.
 const sellerAddress = {
   a: privateKeyToAccount(keys.sellerA).address,
   b: privateKeyToAccount(keys.sellerB).address,
+  c: privateKeyToAccount(keys.sellerC).address,
 }
 const facilitator = new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin })
 // The switch: close the connection after settling and before the first response. On for the demo.
@@ -70,8 +102,20 @@ const sellerB = createSeller({
   dropAfterSettle: () => DROP_AFTER_SETTLE,
 })
 
+// Seller C exists only for the expiry scene. It always answers, so only the delivery check stops it.
+const sellerC = createSeller({
+  name: SELLER_C_NAME,
+  payTo: sellerAddress.c,
+  declaresRecovery: false,
+  facilitator,
+  confirmCharged: () => Promise.resolve(false),
+  dropAfterSettle: () => false,
+})
+
+const demoPorts = createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient })
+
 const demos = createDemoService(
-  createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient }),
+  demoPorts,
   {
     a: { name: 'Seller A', url: `http://127.0.0.1:${PORT}/sellers/a`, address: sellerAddress.a },
     b: { name: 'Seller B', url: `http://127.0.0.1:${PORT}/sellers/b`, address: sellerAddress.b },
@@ -160,6 +204,11 @@ app.get('/receipts', async (req, res) => {
   }
 })
 
+// The address only. The key never leaves the backend. The dev proxy strips /api, so both spellings answer.
+app.get(['/writer', '/api/writer'], (_req, res) => {
+  res.json({ address: arkiv?.writer ?? null })
+})
+
 const sellerRoute = (handler: (req: express.Request, res: express.Response) => Promise<void>) =>
   async (req: express.Request, res: express.Response) => {
     try {
@@ -171,6 +220,7 @@ const sellerRoute = (handler: (req: express.Request, res: express.Response) => P
   }
 app.get('/sellers/a', sellerRoute(sellerA))
 app.get('/sellers/b', sellerRoute(sellerB))
+app.get('/sellers/c', sellerRoute(sellerC))
 
 function startDemo(kind: DemoKind, res: express.Response) {
   try {
@@ -196,6 +246,24 @@ app.post('/demo/run', (req, res) => {
 // Demo only: shows what signing a fresh payment would cost. vet402 does not do this.
 app.post('/demo/compare', (_req, res) => startDemo('compare', res))
 
+// Demo only: the expiry scene. The hold grows first, then the normal flow asks for approval.
+app.post('/demo/seller-c', async (_req, res) => {
+  if (!arkiv) {
+    res.status(404).json({ error: 'This demo is not available.' })
+    return
+  }
+  try {
+    await demoPorts.growHold(SELLER_C_EXTRA_HOLD)
+    res.json(await jobs.planSellerScene())
+  } catch (error) {
+    if (error instanceof DemoError) {
+      res.status(409).json({ error: error.message })
+      return
+    }
+    sendJobError(res, error)
+  }
+})
+
 app.get('/demo/runs/:id', (req, res) => {
   const run = demos.get(req.params.id)
   if (!run) {
@@ -204,6 +272,17 @@ app.get('/demo/runs/:id', (req, res) => {
   }
   res.json(run)
 })
+
+// The receipts screen does not call the backend, so settlement is watched from here while Arkiv is on.
+if (arkivSink) {
+  const ARKIV_SWEEP_MS = 15_000
+  setInterval(() => {
+    void jobs
+      .listReceipts(true)
+      .catch((error: unknown) => arkivLog(`receipt refresh failed: ${arkivScrub(error)}`))
+      .finally(() => arkivSink.sweep())
+  }, ARKIV_SWEEP_MS).unref()
+}
 
 app.listen(PORT, () => {
   console.log(`API listening on ${PORT}`)

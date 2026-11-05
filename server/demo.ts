@@ -8,6 +8,9 @@ import { parseUsdc } from '../src/onchain-money'
 /** The comparison makes the hold this much larger, so it never eats into the hold for a real job. */
 export const COMPARISON_EXTRA_HOLD = parseUsdc('0.002')
 
+/** The Seller C scene makes the hold this much larger, so it never eats into the hold for a real job. */
+export const SELLER_C_EXTRA_HOLD = parseUsdc('0.001')
+
 export type DemoKind = 'a' | 'b' | 'compare'
 
 export type StepName = 'hold' | 'payment' | 'waiting' | 'connection dropped' | 'fetching again' | 'delivered'

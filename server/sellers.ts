@@ -13,6 +13,9 @@ import { parseUsdc } from '../src/onchain-money'
 /** Both demo sellers charge 0.001 USDC. */
 export const DEMO_PRICE = parseUsdc('0.001')
 
+/** A small seller that exists only for the expiry scene. It charges the same price as the others. */
+export const SELLER_C_NAME = 'Seller C'
+
 /** Said by a seller that will give the same paid answer again for the same payment. */
 export const RECOVERY_SAME_PAYMENT = 'same-payment'
 
