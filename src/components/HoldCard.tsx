@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Bot, Loader2 } from 'lucide-react'
 import { parseUsdc } from '@/onchain-money'
 import { useStartHold } from '@/hooks/useStartHold'
+import { useWorldApproval } from '@/hooks/useWorldApproval'
+import { WorldHoldActions } from '@/components/WorldHoldActions'
 import type { Balances } from '@/hooks/useBalances'
 
 const fmt = (value: string) =>
@@ -35,6 +37,7 @@ function validAmount(text: string, balance: string | undefined): string | null {
 export function HoldCard({ data, reload }: { data: Balances | null; reload: () => Promise<void> }) {
   const [text, setText] = useState('1')
   const { start, pending, error } = useStartHold(reload)
+  const world = useWorldApproval(reload)
 
   const amount = validAmount(text, data?.balance)
   const busy = pending || data?.hold.state === 'setting-up'
@@ -62,7 +65,7 @@ export function HoldCard({ data, reload }: { data: Balances | null; reload: () =
         className="mt-4 space-y-3"
         onSubmit={(e) => {
           e.preventDefault()
-          if (amount && !busy) void start(amount)
+          if (amount && !busy && world.loaded && !world.enabled) void start(amount)
         }}
       >
         <label className="block">
@@ -72,21 +75,25 @@ export function HoldCard({ data, reload }: { data: Balances | null; reload: () =
               inputMode="decimal"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              disabled={busy}
+              disabled={busy || world.request?.state === 'waiting'}
               className="display min-h-12 w-full bg-transparent text-2xl font-semibold tabular-nums outline-none"
             />
             <span className="text-sm font-medium text-[var(--muted)]">USDC</span>
           </div>
         </label>
 
-        <button
-          type="submit"
-          disabled={!amount || busy}
-          className="flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ink)] px-5 text-base font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40"
-        >
-          {busy && <Loader2 size={18} className="animate-spin" aria-hidden />}
-          {busy ? 'Setting up the hold…' : `Hold ${amount ?? text} USDC for this job`}
-        </button>
+        {world.enabled ? (
+          <WorldHoldActions world={world} amount={amount} text={text} busy={busy} />
+        ) : (
+          <button
+            type="submit"
+            disabled={!amount || busy || !world.loaded}
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ink)] px-5 text-base font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40"
+          >
+            {busy && <Loader2 size={18} className="animate-spin" aria-hidden />}
+            {busy ? 'Setting up the hold…' : `Hold ${amount ?? text} USDC for this job`}
+          </button>
+        )}
 
         {error && (
           <p className="text-sm text-[var(--danger)]" role="alert">
