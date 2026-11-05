@@ -6,7 +6,7 @@ import { u64 } from '@arkiv-network/sdk/schema'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { ReceiptSchema, sellerColumn, SellerSchema } from '../src/arkiv/schema'
+import { EvidenceSchema, ReceiptSchema, sellerColumn, SellerSchema } from '../src/arkiv/schema'
 import type { ReceiptRow, ReceiptStore } from './receiptStore'
 import { SELLER_C_NAME } from './sellers'
 
@@ -46,6 +46,13 @@ export interface SellerValues {
   seller: string
 }
 
+export interface EvidenceValues {
+  kind: 'evidence'
+  claim_id: string
+  gateway_transfer_id: string
+  swarm_ref: string
+}
+
 export interface EntityOptions {
   expiration: ReturnType<typeof ExpirationTime.fromSeconds>
   flags: { readonly: true; permissionlessExtension?: true }
@@ -63,9 +70,11 @@ export interface SellerRead {
 export interface ArkivWire {
   createReceipt(values: ReceiptValues, options: EntityOptions): Promise<{ entityKey: Hex }>
   createSeller(values: SellerValues, options: EntityOptions): Promise<{ entityKey: Hex }>
+  createEvidence(values: EvidenceValues, options: EntityOptions): Promise<{ entityKey: Hex }>
   extendEntity(params: { entityKey: Hex; expiration: EntityOptions['expiration'] }): Promise<{ expiresAt: bigint }>
   findPaymentKey(transferId: string): Promise<Hex | null>
   findSellerKey(seller: string): Promise<Hex | null>
+  findEvidenceKey(claimId: string): Promise<Hex | null>
   readSeller(seller: string): Promise<SellerRead>
 }
 
@@ -112,6 +121,7 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
           options,
         ),
       createSeller: (values, options) => writes.createEntity(SellerSchema, values, options),
+      createEvidence: (values, options) => writes.createEntity(EvidenceSchema, values, options),
       extendEntity: (params) => writes.extendEntity(params),
 
       async findPaymentKey(transferId) {
@@ -120,6 +130,18 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
           .from(ReceiptSchema)
           .where(eq('kind', 'payment'))
           .where(eq('gateway_transfer_id', transferId))
+          .ownedBy(writer)
+          .limit(1)
+          .fetch()
+        return entities[0]?.$key ?? null
+      },
+
+      async findEvidenceKey(claimId) {
+        const { entities } = await reads
+          .select({ $key: true })
+          .from(EvidenceSchema)
+          .where(eq('kind', 'evidence'))
+          .where(eq('claim_id', claimId))
           .ownedBy(writer)
           .limit(1)
           .fetch()
@@ -303,6 +325,22 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     store.update(row.id, { arkivSettlementKey: entityKey })
   }
 
+  // A new entity for the claim's box on Swarm. Nothing that exists is patched.
+  async function ensureEvidence(row: ReceiptRow, transferId: string): Promise<void> {
+    const evidence = row.evidence
+    if (!evidence || row.arkivEvidenceKey) return
+    const found = failures.has(row.id) ? await wire.findEvidenceKey(evidence.claimId) : null
+    const entityKey =
+      found ??
+      (
+        await wire.createEvidence(
+          { kind: 'evidence', claim_id: evidence.claimId, gateway_transfer_id: transferId, swarm_ref: evidence.swarmRef },
+          receiptOptions(),
+        )
+      ).entityKey
+    store.update(row.id, { arkivEvidenceKey: entityKey })
+  }
+
   async function step(id: string): Promise<void> {
     const row = store.list().find((r) => r.id === id)
     // Gateway has to report the payment before it can be written.
@@ -311,6 +349,7 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
       const paymentKey = await ensurePayment(row, row.transferId)
       if (row.timesReceived > 0 && !row.arkivSellerDone) await ensureSeller(row)
       if (row.status === 'completed' && !row.arkivSettlementKey) await ensureSettlement(row, row.transferId, paymentKey)
+      await ensureEvidence(row, row.transferId)
       failures.delete(id)
     } catch (error) {
       failures.set(id, (failures.get(id) ?? 0) + 1)
@@ -332,7 +371,8 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     row.status !== 'failed' &&
     (!row.arkivPaymentKey ||
       (row.timesReceived > 0 && !row.arkivSellerDone) ||
-      (row.status === 'completed' && !row.arkivSettlementKey))
+      (row.status === 'completed' && !row.arkivSettlementKey) ||
+      (!!row.evidence && !row.arkivEvidenceKey))
 
   return {
     store: {

@@ -20,6 +20,14 @@ export const SellerSchema = defineSchema('vet402_seller', {
   seller: str().indexed(),
 })
 
+/** Points one claim at its box on Swarm. The reference is unencrypted, and the box inside holds no key. */
+export const EvidenceSchema = defineSchema('vet402_evidence', {
+  kind: str().indexed(),
+  claim_id: str().indexed(),
+  gateway_transfer_id: str().indexed(),
+  swarm_ref: str(),
+})
+
 /** Rows the live check writes. The receipts screen leaves them out. */
 export const LIVE_CHECK_PREFIX = 'live-check-'
 

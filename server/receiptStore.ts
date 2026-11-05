@@ -39,6 +39,16 @@ export interface ReceiptRow {
   arkivSettlementKey?: string
   /** True once this delivery reached the seller's entity on Arkiv. Never shown. */
   arkivSellerDone?: boolean
+  /** The claimed box on Swarm, once the upload came back. */
+  evidence?: EvidenceRecord
+  /** The evidence entity's key on Arkiv, once written. Never shown. */
+  arkivEvidenceKey?: string
+}
+
+/** One claim and the unencrypted Swarm reference of its box. */
+export interface EvidenceRecord {
+  claimId: string
+  swarmRef: string
 }
 
 /** Only what opening the answer again needs. The key itself stays on the chain. */
@@ -59,7 +69,15 @@ export interface ReceiptStore {
     patch: Partial<
       Pick<
         ReceiptRow,
-        'transferId' | 'status' | 'batchTx' | 'outcome' | 'arkivPaymentKey' | 'arkivSettlementKey' | 'arkivSellerDone'
+        | 'transferId'
+        | 'status'
+        | 'batchTx'
+        | 'outcome'
+        | 'arkivPaymentKey'
+        | 'arkivSettlementKey'
+        | 'arkivSellerDone'
+        | 'evidence'
+        | 'arkivEvidenceKey'
       >
     >,
   ): void
