@@ -70,6 +70,8 @@ export interface DemoPorts {
   sealed?: SealedPorts
   /** How long the demo waits between two reads of the chain. */
   sealedPollMs?: number
+  /** Keeps the claimed box on Swarm and returns its reference. A failure only logs. */
+  evidence?: (box: SealedBox, claimId: Hex) => Promise<string>
 }
 
 export interface DemoSeller {
@@ -122,6 +124,17 @@ export function createDemoService(
   let busy = false
 
   const mark = (run: Run, name: StepName) => run.steps.push({ name, atMs: now() - run.startedAt })
+
+  /** The Swarm reference, or null when there is no uploader or the upload failed. Never throws. */
+  async function keepEvidence(box: SealedBox, claimId: Hex): Promise<string | null> {
+    if (!ports.evidence) return null
+    try {
+      return await ports.evidence(box, claimId)
+    } catch (error) {
+      console.error('swarm upload failed:', error instanceof Error ? error.message.split('\n')[0] : error)
+      return null
+    }
+  }
 
   function addRow(
     seller: DemoSeller,
@@ -292,6 +305,12 @@ export function createDemoService(
       await nothingMore(seller, payment, kind)
       throw new DemoError('UNKNOWN')
     }
+    // The upload runs beside the wait for the key and never holds up the claim or the payment.
+    const evidence = keepEvidence(box, claim.claimId)
+    const attach = (rowId: string) =>
+      void evidence.then((swarmRef) => {
+        if (swarmRef) receipts.update(rowId, { evidence: { claimId: claim.claimId, swarmRef } })
+      })
 
     const lines: string[] = []
     const found = await waitForKey(sealed, claim, () => lines.push(WRONG_KEY_REJECTED))
@@ -299,6 +318,7 @@ export function createDemoService(
     if (!found) {
       // The deadline passed with no key. Anyone can press finalize now.
       const rowId = addRow(seller, payment, { body: '', received: 0, outcome: lines, demo: kind })
+      attach(rowId)
       run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, rowId, lines }
       run.action = 'finalize'
       return
@@ -322,6 +342,7 @@ export function createDemoService(
         demo: kind,
         sealed: record,
       })
+      attach(rowId)
       run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, key: found.key, rowId, lines }
       run.action = 'prove'
       return
@@ -335,6 +356,7 @@ export function createDemoService(
       demo: kind,
       sealed: record,
     })
+    attach(id)
     const confirmed = await ports.confirmOnePayment(payment.nonce, expectedFor(seller, payment))
     receipts.update(id, {
       outcome: [

@@ -19,6 +19,8 @@ import { createDemoPorts } from './demoPorts'
 import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
 import { ARC_NET, createSealedDelivery, createSealedPorts, createSealedScene, parseSealedAddress } from './sealedDelivery'
 import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl } from './arkiv'
+import { createEvidenceUploader } from './swarm'
+import { createSwarmWire, SWARM_GATEWAY } from '../src/lib/swarmBox'
 import type { Plan } from './planner'
 import type { Hex } from 'viem'
 import { mountWorld } from './worldRoutes'
@@ -138,7 +140,19 @@ const sellerC = createSeller({
 const demoPorts = {
   ...createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient }),
   ...(sealedClient && sealedScene
-    ? { sealed: createSealedPorts({ client: sealedClient, holdKey: keys.hold, buyerKey: keys.buyer, rejected: sealedScene.rejected }) }
+    ? {
+        sealed: createSealedPorts({ client: sealedClient, holdKey: keys.hold, buyerKey: keys.buyer, rejected: sealedScene.rejected }),
+        // SWARM_UPLOAD=off keeps every box off Swarm. SWARM_API_URL points the upload at another Bee API.
+        ...(process.env.SWARM_UPLOAD === 'off'
+          ? {}
+          : {
+              evidence: createEvidenceUploader({
+                swarm: createSwarmWire(process.env.SWARM_API_URL || SWARM_GATEWAY),
+                contract: sealedClient.address,
+                chainId: ARC_NET.chain.id,
+              }),
+            }),
+      }
     : {}),
 }
 
