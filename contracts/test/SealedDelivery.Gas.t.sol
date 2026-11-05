@@ -141,11 +141,8 @@ contract SealedDeliveryGasTest is SealedDeliveryTestBase {
             if (intrinsic >= cap) return (false, 0, intrinsic, id);
             cap = cap - intrinsic;
         }
-        // zero the DEAD balance (OZ ERC20 _balances is storage slot 0) and make everything cold
-        vm.store(USDC_ADDR, keccak256(abi.encode(DEAD_ADDR, uint256(0))), bytes32(0));
-        assertEq(_deadBal(), 0);
+        // make everything cold; prove() itself never touches USDC
         vm.cool(address(sd));
-        vm.cool(USDC_ADDR);
         (ok, used) = _rawCall(cap, len);
     }
 

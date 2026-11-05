@@ -24,10 +24,11 @@ contract SealedDeliveryVectorTest is Test {
 
     SealedDeliveryHarness internal h;
     Vec internal v;
+    /// A real Gateway USDC address, also the salt of the version 2 domain.
+    address internal constant ASSET = 0x3600000000000000000000000000000000000000;
 
-    function setUp() public {
-        h = new SealedDeliveryHarness();
-        string memory j = vm.readFile("contracts/test/fixtures/eip3009-vector.json");
+    function _load(string memory path) internal {
+        string memory j = vm.readFile(path);
         v.name = vm.parseJsonString(j, ".domain.name");
         v.version = vm.parseJsonString(j, ".domain.version");
         v.chainId = vm.parseJsonUint(j, ".domain.chainId");
@@ -40,6 +41,13 @@ contract SealedDeliveryVectorTest is Test {
         v.nonce = vm.parseJsonBytes32(j, ".authorization.nonce");
         v.signature = vm.parseJsonBytes(j, ".signature");
         v.signer = vm.parseJsonAddress(j, ".signer");
+    }
+
+    /// The contract takes every domain field from its constructor and the chain it is deployed on.
+    function setUp() public {
+        _load("contracts/test/fixtures/eip3009-vector.json");
+        vm.chainId(v.chainId);
+        h = new SealedDeliveryHarness(ASSET, v.name, v.version, v.verifyingContract);
     }
 
     function _auth() internal view returns (SealedDelivery.PaymentAuth memory) {
@@ -123,5 +131,35 @@ contract SealedDeliveryVectorTest is Test {
         a = _auth();
         a.validBefore += 1;
         assertFalse(h.isValidSignature(h.paymentDigest(a), v.signature, v.signer));
+    }
+
+    /// Deployed on another chain, the same constructor arguments must not accept the signature.
+    function test_Vector_OtherChainDeploymentRejects() public {
+        vm.chainId(v.chainId + 1);
+        SealedDeliveryHarness other = new SealedDeliveryHarness(ASSET, v.name, v.version, v.verifyingContract);
+        assertFalse(other.isValidSignature(other.paymentDigest(_auth()), v.signature, v.signer));
+    }
+
+    /// Each constructor field of the domain changes the digest, so the signature no longer verifies.
+    function test_Vector_WrongDomainArgumentsReject() public {
+        SealedDeliveryHarness wrong = new SealedDeliveryHarness(ASSET, "Other", v.version, v.verifyingContract);
+        assertFalse(wrong.isValidSignature(wrong.paymentDigest(_auth()), v.signature, v.signer));
+        wrong = new SealedDeliveryHarness(ASSET, v.name, "9", v.verifyingContract);
+        assertFalse(wrong.isValidSignature(wrong.paymentDigest(_auth()), v.signature, v.signer));
+        wrong = new SealedDeliveryHarness(ASSET, v.name, v.version, address(0xBEEF));
+        assertFalse(wrong.isValidSignature(wrong.paymentDigest(_auth()), v.signature, v.signer));
+    }
+
+    /// Gateway's version 2 signature carries a salted domain; a four-field digest would not recover it.
+    function test_Vector_V2SaltedDomainRecoversSigner() public {
+        _load("contracts/test/fixtures/eip3009-vector-v2.json");
+        assertEq(v.version, "2");
+        SealedDeliveryHarness v2 = new SealedDeliveryHarness(ASSET, v.name, v.version, v.verifyingContract);
+        bytes32 digest = v2.paymentDigest(_auth());
+        assertEq(_ecrecover(digest, v.signature), v.signer);
+        assertTrue(v2.isValidSignature(digest, v.signature, v.signer));
+        // The salt is the asset: another asset's deployment rejects this signature.
+        SealedDeliveryHarness otherAsset = new SealedDeliveryHarness(address(0xA55E7), v.name, v.version, v.verifyingContract);
+        assertFalse(otherAsset.isValidSignature(otherAsset.paymentDigest(_auth()), v.signature, v.signer));
     }
 }

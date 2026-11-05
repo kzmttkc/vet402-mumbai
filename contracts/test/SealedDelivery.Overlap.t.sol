@@ -8,10 +8,10 @@ import {SealedDeliveryTestBase} from "./SealedDelivery.Base.t.sol";
 /// Delivered-claim fraud proofs versus queued withdrawals: queuing a withdrawal must not shield a seller
 /// from a proof made inside the cooldown, and proofs only consume what is still there afterwards.
 contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
-    uint256 internal constant V = 100e6; // value => reservation 2V = 200e6
+    uint256 internal constant V = 100e6; // value => liability 2V = 200e6
     bytes internal constant PLAIN = "wrong goods behind the right key";
 
-    /// Dishonest claim answered with the correct key: DELIVERED, reservation released.
+    /// Dishonest claim answered with the correct key: DELIVERED, liability released.
     function _delivered(address seller, address buyer_, uint256 value, bytes32 nonce)
         internal
         returns (bytes32 id, bytes memory ct)
@@ -21,10 +21,10 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
     }
 
     function _assertHolds() internal view {
-        assertGe(sd.deposits(sellerA), sd.reserved(sellerA) + sd.pendingWithdrawal(sellerA));
+        assertLe(sd.pendingWithdrawal(sellerA), sd.deposits(sellerA));
         assertEq(
             usdc.balanceOf(address(sd)),
-            sd.deposits(sellerA) + sd.claimable(buyer) + sd.claimable(buyer2) + sd.claimable(sellerA)
+            sd.deposits(sellerA) + sd.claimable(buyer) + sd.claimable(buyer2) + sd.claimable(sellerA) + sd.pendingBurn()
         );
     }
 
@@ -32,7 +32,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
     function test_Attack_QueueEverythingAfterAnswer_ProofInsideCooldownStillPaysInFull() public {
         _fund(sellerA, 500e6);
         (bytes32 id, bytes memory ct) = _delivered(sellerA, buyer, V, N1);
-        assertEq(sd.coverage(sellerA), 500e6, "all collateral released by the answer");
+        assertEq(sd.coverage(sellerA), 500e6, "coverage never moved");
 
         vm.prank(sellerA);
         sd.requestWithdraw(500e6);
@@ -49,7 +49,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         // buyer share and burn paid in full from queued funds
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.FRAUD));
         assertEq(sd.claimable(buyer), V);
-        assertEq(_deadBal(), V);
+        assertEq(_burnTotal(), V);
         assertEq(sd.fraudCount(sellerA), 1);
         assertEq(sd.deposits(sellerA), 300e6);
         // pending dropped by the overlap (amount 200 - coverage 0), cooldown untouched
@@ -67,6 +67,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         assertEq(usdc.balanceOf(sellerA), 300e6);
         assertEq(sd.deposits(sellerA), 0);
         assertEq(sd.pendingWithdrawal(sellerA), 0);
+        sd.flushBurn();
         assertEq(usdc.balanceOf(address(sd)), V, "only the buyer's credit is left");
 
         vm.prank(buyer);
@@ -89,12 +90,12 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         sd.withdrawClaimable();
         assertEq(usdc.balanceOf(sellerA), 500e6 - 2 * V);
         assertEq(usdc.balanceOf(buyer), V);
-        assertEq(_deadBal(), V);
+        assertEq(_burnTotal(), V);
     }
 
     /// The overlap exhausts pending exactly => withdrawReadyAt cleared, nothing left to withdraw.
     function test_Attack_PendingFullyConsumed_ClearsWithdrawReadyAt() public {
-        _fund(sellerA, 200e6); // exactly the reservation
+        _fund(sellerA, 200e6); // exactly the payout
         (bytes32 id, bytes memory ct) = _delivered(sellerA, buyer, V, N1);
         vm.prank(sellerA);
         sd.requestWithdraw(200e6);
@@ -102,7 +103,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
 
         sd.prove(id, ct, KEY);
         assertEq(sd.claimable(buyer), V);
-        assertEq(_deadBal(), V);
+        assertEq(_burnTotal(), V);
         assertEq(sd.deposits(sellerA), 0);
         assertEq(sd.pendingWithdrawal(sellerA), 0);
         assertEq(sd.withdrawReadyAt(sellerA), 0, "cleared when pending reaches 0");
@@ -112,15 +113,16 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         vm.prank(sellerA);
         vm.expectRevert(SealedDelivery.NothingPending.selector);
         sd.withdrawDeposit();
+        sd.flushBurn();
         assertEq(usdc.balanceOf(address(sd)), V);
     }
 
-    /// Overlap bigger than coverage but only the pending part of it is removed.
-    function test_Attack_OverlapIsOnlyThePartBeyondCoverage() public {
+    /// The payout eats the free part first; pending falls only to what the deposit still holds.
+    function test_Attack_PendingFallsOnlyToTheDepositLeft() public {
         _fund(sellerA, 500e6);
         (bytes32 id, bytes memory ct) = _delivered(sellerA, buyer, V, N1);
         vm.prank(sellerA);
-        sd.requestWithdraw(400e6); // coverage 100 < amount 200 => overlap 100
+        sd.requestWithdraw(400e6); // coverage 100 < payout 200
         sd.prove(id, ct, KEY);
         assertEq(sd.pendingWithdrawal(sellerA), 300e6);
         assertEq(sd.deposits(sellerA), 300e6);
@@ -180,7 +182,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.FRAUD));
         assertEq(sd.fraudCount(sellerA), 1);
         assertEq(sd.claimable(buyer), 0);
-        assertEq(_deadBal(), 0);
+        assertEq(_burnTotal(), 0);
         assertEq(sd.deposits(sellerA), 0);
         assertEq(sd.pendingWithdrawal(sellerA), 0);
         assertEq(usdc.balanceOf(address(sd)), 0);
@@ -188,7 +190,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
 
     function test_ProofAfterCompletedWithdrawal_LeftoverCapsPayout() public {
         _fund(sellerA, 300e6);
-        (bytes32 id, bytes memory ct) = _delivered(sellerA, buyer, V, N1); // reservation was 200
+        (bytes32 id, bytes memory ct) = _delivered(sellerA, buyer, V, N1); // liability was 200
         vm.prank(sellerA);
         sd.requestWithdraw(250e6);
         skip(COOLDOWN);
@@ -200,34 +202,34 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         emit SealedDelivery.Fraud(id, N1, sellerA, buyer, 25e6);
         sd.prove(id, ct, KEY);
         assertEq(sd.claimable(buyer), 25e6);
-        assertEq(_deadBal(), 25e6);
+        assertEq(_burnTotal(), 25e6);
         assertEq(sd.deposits(sellerA), 0);
         assertEq(sd.pendingWithdrawal(sellerA), 0);
-        assertEq(usdc.balanceOf(address(sd)), 25e6);
+        assertEq(usdc.balanceOf(address(sd)), 50e6, "the buyer's credit and the queued burn");
         _assertHolds();
     }
 
-    // (4) a delivered-claim proof never touches reservations of other OPEN claims.
-    function test_OpenClaimReservationsUntouchedByDeliveredProof() public {
+    // (4) a delivered-claim proof never touches liabilities of other OPEN claims.
+    function test_OpenClaimLiabilityUntouchedByDeliveredProof() public {
         _fund(sellerA, 500e6);
         (bytes32 idD, bytes memory ctD) = _delivered(sellerA, buyer, V, N1);
         vm.prank(sellerA);
         sd.requestWithdraw(300e6); // coverage 200
         bytes32 idO = _cid(sellerA, buyer2, N2);
-        _claimOk(_prom(sellerA, buyer2, V, N2)); // OPEN, reserves 200 => coverage 0
-        assertEq(sd.reserved(sellerA), 200e6);
+        _claimOk(_prom(sellerA, buyer2, V, N2)); // OPEN, liability 200
+        assertEq(sd.openLiability(sellerA), 200e6);
         (,, uint256 rBefore,,) = _claimData(idO);
 
-        sd.prove(idD, ctD, KEY); // needs 200 of queued funds
-        assertEq(sd.reserved(sellerA), 200e6, "reserved untouched");
+        sd.prove(idD, ctD, KEY);
+        assertEq(sd.openLiability(sellerA), 200e6, "liability untouched");
         (,, uint256 rAfter,,) = _claimData(idO);
         assertEq(rAfter, rBefore);
         assertEq(uint8(_status(idO)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.pendingWithdrawal(sellerA), 100e6);
+        assertEq(sd.pendingWithdrawal(sellerA), 300e6, "still within the deposit");
         assertEq(sd.deposits(sellerA), 300e6);
         _assertHolds();
 
-        // the OPEN claim still pays its full reservation, whether silent ...
+        // the OPEN claim still pays in full when it goes silent
         skip(WINDOW);
         sd.finalize(idO);
         assertEq(sd.claimable(buyer2), V);
@@ -238,6 +240,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         vm.prank(sellerA);
         sd.withdrawDeposit();
         assertEq(sd.deposits(sellerA), 0);
+        sd.flushBurn();
         assertEq(usdc.balanceOf(address(sd)), 2 * V);
     }
 
@@ -248,17 +251,17 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         sd.requestWithdraw(300e6);
         (bytes32 idO, bytes memory ctO) = _sealedClaim(sellerA, buyer2, V, N2, KEY, PLAIN, false);
         sd.prove(idD, ctD, KEY);
-        sd.prove(idO, ctO, KEY); // OPEN: whole reservation 200, unchanged rule
+        sd.prove(idO, ctO, KEY); // OPEN: the same min(200, deposit)
         assertEq(sd.claimable(buyer2), V);
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
         assertEq(sd.deposits(sellerA), 100e6);
         assertEq(sd.pendingWithdrawal(sellerA), 100e6);
-        assertEq(_deadBal(), 2 * V);
+        assertEq(_burnTotal(), 2 * V);
         _assertHolds();
     }
 
-    /// Property over arbitrary amounts: payout = min(c.reserved, deposits - reserved), pending drops by
-    /// max(0, payout - coverage), other reservations unchanged, accounting stays exact.
+    /// Property over arbitrary amounts: payout = min(liability, deposits), pending = min(pending, what is
+    /// left), other liabilities unchanged, accounting stays exact.
     function testFuzz_DeliveredProofPayoutAndPendingLaw(uint256 dep, uint256 val, uint256 req, uint256 otherVal)
         public
     {
@@ -267,7 +270,7 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         otherVal = bound(otherVal, 0, 1e12);
         _fund(sellerA, dep);
         (bytes32 idD, bytes memory ct) = _delivered(sellerA, buyer, val, N1);
-        (,, uint256 cReserved,,) = _claimData(idD);
+        (,, uint256 cLiability,,) = _claimData(idD);
         req = bound(req, 0, dep);
         if (req > 0) {
             vm.prank(sellerA);
@@ -275,35 +278,35 @@ contract SealedDeliveryOverlapTest is SealedDeliveryTestBase {
         }
         uint256 readyAt = sd.withdrawReadyAt(sellerA);
         _claimOk(_prom(sellerA, buyer2, otherVal, N2));
-        uint256 resBefore = sd.reserved(sellerA);
-        uint256 cov = sd.coverage(sellerA);
+        uint256 liabilityBefore = sd.openLiability(sellerA);
 
-        uint256 backing = dep - resBefore;
-        uint256 amount = cReserved < backing ? cReserved : backing;
-        uint256 overlap = amount > cov ? amount - cov : 0;
-        assertLe(overlap, req, "overlap can never exceed pending");
+        uint256 amount = cLiability < dep ? cLiability : dep;
+        uint256 left = dep - amount;
+        uint256 pendAfter = req < left ? req : left;
 
         sd.prove(idD, ct, KEY);
 
         assertEq(sd.claimable(buyer), _paid(amount));
-        assertEq(_deadBal(), _burnt(amount));
-        assertEq(sd.deposits(sellerA), dep - amount);
-        assertEq(sd.reserved(sellerA), resBefore);
-        assertEq(sd.pendingWithdrawal(sellerA), req - overlap);
-        if (req - overlap == 0) assertEq(sd.withdrawReadyAt(sellerA), 0);
+        assertEq(_burnTotal(), _burnt(amount));
+        assertEq(sd.deposits(sellerA), left);
+        assertEq(sd.openLiability(sellerA), liabilityBefore);
+        assertEq(sd.pendingWithdrawal(sellerA), pendAfter);
+        if (pendAfter == 0) assertEq(sd.withdrawReadyAt(sellerA), 0);
         else assertEq(sd.withdrawReadyAt(sellerA), readyAt);
         _assertHolds();
 
-        // everything still settles: pending is withdrawable and the OPEN claim finalizes in full
+        // everything still settles: the OPEN claim finalizes from what is left, the rest of the queue leaves
         skip(COOLDOWN);
+        sd.finalize(_cid(sellerA, buyer2, N2));
+        uint256 other = 2 * otherVal < left ? 2 * otherVal : left;
+        assertEq(sd.claimable(buyer2), _paid(other));
         uint256 pend = sd.pendingWithdrawal(sellerA);
+        assertLe(pend, left - other);
         if (pend > 0) {
             vm.prank(sellerA);
             sd.withdrawDeposit();
             assertEq(usdc.balanceOf(sellerA), pend);
         }
-        sd.finalize(_cid(sellerA, buyer2, N2));
-        assertEq(sd.claimable(buyer2), _paid(resBefore));
         _assertHolds();
     }
 }

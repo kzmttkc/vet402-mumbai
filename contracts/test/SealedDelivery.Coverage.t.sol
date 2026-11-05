@@ -58,42 +58,46 @@ contract SealedDeliveryCoverageForTest is SealedDeliveryTestBase {
         assertEq(sd.coverage(sellerA), 200e6 - 1);
     }
 
-    function test_CoverageFor_FalseAfterReservationAndTrueAfterAnswer() public {
+    /// Coverage is deposits minus the queue: open claims do not move it, a queued withdrawal does.
+    function test_CoverageFor_IgnoresOpenClaimsAndFollowsTheQueue() public {
         _fund(sellerA, 400e6);
         assertTrue(sd.coverageFor(sellerA, 200e6));
-        _claimOk(_prom(sellerA, buyer, 100e6, N1)); // reserves 200 => coverage 200
+        _claimOk(_prom(sellerA, buyer, 100e6, N1));
+        assertTrue(sd.coverageFor(sellerA, 200e6), "an open claim leaves coverage alone");
+        assertFalse(sd.coverageFor(sellerA, 200e6 + 1));
+        assertEq(sd.openLiability(sellerA), 200e6, "buyers can read the open total separately");
+        sd.answer(id1, KEY);
+        assertTrue(sd.coverageFor(sellerA, 200e6));
+        vm.prank(sellerA);
+        sd.requestWithdraw(200e6);
         assertTrue(sd.coverageFor(sellerA, 100e6));
         assertFalse(sd.coverageFor(sellerA, 100e6 + 1));
-        _claimOk(_prom(sellerA, buyer2, 1e6, N2)); // reserves 2 => coverage 198
-        assertFalse(sd.coverageFor(sellerA, 100e6));
-        assertTrue(sd.coverageFor(sellerA, 99e6));
-        sd.answer(id1, KEY); // releases 200
-        assertTrue(sd.coverageFor(sellerA, 199e6));
-        assertFalse(sd.coverageFor(sellerA, 199e6 + 1));
     }
 
     function test_CoverageFor_FalseAfterDepositShrinks() public {
         _fund(sellerA, 200e6);
-        _claimOk(_prom(sellerA, buyer, 100e6, N1)); // reserves 200
+        _claimOk(_prom(sellerA, buyer, 100e6, N1)); // liability 200
         skip(WINDOW);
         sd.finalize(id1); // deposit 0
         assertFalse(sd.coverageFor(sellerA, 1));
         assertTrue(sd.coverageFor(sellerA, 0));
     }
 
-    function test_CoverageFor_PredictsTheReservationOfAClaim() public {
+    function test_CoverageFor_PredictsTheBuyersPayout() public {
         _fund(sellerA, 300e6);
-        // buyer checks before paying: 150 is exactly coverable => claim reserves the full 300
+        // buyer checks before paying: 150 is exactly coverable => silence pays the whole value back
         assertTrue(sd.coverageFor(sellerA, 150e6));
         _claimOk(_prom(sellerA, buyer, 150e6, N1));
-        (,, uint256 r,,) = _claimData(id1);
-        assertEq(r, 300e6);
-        // 151 was not coverable (302 > 300) => the reservation would have been capped below 2 * value
+        skip(WINDOW);
+        sd.finalize(id1);
+        assertEq(sd.claimable(buyer), 150e6);
+        // 151 was not coverable (302 > 300) => silence pays less than the value
         _fund(sellerB, 300e6);
         assertFalse(sd.coverageFor(sellerB, 151e6));
-        _claimOk(_prom(sellerB, buyer, 151e6, N1));
-        (,, uint256 r2,,) = _claimData(_cid(sellerB, buyer, N1));
-        assertLt(r2, 2 * 151e6);
+        _claimOk(_prom(sellerB, buyer2, 151e6, N1));
+        skip(WINDOW);
+        sd.finalize(_cid(sellerB, buyer2, N1));
+        assertLt(sd.claimable(buyer2), 151e6);
     }
 
     function testFuzz_CoverageFor_ConsistentWithCoverage(

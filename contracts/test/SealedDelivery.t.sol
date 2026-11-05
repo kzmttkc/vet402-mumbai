@@ -18,35 +18,35 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
 
     function test_Constructor_RevertsZeroMaxExpiry() public {
         vm.expectRevert(SealedDelivery.InvalidMaxExpiry.selector);
-        new SealedDelivery(0, 60, 120);
+        _deploy(0, 60, 120);
     }
 
     function test_Constructor_RevertsZeroAnswerWindow() public {
         vm.expectRevert(SealedDelivery.InvalidAnswerWindow.selector);
-        new SealedDelivery(60, 0, 120);
+        _deploy(60, 0, 120);
     }
 
     function test_Constructor_RevertsCooldownBelowSum() public {
         vm.expectRevert(SealedDelivery.InvalidCooldown.selector);
-        new SealedDelivery(60, 60, 119);
+        _deploy(60, 60, 119);
     }
 
     function test_Constructor_RevertsCooldownBelowMaxExpiry() public {
         vm.expectRevert(SealedDelivery.InvalidCooldown.selector);
-        new SealedDelivery(100, 1, 99);
+        _deploy(100, 1, 99);
     }
 
     function test_Constructor_RevertsOverflowSizedArgs() public {
         vm.expectRevert(SealedDelivery.InvalidCooldown.selector);
-        new SealedDelivery(type(uint256).max, 1, type(uint256).max);
+        _deploy(type(uint256).max, 1, type(uint256).max);
         vm.expectRevert(SealedDelivery.InvalidCooldown.selector);
-        new SealedDelivery(1, type(uint256).max, type(uint256).max);
+        _deploy(1, type(uint256).max, type(uint256).max);
         vm.expectRevert(SealedDelivery.InvalidCooldown.selector);
-        new SealedDelivery(type(uint256).max, type(uint256).max, type(uint256).max);
+        _deploy(type(uint256).max, type(uint256).max, type(uint256).max);
     }
 
     function test_Constructor_AcceptsEquality() public {
-        SealedDelivery s = new SealedDelivery(60, 60, 120);
+        SealedDelivery s = _deploy(60, 60, 120);
         assertEq(s.MAX_EXPIRY(), 60);
         assertEq(s.ANSWER_WINDOW(), 60);
         assertEq(s.COOLDOWN(), 120);
@@ -61,7 +61,7 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
 
     /// Full lifecycle on a 60/60/120 deployment.
     function test_ShortConfig_ClaimFinalizeWithdraw() public {
-        sd = new SealedDelivery(60, 60, 120);
+        sd = _deploy(60, 60, 120);
         _fund(sellerA, 100e6);
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, 40e6, N1);
         p.expiry = uint64(block.timestamp + 60); // exactly MAX_EXPIRY: accepted
@@ -70,9 +70,9 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         assertEq(dl, block.timestamp + 60);
         skip(60);
         sd.finalize(id1);
-        // reserved 2 * 40 = 80: buyer 40, burned 40, deposit left 20
+        // payout 2 * 40 = 80: buyer 40, burned 40, deposit left 20
         assertEq(sd.claimable(buyer), 40e6);
-        assertEq(_deadBal(), 40e6);
+        assertEq(_burnTotal(), 40e6);
 
         vm.startPrank(sellerA);
         sd.requestWithdraw(20e6);
@@ -93,7 +93,7 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
 
     // ---------------------------------------------------------------- claim happy path
 
-    function test_Claim_StoresClaimAndReserves() public {
+    function test_Claim_StoresClaimAndLiability() public {
         SealedDelivery.Promise memory p = _prom(sellerA, buyer, VAL, N1);
         _claimOk(p);
         (address s, address b, uint256 r, uint64 dl, bytes32 kh) = _claimData(id1);
@@ -103,8 +103,8 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         assertEq(dl, uint64(block.timestamp + WINDOW));
         assertEq(kh, keccak256(KEY));
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 2 * VAL);
-        assertEq(sd.coverage(sellerA), DEP - 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
+        assertEq(sd.coverage(sellerA), DEP);
         assertEq(sd.deposits(sellerA), DEP);
         (bytes32 ph, bytes32 ch) = _claimHashes(id1);
         assertEq(ph, keccak256("plain"));
@@ -122,48 +122,49 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         sd.claim(p, ss, a, bs);
     }
 
-    function test_Claim_ReservesMinOfTwiceValueAndCoverage() public {
-        SealedDelivery.Promise memory p = _prom(sellerA, buyer, DEP + 1, N1);
-        _claimOk(p);
+    function test_Claim_MovesNoFundsAndLeavesCoverage() public {
+        _claimOk(_prom(sellerA, buyer, DEP + 1, N1));
         (,, uint256 r,,) = _claimData(id1);
-        assertEq(r, DEP); // 2 * (DEP + 1) > DEP
-        assertEq(sd.coverage(sellerA), 0);
+        assertEq(r, 2 * (DEP + 1));
+        assertEq(sd.coverage(sellerA), DEP);
+        assertEq(sd.deposits(sellerA), DEP);
+        assertEq(usdc.balanceOf(address(sd)), DEP);
     }
 
-    function test_Claim_ReservesExactlyTwiceValueWhenCovered() public {
-        // 2 * 250e6 == DEP: exactly covered
+    function test_Claim_LiabilityIsExactlyTwiceValue() public {
         _claimOk(_prom(sellerA, buyer, DEP / 2, N1));
         (,, uint256 r,,) = _claimData(id1);
         assertEq(r, DEP);
-        assertEq(sd.coverage(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), DEP);
+        assertEq(sd.coverage(sellerA), DEP);
     }
 
-    function test_Claim_OneUnderTwiceValueReservesCoverage() public {
-        // value = DEP/2 + 1 => 2*value = DEP + 2 > DEP, capped to DEP
+    function test_Claim_LiabilityIsNotCappedByTheDeposit() public {
+        // value = DEP/2 + 1 => 2*value = DEP + 2 > DEP
         _claimOk(_prom(sellerA, buyer, DEP / 2 + 1, N1));
         (,, uint256 r,,) = _claimData(id1);
-        assertEq(r, DEP);
+        assertEq(r, DEP + 2);
+        assertEq(sd.coverage(sellerA), DEP);
     }
 
     function test_Claim_HugeValueDoesNotOverflow() public {
+        uint256 cap = type(uint128).max;
         _claimOk(_prom(sellerA, buyer, type(uint256).max, N1));
         (,, uint256 r,,) = _claimData(id1);
-        assertEq(r, DEP);
-        assertEq(sd.reserved(sellerA), DEP);
+        assertEq(r, cap);
+        assertEq(sd.openLiability(sellerA), cap);
 
         // max/2 + 1 is the smallest value whose double overflows
         _claimOk(_prom(sellerB, buyer, type(uint256).max / 2 + 1, N1));
         (,, uint256 r2,,) = _claimData(_cid(sellerB, buyer, N1));
-        assertEq(r2, 0);
+        assertEq(r2, cap);
 
-        // max/2 doubles to max - 1 without overflow
-        _fund(sellerB, 7);
+        // a second huge claim on the same seller adds up without overflowing
         _claimOk(_prom(sellerB, buyer, type(uint256).max / 2, N2));
-        (,, uint256 r3,,) = _claimData(_cid(sellerB, buyer, N2));
-        assertEq(r3, 7);
+        assertEq(sd.openLiability(sellerB), 2 * cap);
     }
 
-    function test_Claim_ZeroValueReservesNothing() public {
+    function test_Claim_ZeroValueOwesNothing() public {
         _claimOk(_prom(sellerA, buyer, 0, N1));
         (,, uint256 r,,) = _claimData(id1);
         assertEq(r, 0);
@@ -300,7 +301,7 @@ contract SealedDeliveryTest is SealedDeliveryTestBase {
         assertTrue(id2 != id1);
         assertEq(uint8(_status(id2)), uint8(SealedDelivery.Status.OPEN));
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 4 * VAL);
+        assertEq(sd.openLiability(sellerA), 4 * VAL);
     }
 
     function test_Claim_RevertsAlreadyClaimed_AfterAnswer() public {

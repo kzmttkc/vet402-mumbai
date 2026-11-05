@@ -28,7 +28,7 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         bytes32 strangerId = _cid(stranger, stranger, N1);
         assertEq(uint8(_status(strangerId)), uint8(SealedDelivery.Status.OPEN));
         (,, uint256 sr, uint64 sdl,) = _claimData(strangerId);
-        assertEq(sr, 0, "zero deposit reserves nothing");
+        assertEq(sr, 10e6, "the liability is 2x the value even with no deposit");
 
         skip(10);
 
@@ -46,11 +46,11 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         (address s, address b, uint256 rr, uint64 rdl,) = _claimData(id1);
         assertEq(s, sellerA);
         assertEq(b, buyer);
-        assertEq(rr, 2 * VAL, "own reservation");
+        assertEq(rr, 2 * VAL, "own liability");
         assertEq(rdl, uint64(block.timestamp + WINDOW), "own deadline");
         assertEq(uint256(rdl), uint256(sdl) + 10, "deadlines are independent");
-        assertEq(sd.reserved(sellerA), 2 * VAL);
-        assertEq(sd.reserved(stranger), 0);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(stranger), 10e6);
         assertEq(_claimNonce(id1), N1);
         assertEq(_claimNonce(strangerId), N1);
     }
@@ -63,11 +63,11 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         sd.answer(strangerId, KEY);
         assertEq(uint8(_status(strangerId)), uint8(SealedDelivery.Status.DELIVERED));
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
 
         sd.answer(id1, KEY);
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.DELIVERED));
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
     }
 
     function test_Stranger_FinalizeOneClaimLeavesOtherUntouched() public {
@@ -80,17 +80,17 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         sd.finalize(strangerId);
         assertEq(uint8(_status(strangerId)), uint8(SealedDelivery.Status.SILENT));
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
         assertEq(sd.deposits(sellerA), DEP);
         assertEq(sd.silentCount(stranger), 1);
         assertEq(sd.silentCount(sellerA), 0);
         assertEq(sd.claimable(buyer), 0);
         assertEq(sd.claimable(stranger), 0);
-        assertEq(_deadBal(), 0);
+        assertEq(_burnTotal(), 0);
 
         sd.finalize(id1);
-        assertEq(sd.claimable(buyer), VAL); // half of the 2 * VAL reservation
-        assertEq(_deadBal(), VAL); // the other half
+        assertEq(sd.claimable(buyer), VAL); // half of the 2 * VAL payout
+        assertEq(_burnTotal(), VAL); // the other half
         assertEq(sd.silentCount(sellerA), 1);
     }
 
@@ -115,12 +115,12 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         (address s,, uint256 r,,) = _claimData(idB);
         assertEq(s, sellerB);
         assertEq(r, 80e6);
-        assertEq(sd.reserved(sellerA), 2 * VAL);
-        assertEq(sd.reserved(sellerB), 80e6);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerB), 80e6);
 
         sd.answer(id1, KEY);
         assertEq(uint8(_status(idB)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerB), 80e6);
+        assertEq(sd.openLiability(sellerB), 80e6);
         skip(WINDOW);
         sd.finalize(idB);
         assertEq(sd.claimable(buyer), 40e6);
@@ -136,7 +136,7 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         (, address b, uint256 r,,) = _claimData(id2);
         assertEq(b, buyer2);
         assertEq(r, 140e6);
-        assertEq(sd.reserved(sellerA), 2 * VAL + 140e6);
+        assertEq(sd.openLiability(sellerA), 2 * VAL + 140e6);
 
         skip(WINDOW);
         sd.finalize(id2);
@@ -158,7 +158,7 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         _claimRaw(p, ss, a, bs, buyer, SealedDelivery.AlreadyClaimed.selector);
         sd.answer(id1, KEY);
         _claimRaw(p, ss, a, bs, buyer, SealedDelivery.AlreadyClaimed.selector);
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
     }
 
     function test_Replay_AfterFinalizeRevertsAlreadyClaimed() public {
@@ -183,7 +183,7 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
     // ---------------------------------------------------------------- (d) claimId derivation and events
 
     function test_ClaimId_MatchesKeccakAbiEncode() public {
-        SealedDeliveryHarness h = new SealedDeliveryHarness();
+        SealedDeliveryHarness h = new SealedDeliveryHarness(USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET);
         assertEq(h.claimIdOf(sellerA, buyer, N1), keccak256(abi.encode(sellerA, buyer, N1)));
         assertEq(h.claimIdOf(sellerA, buyer, N1), id1);
         // every component matters
@@ -247,13 +247,13 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         vm.recordLogs();
         sd.finalize(idB);
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        assertEq(logs.length, 2); // USDC Transfer to DEAD, then Silent
-        assertEq(logs[0].emitter, USDC_ADDR);
-        assertEq(logs[1].topics[0], SealedDelivery.Silent.selector);
-        assertEq(logs[1].topics[1], idB);
-        assertEq(logs[1].topics[2], N2);
-        assertEq(logs[1].topics[3], bytes32(uint256(uint160(sellerB))));
-        (address b, uint256 paid) = abi.decode(logs[1].data, (address, uint256));
+        assertEq(logs.length, 1); // Silent only: the burn is queued, no USDC moves
+        assertEq(logs[0].emitter, address(sd));
+        assertEq(logs[0].topics[0], SealedDelivery.Silent.selector);
+        assertEq(logs[0].topics[1], idB);
+        assertEq(logs[0].topics[2], N2);
+        assertEq(logs[0].topics[3], bytes32(uint256(uint160(sellerB))));
+        (address b, uint256 paid) = abi.decode(logs[0].data, (address, uint256));
         assertEq(b, buyer2);
         assertEq(paid, 30e6);
     }
@@ -267,7 +267,7 @@ contract SealedDeliveryClaimIdTest is SealedDeliveryTestBase {
         vm.expectRevert(SealedDelivery.NotOpen.selector);
         sd.answer(keccak256(abi.encode(N1)), KEY);
         assertEq(uint8(_status(id1)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
     }
 
     function test_OldKey_FinalizeWithNonceAloneRevertsNotOpen() public {

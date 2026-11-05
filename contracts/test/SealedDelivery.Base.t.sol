@@ -20,7 +20,9 @@ contract MockUSDC is ERC20 {
 
 /// Exposes the internal signature helpers for the EIP-3009 vector test.
 contract SealedDeliveryHarness is SealedDelivery {
-    constructor() SealedDelivery(3600, 60, 3660) {}
+    constructor(address usdc, string memory name, string memory version, address verifyingContract)
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract)
+    {}
 
     function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
         return _paymentDigest(a);
@@ -38,6 +40,9 @@ contract SealedDeliveryHarness is SealedDelivery {
 /// Signing + claim helpers shared by the tests and the invariant handler.
 abstract contract SDHelpers is Test {
     address internal constant USDC_ADDR = 0x3600000000000000000000000000000000000000;
+    address internal constant GATEWAY_WALLET = 0x0077777d7EBA4688BDeF3E311b846F25870A19B9;
+    string internal constant PAY_NAME = "GatewayWalletBatched";
+    string internal constant PAY_VERSION = "1";
     bytes32 internal constant PROMISE_TYPEHASH = keccak256(
         "Promise(address seller,uint256 value,bytes32 paymentNonce,bytes32 keyHash,bytes32 plaintextHash,bytes32 ciphertextHash,uint64 expiry,address buyer)"
     );
@@ -70,20 +75,20 @@ abstract contract SDHelpers is Test {
         usdc = MockUSDC(USDC_ADDR);
     }
 
+    function _deploy(uint256 maxExpiry, uint256 window, uint256 cooldown) internal returns (SealedDelivery) {
+        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET);
+    }
+
     function _sdDomain() internal view returns (bytes32) {
         return keccak256(
             abi.encode(DOMAIN_TYPEHASH, keccak256("SealedDelivery"), keccak256("1"), block.chainid, address(sd))
         );
     }
 
-    function _gwDomain() internal pure returns (bytes32) {
+    function _gwDomain() internal view returns (bytes32) {
         return keccak256(
             abi.encode(
-                DOMAIN_TYPEHASH,
-                keccak256("GatewayWalletBatched"),
-                keccak256("1"),
-                uint256(5042002),
-                address(0x0077777d7EBA4688BDeF3E311b846F25870A19B9)
+                DOMAIN_TYPEHASH, keccak256(bytes(PAY_NAME)), keccak256(bytes(PAY_VERSION)), block.chainid, GATEWAY_WALLET
             )
         );
     }
@@ -98,7 +103,7 @@ abstract contract SDHelpers is Test {
         return keccak256(abi.encodePacked("\x19\x01", _sdDomain(), sh));
     }
 
-    function _authDigest(SealedDelivery.PaymentAuth memory a) internal pure returns (bytes32) {
+    function _authDigest(SealedDelivery.PaymentAuth memory a) internal view returns (bytes32) {
         bytes32 sh = keccak256(abi.encode(PAY_TYPEHASH, a.from, a.to, a.value, a.validAfter, a.validBefore, a.nonce));
         return keccak256(abi.encodePacked("\x19\x01", _gwDomain(), sh));
     }
@@ -237,7 +242,7 @@ abstract contract SealedDeliveryTestBase is SDHelpers {
     function setUp() public virtual {
         vm.warp(T0);
         _etchUsdc();
-        sd = new SealedDelivery(MAX_EXPIRY, WINDOW, COOLDOWN);
+        sd = _deploy(MAX_EXPIRY, WINDOW, COOLDOWN);
         sellerA = _newActor("sellerA");
         sellerB = _newActor("sellerB");
         buyer = _newActor("buyer");
@@ -262,7 +267,7 @@ abstract contract SealedDeliveryTestBase is SDHelpers {
         (,,,,,,, ph, ch) = sd.claims(id);
     }
 
-    /// Buyer's rounded-up half and the burned remainder of a reservation / payout amount.
+    /// Buyer's rounded-up half and the burned remainder of a payout amount.
     function _paid(uint256 r) internal pure returns (uint256) {
         return r / 2 + (r % 2);
     }
@@ -271,8 +276,9 @@ abstract contract SealedDeliveryTestBase is SDHelpers {
         return r - _paid(r);
     }
 
-    function _deadBal() internal view returns (uint256) {
-        return usdc.balanceOf(DEAD_ADDR);
+    /// Everything burned so far: queued in pendingBurn plus already flushed to DEAD.
+    function _burnTotal() internal view returns (uint256) {
+        return sd.pendingBurn() + usdc.balanceOf(DEAD_ADDR);
     }
 
     /// Creates a sealed claim (submitted by `buyer_`) and returns its id and ciphertext.

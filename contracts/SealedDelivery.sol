@@ -13,23 +13,23 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  * @notice Seller-funded key-revelation disputes for payments settled separately through Gateway.
  * @dev Never receives or verifies the underlying payment: buyer signatures prove intent, not settlement.
  * Deposits back key revelation and signed plaintext correctness. Buyers should read coverageFor(seller, value)
- * before paying; coverage can change and claims can reserve zero. Silence costs the seller 2x the value,
- * capped by coverage: the buyer gets half rounded up and the other half is burned to 0xdEaD. A seller
- * paying itself through a second address loses half of what it pulls (rounded down), while using
- * requestWithdraw and withdrawing after the cooldown costs nothing in collateral penalties. Only EOA
- * signatures are accepted. There is no owner, administrator, upgrade mechanism, or native-token entry.
+ * before paying. Nothing is reserved at claim time: a verdict (finalize or prove) takes
+ * min(2 * value, deposits[seller]) when it lands, so earlier verdicts are paid first and later ones get
+ * what is left. The buyer gets half rounded up and the remainder queues in pendingBurn until anyone calls
+ * flushBurn(), so a blocked burn address cannot stop a verdict. Funds queued for withdrawal stay in
+ * deposits and can be taken until they actually leave. openLiability[seller] holds withdrawals back while
+ * claims are unresolved; it never blocks a claim or another buyer's verdict. A seller paying itself through
+ * a second address loses half of what it pulls (rounded down). Only EOA signatures are accepted. There is
+ * no owner, administrator, upgrade mechanism, or native-token entry.
  * Each seller-signed Promise is bound to one buyer. Claims are keyed by
  * claimId = keccak256(abi.encode(seller, buyer, paymentNonce)), so the same nonce under another seller
  * or buyer is a separate claim and a stranger cannot block the real buyer.
- * A delivered claim's fraud payout is capped by the seller's unreserved deposit, including funds
- * queued for withdrawal that have not yet left during the cooldown. Queuing a withdrawal does not
- * shield a seller from a fraud proof made inside the cooldown. A proof made after the seller has
- * completed the withdrawal can only be paid from what is left.
+ * A fraud proof made after the seller has completed a withdrawal can only be paid from what is left.
  */
 contract SealedDelivery is EIP712, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    IERC20 public constant USDC = IERC20(0x3600000000000000000000000000000000000000);
+    IERC20 public immutable USDC;
     address internal constant DEAD = 0x000000000000000000000000000000000000dEaD;
     uint256 public immutable MAX_EXPIRY;
     uint256 public immutable ANSWER_WINDOW;
@@ -44,8 +44,13 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     bytes32 internal constant DOMAIN_TYPEHASH = keccak256(
         "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
     );
-    uint256 internal constant PAYMENT_CHAIN_ID = 5042002;
-    address internal constant PAYMENT_VERIFYING_CONTRACT = 0x0077777d7EBA4688BDeF3E311b846F25870A19B9;
+    /// @dev Gateway's version 2 domain adds a salt: the asset address left-padded to 32 bytes.
+    bytes32 internal constant SALTED_DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)"
+    );
+    /// @dev Caps one claim's liability so that the openLiability sum cannot overflow: that would take
+    /// 2^128 claims. Without it a seller-signed huge value would make every later claim revert.
+    uint256 internal constant LIABILITY_CAP = type(uint128).max;
     bytes32 internal immutable PAYMENT_DOMAIN_SEPARATOR;
 
     /// @notice Seller-signed key-revelation promise bound to one buyer.
@@ -74,7 +79,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     struct Claim {
         address seller;
         address buyer;
-        uint256 reserved;
+        uint256 liability;
         uint64 deadline;
         bytes32 keyHash;
         Status status;
@@ -84,10 +89,11 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     }
 
     mapping(address => uint256) public deposits;
-    mapping(address => uint256) public reserved;
+    mapping(address => uint256) public openLiability;
     mapping(address => uint256) public pendingWithdrawal;
     mapping(address => uint256) public withdrawReadyAt;
     mapping(address => uint256) public claimable;
+    uint256 public pendingBurn;
     mapping(address => uint256) public silentCount;
     mapping(address => uint256) public fraudCount;
     mapping(bytes32 claimId => Claim) public claims;
@@ -118,22 +124,34 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     error NothingPending();
     error CooldownActive();
     error NothingToWithdraw();
+    error LiabilityOpen();
     error TimestampOverflow();
 
-    event Claimed(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 reserved, uint64 deadline);
+    event Claimed(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 liability, uint64 deadline);
     event KeyRevealed(bytes32 indexed claimId, bytes32 indexed paymentNonce, bytes key);
-    /// @notice paidOut is the buyer's credit; the burned half is visible as a USDC Transfer to DEAD.
+    /// @notice paidOut is the buyer's credit; the rest of the payout joins pendingBurn.
     event Silent(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 paidOut);
-    /// @notice paidOut is the buyer's credit; the burned half is visible as a USDC Transfer to DEAD.
+    /// @notice paidOut is the buyer's credit; the rest of the payout joins pendingBurn.
     event Fraud(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 paidOut);
     event Deposited(address indexed seller, uint256 amount);
     event WithdrawalRequested(address indexed seller, uint256 amount, uint256 readyAt);
     event DepositWithdrawn(address indexed seller, uint256 amount);
     event ClaimableWithdrawn(address indexed buyer, uint256 amount);
+    event BurnFlushed(uint256 amount);
 
-    /// @notice Sets immutable dispute timing; seller withdrawals must outwait expiry plus the answer window.
-    /// @dev Gateway settlement remains entirely separate from the seller's deposit.
-    constructor(uint256 maxExpiry, uint256 answerWindow, uint256 cooldown) EIP712("SealedDelivery", "1") {
+    /// @notice Sets immutable dispute timing, the collateral token and the buyer's payment signing domain.
+    /// @dev Seller withdrawals must outwait expiry plus the answer window. Gateway settlement stays separate
+    /// from the deposit. The payment domain's chain ID is this deployment's: Gateway signs for the chain the
+    /// buyer pays on, so deploy on that chain. A domain version of "2" uses Gateway's salted form.
+    constructor(
+        uint256 maxExpiry,
+        uint256 answerWindow,
+        uint256 cooldown,
+        address usdc,
+        string memory paymentDomainName,
+        string memory paymentDomainVersion,
+        address paymentVerifyingContract
+    ) EIP712("SealedDelivery", "1") {
         if (maxExpiry == 0) revert InvalidMaxExpiry();
         if (answerWindow == 0) revert InvalidAnswerWindow();
         // Subtraction avoids overflowing maxExpiry + answerWindow for invalid configurations.
@@ -141,24 +159,22 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         MAX_EXPIRY = maxExpiry;
         ANSWER_WINDOW = answerWindow;
         COOLDOWN = cooldown;
-        PAYMENT_DOMAIN_SEPARATOR = keccak256(abi.encode(
-            DOMAIN_TYPEHASH,
-            keccak256("GatewayWalletBatched"),
-            keccak256("1"),
-            PAYMENT_CHAIN_ID,
-            PAYMENT_VERIFYING_CONTRACT
-        ));
+        USDC = IERC20(usdc);
+        bytes32 nameHash = keccak256(bytes(paymentDomainName));
+        bytes32 versionHash = keccak256(bytes(paymentDomainVersion));
+        PAYMENT_DOMAIN_SEPARATOR = versionHash == keccak256("2")
+            ? keccak256(abi.encode(
+                SALTED_DOMAIN_TYPEHASH, nameHash, versionHash, block.chainid, paymentVerifyingContract,
+                bytes32(uint256(uint160(usdc)))
+            ))
+            : keccak256(abi.encode(DOMAIN_TYPEHASH, nameHash, versionHash, block.chainid, paymentVerifyingContract));
     }
 
-    /// @notice Returns unreserved, non-withdrawing deposit coverage that a buyer can inspect before paying.
-    /// @dev Coverage is not a guarantee of future availability or proof of Gateway settlement.
+    /// @notice Returns the deposit not queued for withdrawal, for a buyer to read before paying.
+    /// @dev Open claims do not lower it (see openLiability) and it is no guarantee of future availability
+    /// or proof of Gateway settlement.
     function coverage(address seller) public view returns (uint256) {
-        uint256 balance = deposits[seller];
-        uint256 locked = reserved[seller];
-        if (locked > balance) return 0;
-        uint256 available = balance - locked;
-        uint256 pending = pendingWithdrawal[seller];
-        return pending > available ? 0 : available - pending;
+        return deposits[seller] - pendingWithdrawal[seller];
     }
 
     /// @notice A buyer reads this before paying to check coverage for twice the payment value.
@@ -168,9 +184,10 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         return coverage(seller) >= 2 * value;
     }
 
-    /// @notice Reserves available seller collateral against a signed key-revelation promise bound to one buyer.
+    /// @notice Records a signed key-revelation promise bound to one buyer; moves no funds and reserves none.
     /// @dev Checks signed buyer intent only, not settlement or authorization validity times. Zero coverage
-    /// still records a claim; each claimId is single-use on this contract.
+    /// still records a claim; each claimId is single-use on this contract. Holds the seller's withdrawals
+    /// back by the claim's liability until it resolves.
     function claim(
         Promise calldata p,
         bytes calldata sellerSignature,
@@ -192,27 +209,22 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
             revert TimestampOverflow();
         }
         uint64 deadline = uint64(block.timestamp + ANSWER_WINDOW);
-        uint256 r;
-        {
-            uint256 available = coverage(p.seller);
-            uint256 wanted = p.value > type(uint256).max / 2 ? type(uint256).max : 2 * p.value;
-            r = wanted < available ? wanted : available;
-        }
-        reserved[p.seller] += r;
+        uint256 liability = p.value > LIABILITY_CAP / 2 ? LIABILITY_CAP : 2 * p.value;
+        openLiability[p.seller] += liability;
         Claim storage c = claims[claimId];
         c.seller = p.seller;
         c.buyer = msg.sender;
-        c.reserved = r;
+        c.liability = liability;
         c.deadline = deadline;
         c.keyHash = p.keyHash;
         c.status = Status.OPEN;
         c.paymentNonce = p.paymentNonce;
         c.plaintextHash = p.plaintextHash;
         c.ciphertextHash = p.ciphertextHash;
-        emit Claimed(claimId, p.paymentNonce, p.seller, msg.sender, r, deadline);
+        emit Claimed(claimId, p.paymentNonce, p.seller, msg.sender, liability, deadline);
     }
 
-    /// @notice Anyone may reveal the promised key before the deadline, releasing the seller's reservation.
+    /// @notice Anyone may reveal the promised key before the deadline, releasing the claim's liability.
     /// @dev A matching key does not prove plaintext correctness or that the buyer's payment settled.
     /// @param claimId Identifier derived from the seller, buyer, and payment nonce.
     function answer(bytes32 claimId, bytes calldata key) external {
@@ -221,40 +233,31 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         if (block.timestamp >= c.deadline) revert AnswerWindowClosed();
         if (keccak256(abi.encodePacked(key)) != c.keyHash) revert WrongKey();
         c.status = Status.DELIVERED;
-        reserved[c.seller] -= c.reserved;
+        openLiability[c.seller] -= c.liability;
         emit KeyRevealed(claimId, c.paymentNonce, key);
     }
 
     /// @notice Anyone may finalize silence at or after the deadline, crediting the buyer from the deposit.
-    /// @dev Silence costs 2x the value capped by coverage reserved at claim time, regardless of settlement.
-    /// The buyer gets half rounded up; the remainder is burned to 0xdEaD via a USDC transfer to DEAD.
-    /// Silent.paidOut reports only the buyer's credit, not the burned half.
+    /// @dev Silence costs min(2x the value, the deposit at this moment), regardless of settlement. The buyer
+    /// gets half rounded up and the remainder joins pendingBurn. Silent.paidOut reports only the buyer's credit.
     /// @param claimId Identifier derived from the seller, buyer, and payment nonce.
-    function finalize(bytes32 claimId) external nonReentrant {
+    function finalize(bytes32 claimId) external {
         Claim storage c = claims[claimId];
         if (c.status != Status.OPEN) revert NotOpen();
         if (block.timestamp < c.deadline) revert DeadlineNotReached();
-        uint256 r = c.reserved;
-        // Equivalent to (r + 1) / 2 without overflowing when r is uint256.max.
-        uint256 paidOut = r / 2 + r % 2;
-        uint256 burned = r - paidOut;
         c.status = Status.SILENT;
-        deposits[c.seller] -= r;
-        reserved[c.seller] -= r;
-        claimable[c.buyer] += paidOut;
+        openLiability[c.seller] -= c.liability;
         silentCount[c.seller] += 1;
-        if (burned > 0) USDC.safeTransfer(DEAD, burned);
+        uint256 paidOut = _takeFromDeposit(c.seller, c.buyer, c.liability);
         emit Silent(claimId, c.paymentNonce, c.seller, c.buyer, paidOut);
     }
 
     /// @notice Anyone holding the key and ciphertext can prove onchain that the delivered plaintext
     /// does not match the seller's signed plaintextHash, on an OPEN or DELIVERED claim at any time.
-    /// @dev A kept promise reverts, costing the caller only gas. Fraud credits half rounded up to the
-    /// buyer and burns the remainder to DEAD. A delivered claim's fraud payout is capped by the seller's
-    /// unreserved deposit, including funds queued for withdrawal that have not yet left during the
-    /// cooldown, so queuing a withdrawal does not shield a seller from a fraud proof inside the cooldown.
-    /// A proof made after the seller has completed the withdrawal can only be paid from what is left.
-    function prove(bytes32 claimId, bytes calldata ciphertext, bytes calldata key) external nonReentrant {
+    /// @dev A kept promise reverts, costing the caller only gas. Fraud takes what silence takes, from the
+    /// deposit at this moment and including funds queued for withdrawal. A proof made after the seller has
+    /// completed the withdrawal can only be paid from what is left.
+    function prove(bytes32 claimId, bytes calldata ciphertext, bytes calldata key) external {
         Claim storage c = claims[claimId];
         Status status = c.status;
         if (status == Status.FRAUD) revert AlreadyFraud();
@@ -263,28 +266,22 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         if (keccak256(ciphertext) != c.ciphertextHash) revert WrongCiphertext();
         if (_plaintextHash(ciphertext, key) == c.plaintextHash) revert PromiseKept();
 
-        uint256 amount = c.reserved;
-        if (status == Status.OPEN) {
-            reserved[c.seller] -= amount;
-        } else {
-            uint256 backing = deposits[c.seller] - reserved[c.seller];
-            if (amount > backing) amount = backing;
-            uint256 free = coverage(c.seller);
-            if (amount > free) {
-                uint256 overlap = amount - free;
-                pendingWithdrawal[c.seller] -= overlap;
-                if (pendingWithdrawal[c.seller] == 0) withdrawReadyAt[c.seller] = 0;
-            }
-        }
-        // Equivalent to (amount + 1) / 2 without overflowing at uint256.max.
-        uint256 paidOut = amount / 2 + amount % 2;
-        uint256 burned = amount - paidOut;
         c.status = Status.FRAUD;
-        deposits[c.seller] -= amount;
-        claimable[c.buyer] += paidOut;
+        // A DELIVERED claim released its liability when it was answered.
+        if (status == Status.OPEN) openLiability[c.seller] -= c.liability;
         fraudCount[c.seller] += 1;
-        if (burned > 0) USDC.safeTransfer(DEAD, burned);
+        uint256 paidOut = _takeFromDeposit(c.seller, c.buyer, c.liability);
         emit Fraud(claimId, c.paymentNonce, c.seller, c.buyer, paidOut);
+    }
+
+    /// @notice Sends the burned share of past verdicts to 0xdEaD. Anyone may call it.
+    /// @dev Verdicts never depend on this transfer; if it fails the amount simply stays in pendingBurn.
+    function flushBurn() external nonReentrant {
+        uint256 amt = pendingBurn;
+        if (amt == 0) revert NothingToWithdraw();
+        pendingBurn = 0;
+        USDC.safeTransfer(DEAD, amt);
+        emit BurnFlushed(amt);
     }
 
     /// @notice Adds USDC collateral backing the caller's key-revelation promises, not any buyer payment.
@@ -296,8 +293,9 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         emit Deposited(msg.sender, amount);
     }
 
-    /// @notice Queues uncovered seller collateral for withdrawal after the full immutable cooldown.
-    /// @dev Excludes reservations and earlier requests; adding a request restarts the whole pending cooldown.
+    /// @notice Queues seller collateral for withdrawal after the full immutable cooldown.
+    /// @dev Queued funds leave coverage at once but stay in deposits, and verdicts can still take them, until
+    /// withdrawDeposit runs. Adding a request restarts the whole pending cooldown.
     function requestWithdraw(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
         if (amount > coverage(msg.sender)) revert ExceedsCoverage();
@@ -307,15 +305,21 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         emit WithdrawalRequested(msg.sender, amount, readyAt);
     }
 
-    /// @notice Pulls the caller's pending seller deposit only after its cooldown has elapsed.
-    /// @dev Reserved collateral cannot be withdrawn; state is cleared before the USDC transfer.
+    /// @notice Pulls the caller's queued deposit after its cooldown, leaving enough to cover open claims.
+    /// @dev Sends min(pending, deposits - openLiability). The rest stays queued, ready to leave once the
+    /// claims resolve. State is cleared before the USDC transfer.
     function withdrawDeposit() external nonReentrant {
-        uint256 amt = pendingWithdrawal[msg.sender];
-        if (amt == 0) revert NothingPending();
+        uint256 pending = pendingWithdrawal[msg.sender];
+        if (pending == 0) revert NothingPending();
         if (block.timestamp < withdrawReadyAt[msg.sender]) revert CooldownActive();
-        pendingWithdrawal[msg.sender] = 0;
-        withdrawReadyAt[msg.sender] = 0;
-        deposits[msg.sender] -= amt;
+        uint256 balance = deposits[msg.sender];
+        uint256 held = openLiability[msg.sender];
+        uint256 free = balance > held ? balance - held : 0;
+        uint256 amt = pending < free ? pending : free;
+        if (amt == 0) revert LiabilityOpen();
+        pendingWithdrawal[msg.sender] = pending - amt;
+        if (pending == amt) withdrawReadyAt[msg.sender] = 0;
+        deposits[msg.sender] = balance - amt;
         USDC.safeTransfer(msg.sender, amt);
         emit DepositWithdrawn(msg.sender, amt);
     }
@@ -328,6 +332,23 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         claimable[msg.sender] = 0;
         USDC.safeTransfer(msg.sender, amt);
         emit ClaimableWithdrawn(msg.sender, amt);
+    }
+
+    /// @dev Takes min(amount, deposit) from the seller: half rounded up to the buyer, the rest to pendingBurn.
+    /// Queued funds are not protected, so pendingWithdrawal comes down with the deposit when it has to.
+    function _takeFromDeposit(address seller, address buyer, uint256 amount) private returns (uint256 paidOut) {
+        uint256 balance = deposits[seller];
+        uint256 payout = amount < balance ? amount : balance;
+        balance -= payout;
+        deposits[seller] = balance;
+        if (pendingWithdrawal[seller] > balance) {
+            pendingWithdrawal[seller] = balance;
+            if (balance == 0) withdrawReadyAt[seller] = 0;
+        }
+        // Equivalent to (payout + 1) / 2 without overflowing at uint256.max.
+        paidOut = payout / 2 + payout % 2;
+        claimable[buyer] += paidOut;
+        pendingBurn += payout - paidOut;
     }
 
     /// @dev Hashes plaintext from XOR with keccak256(abi.encodePacked(key, uint256(blockIndex))).
@@ -373,7 +394,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         )));
     }
 
-    /// @dev Uses the fixed Gateway domain, never this deployment's chain ID or an external domain call.
+    /// @dev Uses the payment domain fixed at construction, never an external domain call.
     function _paymentDigest(PaymentAuth memory auth) internal view returns (bytes32) {
         bytes32 structHash = keccak256(abi.encode(
             PAYMENT_TYPEHASH, auth.from, auth.to, auth.value, auth.validAfter, auth.validBefore, auth.nonce

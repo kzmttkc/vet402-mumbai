@@ -78,7 +78,7 @@ contract SealedDeliverySealedTest is SealedDeliveryTestBase {
         sd.prove(id, fCipher, fKey);
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.OPEN));
         assertEq(sd.fraudCount(sellerA), 0);
-        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
         assertEq(sd.deposits(sellerA), DEP);
     }
 
@@ -97,9 +97,9 @@ contract SealedDeliverySealedTest is SealedDeliveryTestBase {
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.FRAUD));
         assertEq(sd.fraudCount(sellerA), 1);
         assertEq(sd.claimable(buyer), VAL);
-        assertEq(_deadBal(), VAL);
+        assertEq(_burnTotal(), VAL);
         assertEq(sd.deposits(sellerA), DEP - 2 * VAL);
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
     }
 
     function test_Fixture_DifferentPlaintextHash_FraudOnDelivered() public {

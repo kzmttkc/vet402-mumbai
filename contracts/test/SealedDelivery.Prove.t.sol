@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {Vm} from "forge-std/Vm.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SealedDelivery} from "../SealedDelivery.sol";
 import {SealedDeliveryTestBase} from "./SealedDelivery.Base.t.sol";
 
@@ -29,11 +28,11 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
 
     function _snap(bytes32 id) internal view returns (Snap memory s) {
         s.st = uint8(_status(id));
-        s.res = sd.reserved(sellerA);
+        s.res = sd.openLiability(sellerA);
         s.dep = sd.deposits(sellerA);
         s.claimableBuyer = sd.claimable(buyer);
         s.frauds = sd.fraudCount(sellerA);
-        s.dead = _deadBal();
+        s.dead = _burnTotal();
         s.bal = usdc.balanceOf(address(sd));
     }
 
@@ -72,21 +71,21 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
 
     // ---------------------------------------------------------------- fraud on an OPEN claim
 
-    function test_Prove_FraudOnOpen_SplitsPayoutAndReleasesReservation() public {
+    function test_Prove_FraudOnOpen_SplitsPayoutAndReleasesLiability() public {
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerA, buyer, VAL, N1, KEY, PLAIN, false);
-        assertEq(sd.reserved(sellerA), 2 * VAL);
-        assertEq(sd.coverage(sellerA), DEP - 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
+        assertEq(sd.coverage(sellerA), DEP);
 
         vm.prank(carol);
         sd.prove(id, ct, KEY);
 
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.FRAUD));
         assertEq(uint8(SealedDelivery.Status.FRAUD), 4);
-        assertEq(sd.reserved(sellerA), 0, "reservation released");
-        assertEq(sd.deposits(sellerA), DEP - 2 * VAL, "deposit down by the whole reservation");
+        assertEq(sd.openLiability(sellerA), 0, "liability released");
+        assertEq(sd.deposits(sellerA), DEP - 2 * VAL, "deposit down by the whole payout");
         assertEq(sd.claimable(buyer), VAL, "buyer share up");
-        assertEq(_deadBal(), VAL, "burn to DEAD");
-        assertEq(usdc.balanceOf(address(sd)), DEP - VAL, "contract balance drops by the burn only");
+        assertEq(sd.pendingBurn(), VAL, "burn queued");
+        assertEq(usdc.balanceOf(address(sd)), DEP, "a verdict moves no USDC");
         assertEq(sd.fraudCount(sellerA), 1);
         assertEq(sd.silentCount(sellerA), 0);
         assertEq(sd.coverage(sellerA), DEP - 2 * VAL);
@@ -96,13 +95,14 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         assertEq(usdc.balanceOf(buyer), VAL);
     }
 
-    function test_Prove_FraudOnOpen_EmitsFraudAndTransferToDead() public {
+    function test_Prove_FraudOnOpen_EmitsFraudAndMovesNoUsdc() public {
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerA, buyer, VAL, N1, KEY, PLAIN, false);
-        vm.expectEmit(true, true, false, true, USDC_ADDR);
-        emit IERC20.Transfer(address(sd), DEAD_ADDR, VAL);
         vm.expectEmit(true, true, true, true, address(sd));
         emit SealedDelivery.Fraud(id, N1, sellerA, buyer, VAL);
+        vm.recordLogs();
         sd.prove(id, ct, KEY);
+        assertEq(vm.getRecordedLogs().length, 1);
+        assertEq(usdc.balanceOf(DEAD_ADDR), 0);
     }
 
     function test_Prove_FraudEventCarriesClaimIdAndNonceTopics() public {
@@ -110,14 +110,13 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         vm.recordLogs();
         sd.prove(id, ct, KEY);
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        assertEq(logs.length, 2); // USDC Transfer + Fraud
-        assertEq(logs[0].emitter, USDC_ADDR);
-        assertEq(logs[1].emitter, address(sd));
-        assertEq(logs[1].topics[0], SealedDelivery.Fraud.selector);
-        assertEq(logs[1].topics[1], id);
-        assertEq(logs[1].topics[2], N1);
-        assertEq(logs[1].topics[3], bytes32(uint256(uint160(sellerA))));
-        (address b, uint256 paid) = abi.decode(logs[1].data, (address, uint256));
+        assertEq(logs.length, 1); // Fraud only: the burn is queued, no USDC moves
+        assertEq(logs[0].emitter, address(sd));
+        assertEq(logs[0].topics[0], SealedDelivery.Fraud.selector);
+        assertEq(logs[0].topics[1], id);
+        assertEq(logs[0].topics[2], N1);
+        assertEq(logs[0].topics[3], bytes32(uint256(uint160(sellerA))));
+        (address b, uint256 paid) = abi.decode(logs[0].data, (address, uint256));
         assertEq(b, buyer);
         assertEq(paid, VAL);
     }
@@ -140,7 +139,7 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         assertEq(sd.claimable(buyer), VAL);
         assertEq(sd.fraudCount(sellerA), 1);
         assertEq(sd.silentCount(sellerA), 0);
-        assertEq(_deadBal(), VAL);
+        assertEq(_burnTotal(), VAL);
     }
 
     function test_Prove_FraudAfterClaimIdReplayStillAlreadyClaimed() public {
@@ -162,7 +161,7 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         assertEq(sd.fraudCount(sellerB), 0);
         assertEq(sd.claimable(buyer), VAL);
         assertEq(sd.claimable(buyer2), 10e6);
-        assertEq(_deadBal(), VAL + 10e6);
+        assertEq(_burnTotal(), VAL + 10e6);
     }
 
     function test_Prove_OnOpenClaim_AfterDeadlineButBeforeFinalize() public {
@@ -207,29 +206,28 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         assertEq(sd.claimable(buyer3), 50e6);
     }
 
-    function test_Prove_FraudOnOpen_ZeroReservationStillMarksFraud() public {
+    function test_Prove_FraudOnOpen_NoDepositStillMarksFraud() public {
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerB, buyer, VAL, N1, KEY, PLAIN, false); // no deposit
-        (,, uint256 r,,) = _claimData(id);
-        assertEq(r, 0);
         vm.recordLogs();
         sd.prove(id, ct, KEY);
         assertEq(vm.getRecordedLogs().length, 1, "Fraud only, no transfer");
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.FRAUD));
         assertEq(sd.fraudCount(sellerB), 1);
         assertEq(sd.claimable(buyer), 0);
-        assertEq(_deadBal(), 0);
+        assertEq(_burnTotal(), 0);
+        assertEq(sd.openLiability(sellerB), 0);
     }
 
-    function test_Prove_FraudOnOpen_CappedByCoverageAtClaimTime() public {
+    function test_Prove_FraudOnOpen_CappedByDepositAtProofTime() public {
         _fund(sellerB, 150e6);
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerB, buyer, VAL, N1, KEY, PLAIN, false);
         (,, uint256 r,,) = _claimData(id);
-        assertEq(r, 150e6); // min(200, 150)
-        sd.prove(id, ct, KEY);
+        assertEq(r, 200e6);
+        sd.prove(id, ct, KEY); // min(200, 150)
         assertEq(sd.claimable(buyer), 75e6);
-        assertEq(_deadBal(), 75e6);
+        assertEq(_burnTotal(), 75e6);
         assertEq(sd.deposits(sellerB), 0);
-        assertEq(sd.reserved(sellerB), 0);
+        assertEq(sd.openLiability(sellerB), 0);
     }
 
     // ---------------------------------------------------------------- not provable / wrong inputs
@@ -250,7 +248,7 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         sd.prove(id, ct, KEY);
         assertEq(sd.fraudCount(sellerA), 0);
         assertEq(sd.claimable(buyer), VAL, "silent payout is not doubled");
-        assertEq(_deadBal(), VAL);
+        assertEq(_burnTotal(), VAL);
     }
 
     function test_Prove_RevertsWrongKey() public {
@@ -262,7 +260,7 @@ contract SealedDeliveryProveTest is SealedDeliveryTestBase {
         vm.expectRevert(SealedDelivery.WrongKey.selector);
         sd.prove(id, ct, abi.encodePacked(KEY, hex"00")); // longer by one byte
         assertEq(uint8(_status(id)), uint8(SealedDelivery.Status.OPEN));
-        assertEq(sd.reserved(sellerA), 2 * VAL);
+        assertEq(sd.openLiability(sellerA), 2 * VAL);
     }
 
     function test_Prove_RevertsWrongKey_OnDelivered() public {

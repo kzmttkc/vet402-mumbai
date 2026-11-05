@@ -15,13 +15,16 @@ contract SDHandler is SDHelpers {
     bytes internal _ct; // KEY-encrypted PT
 
     uint256 public totalBurned;
+    uint256 public totalFlushed;
+    /// Successful withdrawals that left less than the open liability behind (must stay 0).
+    uint256 public withdrawViolations;
     uint256 public finalizeCount;
     uint256 public proveCount;
     /// Deviations of prove()'s effects from the handler's independent model (must stay 0).
     uint256 public modelViolations;
     /// prove() calls that reverted although the claim was OPEN/DELIVERED, dishonest, with the right key.
     uint256 public unexpectedProveReverts;
-    /// Successful DELIVERED proofs that were paid partly from queued (pending) funds.
+    /// Successful proofs that took queued funds, pushing the deposit below pending.
     uint256 public deliveredOverlapProofs;
 
     constructor(SealedDelivery _sd, MockUSDC _usdc) {
@@ -74,7 +77,9 @@ contract SDHandler is SDHelpers {
         bytes32 id = _cid(s, b, n);
         (,,,,, SealedDelivery.Status st,,,) = sd.claims(id);
         if (st != SealedDelivery.Status.NONE) return;
-        SealedDelivery.Promise memory p = _prom(s, b, bound(value, 0, 1500e6), n);
+        // One claim in seven carries a value whose double overflows: it must not stop any later claim.
+        uint256 v = value % 7 == 0 ? type(uint256).max : bound(value, 0, 1500e6);
+        SealedDelivery.Promise memory p = _prom(s, b, v, n);
         p.expiry = uint64(block.timestamp + bound(expiryOff, 1, 3600));
         p.ciphertextHash = keccak256(_ct);
         p.plaintextHash = honest ? keccak256(PT) : keccak256("a different plaintext");
@@ -93,15 +98,17 @@ contract SDHandler is SDHelpers {
     function finalize(uint256 idx) external {
         if (_nonces.length == 0) return;
         bytes32 id = _nonces[idx % _nonces.length];
-        (,, uint256 r,,,,,,) = sd.claims(id);
+        (address s,, uint256 r,,,,,,) = sd.claims(id);
+        uint256 dep = sd.deposits(s);
+        uint256 amount = r < dep ? r : dep;
         try sd.finalize(id) {
-            totalBurned += r - (r / 2 + (r % 2));
+            totalBurned += amount - (amount / 2 + (amount % 2));
             finalizeCount++;
         } catch {}
     }
 
-    /// Fraud proof: succeeds only for dishonest promises with the right key; OPEN claims pay their whole
-    /// reservation, DELIVERED claims pay min(reservation, deposits - reserved) - queued funds included.
+    /// Fraud proof: succeeds only for dishonest promises with the right key; OPEN and DELIVERED claims
+    /// both pay min(liability, deposits), queued funds included.
     function prove(uint256 idx, bool good) external {
         _prove(idx, good);
     }
@@ -152,29 +159,24 @@ contract SDHandler is SDHelpers {
         (address s,, uint256 r,,, SealedDelivery.Status st,,,) = sd.claims(id);
         // Independent model of the expected effects, read before the call.
         uint256 dep = sd.deposits(s);
-        uint256 res = sd.reserved(s);
-        uint256 cov = sd.coverage(s);
+        uint256 res = sd.openLiability(s);
         uint256 pend = sd.pendingWithdrawal(s);
         uint256 readyAt = sd.withdrawReadyAt(s);
-        uint256 amount = r;
-        uint256 overlap;
-        if (st == SealedDelivery.Status.DELIVERED) {
-            uint256 backing = dep - res;
-            amount = r < backing ? r : backing;
-            overlap = amount > cov ? amount - cov : 0;
-        }
+        uint256 amount = r < dep ? r : dep;
+        uint256 depAfter = dep - amount;
         bytes memory k = KEY;
         if (!good) k = "bad";
         try sd.prove(id, _ct, k) {
             totalBurned += amount - (amount / 2 + (amount % 2));
             proveCount++;
             uint256 expRes = st == SealedDelivery.Status.OPEN ? res - r : res;
-            if (sd.deposits(s) != dep - amount) modelViolations++;
-            if (sd.reserved(s) != expRes) modelViolations++; // other claims' reservations untouched
-            if (sd.pendingWithdrawal(s) != pend - overlap) modelViolations++;
-            uint256 expReady = overlap == 0 ? readyAt : (pend - overlap == 0 ? 0 : readyAt);
+            uint256 expPend = pend < depAfter ? pend : depAfter;
+            if (sd.deposits(s) != depAfter) modelViolations++;
+            if (sd.openLiability(s) != expRes) modelViolations++; // other claims' liabilities untouched
+            if (sd.pendingWithdrawal(s) != expPend) modelViolations++;
+            uint256 expReady = pend > 0 && expPend == 0 ? 0 : readyAt;
             if (sd.withdrawReadyAt(s) != expReady) modelViolations++;
-            if (overlap > 0) deliveredOverlapProofs++;
+            if (pend > depAfter) deliveredOverlapProofs++;
         } catch {
             if (_shouldSucceed(id, good)) unexpectedProveReverts++;
         }
@@ -197,7 +199,16 @@ contract SDHandler is SDHelpers {
     function withdrawDeposit(uint256 sSeed) external {
         address s = _sellers[sSeed % 2];
         vm.prank(s);
-        try sd.withdrawDeposit() {} catch {}
+        try sd.withdrawDeposit() {
+            if (sd.deposits(s) < sd.openLiability(s)) withdrawViolations++;
+        } catch {}
+    }
+
+    function flushBurn() external {
+        uint256 amt = sd.pendingBurn();
+        try sd.flushBurn() {
+            totalFlushed += amt;
+        } catch {}
     }
 
     function withdrawClaimable(uint256 bSeed) external {
@@ -220,31 +231,35 @@ contract SealedDeliveryFuzzTest is SealedDeliveryTestBase {
         _claimOk(_prom(sellerA, buyer, val, N1));
         uint256 expected = 2 * val < dep ? 2 * val : dep;
         (,, uint256 r, uint64 dl,) = _claimData(id1);
-        assertEq(r, expected);
-        assertEq(sd.reserved(sellerA), expected);
-        assertEq(sd.coverage(sellerA), dep - expected);
+        assertEq(r, 2 * val);
+        assertEq(sd.openLiability(sellerA), 2 * val);
+        assertEq(sd.coverage(sellerA), dep, "a claim moves no funds");
 
         vm.warp(dl);
         vm.expectEmit(true, true, true, true, address(sd));
         emit SealedDelivery.Silent(id1, N1, sellerA, buyer, _paid(expected));
         sd.finalize(id1);
         assertEq(sd.claimable(buyer), _paid(expected));
-        assertEq(_deadBal(), _burnt(expected));
+        assertEq(sd.pendingBurn(), _burnt(expected));
         assertEq(_paid(expected) + _burnt(expected), expected);
         assertEq(sd.deposits(sellerA), dep - expected);
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
         assertEq(sd.coverage(sellerA), dep - expected);
-        assertEq(usdc.balanceOf(address(sd)), dep - _burnt(expected));
+        assertEq(usdc.balanceOf(address(sd)), dep, "a verdict moves no USDC");
     }
 
-    /// Any uint256 value (incl. those whose double overflows) reserves min(2*value, coverage) without reverting.
-    function testFuzz_ClaimReservationNeverOverflows(uint256 dep, uint256 val) public {
+    /// Any uint256 value (incl. those whose double overflows) records a capped liability without reverting.
+    function testFuzz_ClaimLiabilityNeverOverflows(uint256 dep, uint256 val) public {
         dep = bound(dep, 0, 1e30);
         if (dep > 0) _fund(sellerA, dep);
         _claimOk(_prom(sellerA, buyer, val, N1));
         (,, uint256 r,,) = _claimData(id1);
-        uint256 wanted = val > type(uint256).max / 2 ? type(uint256).max : 2 * val;
-        assertEq(r, wanted < dep ? wanted : dep);
+        uint256 cap = type(uint128).max;
+        assertEq(r, val > cap / 2 ? cap : 2 * val);
+        assertEq(sd.openLiability(sellerA), r);
+        skip(WINDOW);
+        sd.finalize(id1);
+        assertEq(sd.claimable(buyer), _paid(r < dep ? r : dep));
     }
 
     function testFuzz_AnswerRestoresFullCoverage(uint256 dep, uint256 val) public {
@@ -254,7 +269,7 @@ contract SealedDeliveryFuzzTest is SealedDeliveryTestBase {
         _claimOk(_prom(sellerA, buyer, val, N1));
         sd.answer(id1, KEY);
         assertEq(sd.coverage(sellerA), dep);
-        assertEq(sd.reserved(sellerA), 0);
+        assertEq(sd.openLiability(sellerA), 0);
     }
 
     function testFuzz_RequestWithdrawRespectsCoverage(uint256 dep, uint256 val, uint256 req) public {
@@ -283,7 +298,7 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
         super.setUp();
         handler = new SDHandler(sd, usdc);
         targetContract(address(handler));
-        bytes4[] memory sels = new bytes4[](11);
+        bytes4[] memory sels = new bytes4[](12);
         sels[0] = SDHandler.deposit.selector;
         sels[1] = SDHandler.claim.selector;
         sels[2] = SDHandler.answer.selector;
@@ -295,27 +310,24 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
         sels[8] = SDHandler.prove.selector;
         sels[9] = SDHandler.requestThenProve.selector;
         sels[10] = SDHandler.attack.selector;
+        sels[11] = SDHandler.flushBurn.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sels}));
     }
 
-    /// deposits >= reserved + pending for every seller (also after proofs that eat queued funds);
-    /// USDC balance >= deposits + claimables.
-    function invariant_SolvencyAndCollateral() public view {
-        uint256 sumDeposits;
-        uint256 sumClaimable;
+    /// pending <= deposits for every seller (also after verdicts that eat queued funds), so coverage cannot
+    /// underflow; a successful withdrawal never leaves the deposit below the open liability.
+    function invariant_PendingNeverExceedsDeposit() public view {
         for (uint256 i; i < 2; ++i) {
             address s = handler.sellerAt(i);
-            assertGe(sd.deposits(s), sd.reserved(s) + sd.pendingWithdrawal(s));
-            sumDeposits += sd.deposits(s);
-            sumClaimable += sd.claimable(s);
-            sumClaimable += sd.claimable(handler.buyerAt(i));
+            assertLe(sd.pendingWithdrawal(s), sd.deposits(s));
+            assertEq(sd.coverage(s), sd.deposits(s) - sd.pendingWithdrawal(s));
         }
-        assertGe(usdc.balanceOf(address(sd)), sumDeposits + sumClaimable);
+        assertEq(handler.withdrawViolations(), 0);
     }
 
-    /// Conservation: every unit is either a deposit, a buyer credit, or burned - nothing else leaks.
-    function invariant_BalanceEqualsDepositsPlusClaimable() public view {
-        uint256 sum;
+    /// Conservation: every unit is a deposit, a buyer credit, or waiting to burn - nothing else leaks.
+    function invariant_BalanceEqualsDepositsPlusClaimablePlusPendingBurn() public view {
+        uint256 sum = sd.pendingBurn();
         for (uint256 i; i < 2; ++i) {
             sum += sd.deposits(handler.sellerAt(i)) + sd.claimable(handler.sellerAt(i));
             sum += sd.claimable(handler.buyerAt(i));
@@ -323,19 +335,20 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
         assertEq(usdc.balanceOf(address(sd)), sum);
     }
 
-    /// The DEAD address holds exactly the burned halves the handler computed independently.
-    function invariant_DeadBalanceEqualsTotalBurned() public view {
-        assertEq(usdc.balanceOf(DEAD_ADDR), handler.totalBurned());
+    /// Burned halves computed independently by the handler are either queued or already at DEAD.
+    function invariant_BurnedEqualsQueuedPlusFlushed() public view {
+        assertEq(usdc.balanceOf(DEAD_ADDR), handler.totalFlushed());
+        assertEq(sd.pendingBurn() + handler.totalFlushed(), handler.totalBurned());
     }
 
     /// Coverage telemetry (visible with -vv): proofs paid partly from queued funds must actually occur.
     function afterInvariant() public view {
         console2.log("proofs", handler.proveCount());
-        console2.log("delivered proofs eating queued funds", handler.deliveredOverlapProofs());
+        console2.log("proofs eating queued funds", handler.deliveredOverlapProofs());
     }
 
-    /// prove() matches the handler's independent model on every success (payout, reservations of other
-    /// claims, pending reduction by the overlap, readyAt cleared at 0) and never reverts for a valid proof.
+    /// prove() matches the handler's independent model on every success (payout, liabilities of other
+    /// claims, pending capped by the deposit, readyAt cleared at 0) and never reverts for a valid proof.
     function invariant_ProveMatchesModel() public view {
         assertEq(handler.modelViolations(), 0);
         assertEq(handler.unexpectedProveReverts(), 0);
@@ -353,9 +366,9 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
         assertEq(fraud, handler.proveCount());
     }
 
-    /// reserved[seller] equals the sum of reservations of that seller's OPEN claims
-    /// (SILENT, DELIVERED and FRAUD claims hold no reservation).
-    function invariant_ReservedMatchesOpenClaims() public view {
+    /// openLiability[seller] equals the sum of liabilities of that seller's OPEN claims
+    /// (SILENT, DELIVERED and FRAUD claims hold none).
+    function invariant_OpenLiabilityMatchesOpenClaims() public view {
         uint256 n = handler.nonceCount();
         uint256 r0;
         uint256 r1;
@@ -367,7 +380,7 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
             if (s == handler.sellerAt(0)) r0 += r;
             else r1 += r;
         }
-        assertEq(sd.reserved(handler.sellerAt(0)), r0);
-        assertEq(sd.reserved(handler.sellerAt(1)), r1);
+        assertEq(sd.openLiability(handler.sellerAt(0)), r0);
+        assertEq(sd.openLiability(handler.sellerAt(1)), r1);
     }
 }

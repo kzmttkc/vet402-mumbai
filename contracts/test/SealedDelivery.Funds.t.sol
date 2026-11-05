@@ -68,13 +68,14 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
         assertEq(sd.deposits(sellerA), 100e6); // not yet withdrawn
     }
 
-    function test_RequestWithdraw_RevertsWhenDippingIntoReservation() public {
+    /// Open claims do not limit the request; withdrawDeposit is where they hold funds back.
+    function test_RequestWithdraw_MayQueuePastOpenLiability() public {
         _fund(sellerA, 100e6);
-        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 2 * 30 = 60
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // liability 2 * 30 = 60
         vm.startPrank(sellerA);
         vm.expectRevert(SealedDelivery.ExceedsCoverage.selector);
-        sd.requestWithdraw(40e6 + 1);
-        sd.requestWithdraw(40e6); // exactly the free coverage
+        sd.requestWithdraw(100e6 + 1);
+        sd.requestWithdraw(100e6);
         vm.stopPrank();
         assertEq(sd.coverage(sellerA), 0);
     }
@@ -164,23 +165,24 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
         assertEq(sd.deposits(sellerA), 80e6);
     }
 
-    /// A pending withdrawal cannot be dodged by a claim: reservation takes only free coverage.
-    function test_WithdrawDeposit_PendingExcludedFromLaterClaims() public {
+    /// A claim after the request still holds the queued funds back, and the verdict takes them.
+    function test_WithdrawDeposit_LaterClaimHoldsQueuedFundsBack() public {
         _fund(sellerA, 100e6);
         vm.prank(sellerA);
         sd.requestWithdraw(80e6);
         _claimOk(_prom(sellerA, buyer, 100e6, N1));
         (,, uint256 r,,) = _claimData(id1);
-        assertEq(r, 20e6);
+        assertEq(r, 200e6);
         vm.warp(block.timestamp + COOLDOWN);
         vm.prank(sellerA);
+        vm.expectRevert(SealedDelivery.LiabilityOpen.selector);
         sd.withdrawDeposit();
-        assertEq(sd.deposits(sellerA), 20e6);
-        assertEq(sd.reserved(sellerA), 20e6);
         sd.finalize(id1);
-        assertEq(sd.claimable(buyer), 10e6); // half of the capped 20e6 reservation
-        assertEq(_deadBal(), 10e6);
+        assertEq(sd.claimable(buyer), 50e6); // half of the whole 100e6 deposit
+        assertEq(_burnTotal(), 50e6);
         assertEq(sd.deposits(sellerA), 0);
+        assertEq(sd.pendingWithdrawal(sellerA), 0);
+        assertEq(sd.withdrawReadyAt(sellerA), 0);
     }
 
     /// The pending withdrawal stays withdrawable after a claim finalizes: tokens are all there.
@@ -188,17 +190,18 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
         _fund(sellerA, 100e6);
         vm.prank(sellerA);
         sd.requestWithdraw(40e6);
-        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 60e6, coverage 0
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // liability 60
         skip(COOLDOWN);
         sd.finalize(id1); // buyer 30, burned 30, deposits 40
         vm.prank(sellerA);
         sd.withdrawDeposit();
         assertEq(usdc.balanceOf(sellerA), 40e6);
         assertEq(sd.deposits(sellerA), 0);
-        assertEq(usdc.balanceOf(address(sd)), 30e6); // exactly the buyer's credit remains
+        assertEq(usdc.balanceOf(address(sd)), 60e6); // the buyer's credit and the queued burn remain
         vm.prank(buyer);
         sd.withdrawClaimable();
         assertEq(usdc.balanceOf(buyer), 30e6);
+        sd.flushBurn();
         assertEq(usdc.balanceOf(address(sd)), 0);
     }
 
@@ -212,17 +215,17 @@ contract SealedDeliveryFundsTest is SealedDeliveryTestBase {
 
     function test_WithdrawClaimable_PaysBuyerAfterSilent() public {
         _fund(sellerA, 100e6);
-        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // reserves 60: buyer 30, burned 30
+        _claimOk(_prom(sellerA, buyer, 30e6, N1)); // payout 60: buyer 30, burned 30
         skip(WINDOW);
         sd.finalize(id1);
-        assertEq(usdc.balanceOf(address(sd)), 70e6); // burn already left the contract
+        assertEq(usdc.balanceOf(address(sd)), 100e6); // the burn waits for flushBurn
 
         vm.expectEmit(true, false, false, true, address(sd));
         emit SealedDelivery.ClaimableWithdrawn(buyer, 30e6);
         vm.prank(buyer);
         sd.withdrawClaimable();
         assertEq(usdc.balanceOf(buyer), 30e6);
-        assertEq(usdc.balanceOf(address(sd)), 40e6);
+        assertEq(usdc.balanceOf(address(sd)), 70e6);
         assertEq(sd.deposits(sellerA), 40e6);
         assertEq(sd.claimable(buyer), 0);
 
