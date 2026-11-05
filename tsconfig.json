@@ -31,7 +31,7 @@
       ]
     }
   },
-  "include": ["src", "scripts", "server"],
+  "include": ["src", "scripts", "server", "api"],
   "exclude": ["server/__tests__"]
 }
 

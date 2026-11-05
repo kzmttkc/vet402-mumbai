@@ -112,31 +112,34 @@ describe('the published screen', () => {
     expect(html).toContain('value="0x85913b5ba5510e03258433ca51c7e9a6e3a4c972766eb9964ba900ceb33aa304"')
   })
 
-  test('the screen text names no wallet, gas, signature, chain or address', () => {
+  test('the screen text names no wallet, gas, signature, address, or chain other than Arc', () => {
     const rows = renderToStaticMarkup(
       <ReceiptList receipts={joinStatic(list, statuses)} onRetryAsNew={() => {}} busy={false} />,
     )
     const text = `${textOf(renderToStaticMarkup(<PublicApp />))} ${textOf(rows)}`
     expect(text).toContain('Check a receipt')
-    // The Arc Studio badge comes with the template and stays on purpose.
-    expect(text.replace('Built with Arc Studio', '')).not.toMatch(/wallet|\bgas\b|signature|\barc\b|ethereum|\bbase\b|polygon|solana|0x[0-9a-f]{40}(?![0-9a-f])/i)
+    expect(text).toContain('Try a dispute yourself')
+    // Arc is the one chain the screen may name, since the try runs there.
+    expect(text).not.toMatch(/wallet|\bgas\b|signature|ethereum|\bbase\b|polygon|solana|0x[0-9a-f]{40}(?![0-9a-f])/i)
   })
 })
 
 describe('vercel.json', () => {
   const config = JSON.parse(readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')) as {
     rewrites: { source: string; destination: string }[]
+    functions: unknown
   }
 
-  test('has one rule and nothing else', () => {
-    expect(Object.keys(config)).toEqual(['rewrites'])
+  test('has one rule and the try function, and nothing else', () => {
+    expect(Object.keys(config)).toEqual(['rewrites', 'functions'])
+    expect(config.functions).toEqual({ 'api/try-dispute.ts': { maxDuration: 60 } })
     expect(config.rewrites).toHaveLength(1)
     expect(config.rewrites[0]?.destination).toBe('/index.html')
   })
 
-  test('the rule takes every path except /assets', () => {
+  test('the rule takes every path except /assets and the try function', () => {
     const source = new RegExp(`^${config.rewrites[0]?.source}$`)
     for (const hit of ['/', '/api/receipts', '/some/page', '/assetsish', '/receipts.html']) expect(source.test(hit)).toBe(true)
-    for (const miss of ['/assets/index.js', '/assets/a/b.css']) expect(source.test(miss)).toBe(false)
+    for (const miss of ['/assets/index.js', '/assets/a/b.css', '/api/try-dispute']) expect(source.test(miss)).toBe(false)
   })
 })
