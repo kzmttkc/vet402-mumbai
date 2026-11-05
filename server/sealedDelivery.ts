@@ -1,5 +1,6 @@
 import path from 'node:path'
 import {
+  fallback,
   BaseError,
   ContractFunctionRevertedError,
   createPublicClient,
@@ -151,6 +152,9 @@ export interface SealedNet {
   pollingMs?: number
 }
 
+/** Arc testnet's public nodes, in the order to try them. */
+export const ARC_RPC_URLS = ['https://rpc.testnet.arc.io', 'https://rpc.testnet.arc.network', 'https://arc-testnet.drpc.org']
+
 export const ARC_NET: SealedNet = { chain: arcTestnet, rpcUrl: requireChain(5042002).rpcUrls[0]! }
 
 /** Null when the variable is missing or not an address. The app then behaves as it did before. */
@@ -198,7 +202,8 @@ export function paymentAuthOf(headerValue: string): { auth: PaymentAuth; signatu
 export type SealedClient = ReturnType<typeof createSealedDelivery>
 
 export function createSealedDelivery({ address, net = ARC_NET }: { address: Address; net?: SealedNet }) {
-  const transport = http(net.rpcUrl)
+  // A contract read every couple of seconds runs into a public node's rate limit, so reads fall over to the next node.
+  const transport = net.rpcUrl === ARC_NET.rpcUrl ? fallback(ARC_RPC_URLS.map((url) => http(url))) : http(net.rpcUrl)
   const publicClient = createPublicClient({ chain: net.chain, transport, pollingInterval: net.pollingMs ?? 1000 })
   const usdc = ARC_USDC as Address
   const domain = { name: 'SealedDelivery', version: '1', chainId: net.chain.id, verifyingContract: address } as const
@@ -526,7 +531,7 @@ export function createSellerWatcher({ client, sellerKey, keyFor, mode, onRejecte
   return {
     tick,
     /** Reads the current position, then watches every `intervalMs` until stopped. */
-    start(intervalMs = 2000) {
+    start(intervalMs = 4000) {
       void tick()
       const timer = setInterval(() => void tick(), intervalMs)
       timer.unref?.()

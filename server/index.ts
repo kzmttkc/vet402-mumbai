@@ -4,7 +4,6 @@ import { GatewayClient } from '@circle-fin/x402-batching/client'
 import { BatchFacilitatorClient } from '@circle-fin/x402-batching/server'
 import { privateKeyToAccount } from 'viem/accounts'
 import { ARC_GATEWAY_API } from '../src/existing/arc-gateway'
-import { requireChain } from '../src/onchain-facts'
 import { AmountError, formatUsdc, parseUsdc } from '../src/onchain-money'
 import { createHoldService, HoldError } from './hold'
 import { createHoldStore } from './holdStore'
@@ -25,7 +24,8 @@ import type { Hex } from 'viem'
 import { mountWorld } from './worldRoutes'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
-const RPC_URL = requireChain(ARC_TESTNET_CHAIN_ID).rpcUrls[0]
+// The other public node: the balance reads below share a rate limit with the contract reads.
+const RPC_URL = 'https://rpc.testnet.arc.network'
 const PORT = Number(process.env.PORT ?? 3001)
 const DATA_DIR = process.env.DATA_DIR ?? path.resolve(import.meta.dirname, '../data')
 

@@ -102,7 +102,7 @@ export class DemoError extends Error {
 const MAX_RUNS = 20
 /** Past the deadline the chain may simply be unreachable. The wait ends this long after it. */
 const CHAIN_WAIT_LIMIT_MS = 120_000
-const DEFAULT_POLL_MS = 1000
+const DEFAULT_POLL_MS = 2000
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 
 export function createDemoService(
