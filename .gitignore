@@ -12,3 +12,4 @@ contracts/cache/
 .agents/
 dist/
 data/
+.world/
