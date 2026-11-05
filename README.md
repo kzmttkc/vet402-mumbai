@@ -2,79 +2,80 @@
 
 When an AI agent pays for an API, nothing guarantees the answer arrives. On 2026-09-28, one Arc mainnet transaction settled 50 purchases by vet402, an AI agent I already own. 31 delivered. 19 were charged and returned nothing it could use. vet402's own requests may explain some of those 19, and 41 of the 50 went to one seller.
 
-When a paid answer is lost, a retry with a new signature pays again. I measured it at the event: on 2026-11-05 at 16:04 UTC, Seller B took transfers `e9cbd6d5-d3a3-4693-9e6d-f9d33a197b31` and `b9d962ef-6276-4f29-a94d-87618539a6fd` for one request, and Circle's record shows 2 transfers.
+A retry with a new signature pays again. I measured it at the event with Seller B, which declares nothing: Circle's record shows 2 transfers, `e9cbd6d5-d3a3-4693-9e6d-f9d33a197b31` and `b9d962ef-6276-4f29-a94d-87618539a6fd`, 2026-11-05 16:04 UTC. [circlefin/arc-nanopayments#43](https://github.com/circlefin/arc-nanopayments/issues/43) describes the same problem (open, 0 comments, read 2026-11-05 UTC).
 
-vet402 answers this in two layers. It asks the seller again with the proof of the payment it already made, and Circle's record still shows one transfer. For a seller with a deposit on Arc, the paid answer also comes as a sealed box and the key comes on a separate request. If the key never comes, vet402 files a claim on the SealedDelivery contract. The seller then publishes the key on Arc, or its deposit pays twice the price.
+With vet402, the answer arrives locked, and the key comes on a separate request. When the key does not come, vet402 sends one claim to SealedDelivery on Arc. The seller then has 60 seconds to put the key on chain. If it stays silent or swaps the answer, its deposit pays 2 x (price + 0.0105 USDC): half to the buyer, the rest burned.
 
-Proof on Arc testnet, 2026-11-05 UTC, each at a price of 0.001 USDC. All rows are in [DEMO.md](DEMO.md).
+Proof on Arc testnet, 2026-11-05 UTC, each at a price of 0.001 USDC. Each seller deposited 0.1 USDC. I run these sellers, so every payout comes from a seller I stopped or told to cheat. All rows are in [DEMO.md](DEMO.md).
 
-| Case | Result | Onchain proof |
-|---|---|---|
-| Seller A lost the answer and kept it | Charged once. Delivered on the second fetch. Circle record: 1 transfer for this payment. | Batch [`0x9318db6d…`](https://explorer.testnet.arc.io/tx/0x9318db6df3722facf089c186ca5b0f6f25440cd5f67d73edbf18508468ef9948) |
-| Seller A closed the key request | Charged once. Key read from Arc. Circle record: 1 transfer for this payment. The run read the key in 9.4 s. | Claim [`0x110749e4…`](https://explorer.testnet.arc.io/tx/0x110749e4ede9ad6cdc2f0579f4819dd752167a72f0f2a8b1c735448ac90245c2), answer [`0xf83c4872…`](https://explorer.testnet.arc.io/tx/0xf83c4872ec5e23c14a5d8d5e7ede1434ee04824fd43120121be961b06978f8c8) |
-| Seller E said nothing | Its deposit paid 0.001 USDC back. It went from 0.01 to 0.008 USDC. | Claim [`0x5ef6c066…`](https://explorer.testnet.arc.io/tx/0x5ef6c066a4cd2090a35e20fb92d921d3442d6a33821cb7a2d9c3b5940f02afee), finalize [`0x89f03886…`](https://explorer.testnet.arc.io/tx/0x89f03886270480150bbdbf08e6d99eecd14c180b395db98e3b93350bc9932a4e) |
-| Seller D tried a wrong key, then said nothing | Wrong key rejected by the contract. Its deposit paid 0.001 USDC back. | Reverted answer [`0x5ec88c38…`](https://explorer.testnet.arc.io/tx/0x5ec88c38d1ce2ae44de817e5ba932ab559e0025b63cd135d01f4625e31e023ab), finalize [`0x3c4414d4…`](https://explorer.testnet.arc.io/tx/0x3c4414d4572b34f034b2e675406c0ebdafd1b7bf9c563f39dc8900c1db24bf5d) |
-| Seller F swapped the answer | The answer did not match the seller's promise. Its deposit paid 0.001 USDC back. | Answer [`0xf5ed51eb…`](https://explorer.testnet.arc.io/tx/0xf5ed51eb0455afd233e0e567a451832911ced19c1178afce1955c2fc1428c820), prove [`0xd74eee02…`](https://explorer.testnet.arc.io/tx/0xd74eee02e9f7f8714ac33a64b140eee26826a7333b4097c65b24057699d88c1b) |
+| Seller | What it did | Result | Onchain proof |
+|---|---|---|---|
+| A | Line stayed up | "Charged once. Delivered." 1.1 s from the start | Transfer `9cf02586-792d-4d80-b499-486f9894a20d`, 0 transactions to the contract |
+| A | Dropped the key request, answered the claim | "Charged once. Key read from Arc." "Circle record: 1 transfer for this payment." 6.8 s from the start | Claim [`0xd67c5d03…`](https://explorer.testnet.arc.io/tx/0xd67c5d030004f9695035aae255e1bd66b75f8ded9a5cda6978997b4bd6ba9bf8), answer [`0x69391c38…`](https://explorer.testnet.arc.io/tx/0x69391c38549ab90e586b012ba944feb94c4ec664852fe81941d6f894ae59d55a) |
+| E | Said nothing | "The seller stayed silent. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0xc5c53a10…`](https://explorer.testnet.arc.io/tx/0xc5c53a10de47f010249539dce24000f4745fcad20d0d85a4c0d7c8a6bdaa7163), finalize [`0xc41cc0cb…`](https://explorer.testnet.arc.io/tx/0xc41cc0cb903d976d4dc18a8fa252d5730646adf962e174b64f4f6b0c76f96b93) |
+| D | Tried a wrong key, then said nothing | "Wrong key rejected by the contract." "The seller stayed silent. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0x254c013b…`](https://explorer.testnet.arc.io/tx/0x254c013b1b7f52b9b663062ab6f2069eff06b6bf54ec529df89eb19c44fa6710), reverted answer [`0x51984021…`](https://explorer.testnet.arc.io/tx/0x51984021d48067cf593d6eef56889c5296d5e756c088fc47f16149166fbdb059), finalize [`0xad945fdd…`](https://explorer.testnet.arc.io/tx/0xad945fdd6a3df5b4d4f034a481a555b2667bcd32fcac422bda4469af4c63d895) |
+| F | Swapped the answer, then gave its key | "The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0x917d7469…`](https://explorer.testnet.arc.io/tx/0x917d74690fa2f67185d0a6efae470250045f25b407ff5cf3c70cd8e146c58bcc), answer [`0x118c709d…`](https://explorer.testnet.arc.io/tx/0x118c709d54106e4bcfe152024212a07453b9c51f74d649a201b06fcbe7d37140), prove [`0x47d1364e…`](https://explorer.testnet.arc.io/tx/0x47d1364ecb9c29e640e6a25829fcda33efeee668401e8a8f68564d1e7a1ba13e) |
 
 ## Architecture
 
-![vet402 architecture: the normal path sends 0 SealedDelivery transactions, and a claim appears only in a dispute](docs/architecture.png)
+![vet402 architecture: a normal payment sends 0 transactions to SealedDelivery, and a claim appears only in a dispute](docs/architecture.png)
 
 Vector version: [docs/architecture.svg](docs/architecture.svg).
 
-When the key arrives over HTTP, that payment causes 0 SealedDelivery transactions. vet402 and the seller send nothing to the chain for it. Circle still settles the payment in a Gateway batch that Circle sends, and one batch can carry many payments. Batch [`0x9318db6d…`](https://explorer.testnet.arc.io/tx/0x9318db6df3722facf089c186ca5b0f6f25440cd5f67d73edbf18508468ef9948) carried 4 of the receipts in DEMO.md.
+A payment that goes normally sends no transaction to SealedDelivery. Measured on Arc testnet, 2026-11-05 18:36 UTC: Seller A with the line up, 1,120 ms, and no claim for that payment among the contract's 4 `Claimed` events, read at 18:49 UTC. Circle still settles the payment in a Gateway batch that Circle sends, and one batch carries many payments. A seller's deposit takes one transaction up front.
 
-The count of 0 comes from the code path `sealedRun` in `server/demo.ts` and from the scene "A switch off" in `scripts/sealed-local-e2e.ts`, which passed on a local anvil chain on 2026-11-05. The sealed runs on Arc testnet in this README all had the key request closed on purpose. `{{TODO: one Arc testnet run with SELLER_DROP_RESPONSE=off, with its transfer id and the claim count}}`
+Before paying, vet402 reads `coverageFor(seller, price)`. If the deposit does not cover the verdict, the seller gets the same treatment as Seller B: no claim and no second charge. A box lost on the way comes back on a second fetch with the same payment, for a seller that declares it.
 
 ## Contract
 
 | | |
 |---|---|
-| Contract | `SealedDelivery`, source in [contracts/SealedDelivery.sol](contracts/SealedDelivery.sol), design in [contracts/README.md](contracts/README.md) |
-| Address | [`0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2`](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2) |
+| Contract | `SealedDelivery`, source in [contracts/SealedDelivery.sol](contracts/SealedDelivery.sol), mechanism and limits in [contracts/README.md](contracts/README.md) |
+| Address | [`0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094) |
 | Network | Arc testnet, chain id 5042002 |
-| Deploy transaction | [`0x36b5f57021d61bbb1c7a1a9b02b5f82330f89cd115c6e0f1c87430266471e4a8`](https://explorer.testnet.arc.io/tx/0x36b5f57021d61bbb1c7a1a9b02b5f82330f89cd115c6e0f1c87430266471e4a8), 2026-11-05 17:47 UTC |
-| Timing arguments | `maxExpiry` 3600 s, `answerWindow` 60 s, `cooldown` 7200 s |
+| Deploy transaction | [`0x8236770b7f8f67512d16091439b7b35906a476db5c33847e472ea8637ffdf288`](https://explorer.testnet.arc.io/tx/0x8236770b7f8f67512d16091439b7b35906a476db5c33847e472ea8637ffdf288), 2026-11-05 18:23 UTC |
+| Arguments | `maxExpiry` 3600 s, `answerWindow` 60 s, `cooldown` 7200 s, `disputeCost` 10500 (0.0105 USDC) |
 | Arc Studio | App id `f6f547d3-78ad-4550-9805-8fc08ac65425`, [workspace](https://studio.arc.io/app/f6f547d3-78ad-4550-9805-8fc08ac65425) |
-| Share link | `{{TODO: Netlify URL from Share app}}` |
-| Live screen | `{{TODO: live screen URL after the public export}}` |
+| Share link | {{SHARE_URL}} |
+| Live screen | {{PUBLIC_URL}} |
 
 I compared the runtime bytecode at that address with a build of `contracts/SealedDelivery.sol` from this repository on 2026-11-05. They match once the immutable values are masked, and the metadata hash matches too.
 
 ## Measured costs
 
-Arc testnet, 2026-11-05 UTC. The fee is gas used times the 25 gwei paid by each of these transactions. Arc counts gas in USDC with 18 decimals.
+The run on this contract, Arc testnet, 2026-11-05 18:24 to 18:28 UTC. The fee is gas used times the 20 gwei each transaction paid. Arc counts gas in USDC with 18 decimals.
 
-| Call | Gas used | Fee in USDC | Example |
+| Call | Gas used | Fee in USDC | Transaction |
 |---|---:|---:|---|
-| `deposit` | 76,905 | 0.0019 | [`0xb74ac810…`](https://explorer.testnet.arc.io/tx/0xb74ac810b86ae0a43c84a8e699ccda27c7ad626097118af3541535504be1c55b) |
-| `claim` | 268,317 | 0.0067 | [`0xe458fddb…`](https://explorer.testnet.arc.io/tx/0xe458fddb561de5fb6425cf7c2775b26a465623d138187ed577d1d868f3528200) |
-| `answer` | 87,355 | 0.0022 | [`0xf83c4872…`](https://explorer.testnet.arc.io/tx/0xf83c4872ec5e23c14a5d8d5e7ede1434ee04824fd43120121be961b06978f8c8) |
-| `answer` with a wrong key, reverted | 29,234 | 0.0007 | [`0x5ec88c38…`](https://explorer.testnet.arc.io/tx/0x5ec88c38d1ce2ae44de817e5ba932ab559e0025b63cd135d01f4625e31e023ab) |
-| `finalize` | 98,681 | 0.0025 | [`0x89f03886…`](https://explorer.testnet.arc.io/tx/0x89f03886270480150bbdbf08e6d99eecd14c180b395db98e3b93350bc9932a4e) |
-| `prove` on a 70 byte answer | 123,414 | 0.0031 | [`0xd74eee02…`](https://explorer.testnet.arc.io/tx/0xd74eee02e9f7f8714ac33a64b140eee26826a7333b4097c65b24057699d88c1b) |
-| `flushBurn` | 57,233 | 0.0014 | [`0xd5b8e351…`](https://explorer.testnet.arc.io/tx/0xd5b8e3510fa64e985eeca64c0edfe8b852f58d5ad47d7ef47fd7683b7b461a09) |
-| `withdrawClaimable` | 53,271 | 0.0013 | [`0x6f06623e…`](https://explorer.testnet.arc.io/tx/0x6f06623e2c72f1aaf3e4e19ff2ba9a3ef6e8a9a32bea258da64bf3879fb95c40) |
+| `deposit` | 76,917 | 0.0015 | [`0x04152b3e…`](https://explorer.testnet.arc.io/tx/0x04152b3e50acdcf1abaac7b364dc166498891cdd92c3b141d62c8b6513cd0c6d) |
+| `claim` | 268,460 | 0.0054 | [`0x254c013b…`](https://explorer.testnet.arc.io/tx/0x254c013b1b7f52b9b663062ab6f2069eff06b6bf54ec529df89eb19c44fa6710) |
+| `answer` | 87,400 | 0.0017 | [`0x69391c38…`](https://explorer.testnet.arc.io/tx/0x69391c38549ab90e586b012ba944feb94c4ec664852fe81941d6f894ae59d55a) |
+| `answer` with a wrong key, reverted | 29,279 | 0.0006 | [`0x51984021…`](https://explorer.testnet.arc.io/tx/0x51984021d48067cf593d6eef56889c5296d5e756c088fc47f16149166fbdb059) |
+| `finalize` | 98,681 | 0.0020 | [`0xad945fdd…`](https://explorer.testnet.arc.io/tx/0xad945fdd6a3df5b4d4f034a481a555b2667bcd32fcac422bda4469af4c63d895) |
+| `prove` on a 70 byte answer | 123,426 | 0.0025 | [`0x47d1364e…`](https://explorer.testnet.arc.io/tx/0x47d1364ecb9c29e640e6a25829fcda33efeee668401e8a8f68564d1e7a1ba13e) |
+| `flushBurn` | 57,278 | 0.0011 | [`0x0ca5d690…`](https://explorer.testnet.arc.io/tx/0x0ca5d690fb1d308dc2486d842a71e9de6bd2308acef6f25e41bdd3aa41b1d21a) |
+| `withdrawClaimable` | 53,249 | 0.0011 | [`0x436a0d25…`](https://explorer.testnet.arc.io/tx/0x436a0d25d21e4d11e1e2f80a083e0a41efbd3ca174ad5db0ff3d427b6116fb99) |
 
-Deposits read from the contract on 2026-11-05 at 18:15 UTC: Seller A 0.01 USDC, Seller D 0.008, Seller E 0.008, Seller F 0.008. Each started at 0.01. The buyer withdrew its 0.003 USDC of credits in [`0x6f06623e…`](https://explorer.testnet.arc.io/tx/0x6f06623e2c72f1aaf3e4e19ff2ba9a3ef6e8a9a32bea258da64bf3879fb95c40).
+Deposits read from the contract on 2026-11-05 at 18:49 UTC: Seller A 0.1 USDC, Seller D 0.077, Seller E 0.077, Seller F 0.077. Each started at 0.1. The buyer withdrew 0.0345 USDC, three credits of 0.0115, in [`0x436a0d25…`](https://explorer.testnet.arc.io/tx/0x436a0d25d21e4d11e1e2f80a083e0a41efbd3ca174ad5db0ff3d427b6116fb99). Three `flushBurn` calls burned 0.0115 USDC each.
 
-What these costs mean for a sub-cent price is in [contracts/README.md](contracts/README.md#limits).
+A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and a verdict repays the dispute. [contracts/README.md](contracts/README.md#the-economics) has the numbers.
 
 ## How to check this, in order
 
 With nothing installed:
 
-1. Open the [contract](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2) on the explorer.
-2. Open claim [`0x110749e4…`](https://explorer.testnet.arc.io/tx/0x110749e4ede9ad6cdc2f0579f4819dd752167a72f0f2a8b1c735448ac90245c2) and answer [`0xf83c4872…`](https://explorer.testnet.arc.io/tx/0xf83c4872ec5e23c14a5d8d5e7ede1434ee04824fd43120121be961b06978f8c8). The `KeyRevealed` event holds the key.
-3. Open reverted answer [`0x5ec88c38…`](https://explorer.testnet.arc.io/tx/0x5ec88c38d1ce2ae44de817e5ba932ab559e0025b63cd135d01f4625e31e023ab). The chain refused a wrong key.
-4. Run the Arkiv query further down. It returns the payment entity and the settlement entity for transfer `1302d43e-32bb-4e10-a765-4c15488780d9`.
-5. Open the live screen, listed in the contract table. It shows receipts and checks them, and nothing on it can pay.
+1. Open the [contract](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094) on the explorer.
+2. Open claim [`0xd67c5d03…`](https://explorer.testnet.arc.io/tx/0xd67c5d030004f9695035aae255e1bd66b75f8ded9a5cda6978997b4bd6ba9bf8) and answer [`0x69391c38…`](https://explorer.testnet.arc.io/tx/0x69391c38549ab90e586b012ba944feb94c4ec664852fe81941d6f894ae59d55a). The `KeyRevealed` event holds the key.
+3. Open reverted answer [`0x51984021…`](https://explorer.testnet.arc.io/tx/0x51984021d48067cf593d6eef56889c5296d5e756c088fc47f16149166fbdb059). The chain refused a wrong key.
+4. Open finalize [`0xc41cc0cb…`](https://explorer.testnet.arc.io/tx/0xc41cc0cb903d976d4dc18a8fa252d5730646adf962e174b64f4f6b0c76f96b93). The `Silent` event names Seller E and the 0.0115 USDC credit.
+5. Run the Arkiv query further down. It returns the payment entity and the settlement entity for transfer `54df1711-eb16-4cb2-8feb-2a3636ec2675`.
+6. Open the live screen, listed in the contract table. It shows receipts and checks them, and nothing on it can pay.
 
-With a clone (commands below, results from a clean clone of commit `0676762` on 2026-11-05):
+With a clone (commands below, results from a clean clone of commit `78fa3a9` on 2026-11-05):
 
-6. `forge test`: 214 tests passed.
-7. `bash scripts/test.sh`: 299 tests passed.
-8. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures, and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
+7. `forge test`: 218 tests passed.
+8. `bash scripts/test.sh`: 299 tests passed.
+9. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
 
 ## Run it
 
@@ -90,7 +91,7 @@ forge install foundry-rs/forge-std --no-git
 Start the backend in one terminal and the screen in another:
 
 ```bash
-SEALED_DELIVERY_ADDRESS=0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2 npx bun run server/index.ts
+SEALED_DELIVERY_ADDRESS=0x20ce7bbfaf66b28cb917f9331a8960eb563f2094 npx bun run server/index.ts
 ```
 
 ```bash
@@ -102,10 +103,10 @@ Open http://localhost:5173. The first backend start writes fresh keys for the bu
 To pay for real on Arc testnet:
 
 1. Print the buyer address with `cast wallet address --private-key <BUYER_PRIVATE_KEY from .env>` and send it testnet USDC from https://faucet.circle.com.
-2. Run `SEALED_DELIVERY_ADDRESS=0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2 npx bun run scripts/sealed-setup.ts --dry-run` to see the plan, then run it again without `--dry-run`. It sends each of Seller A, D, E and F 0.02 USDC for gas and has each deposit 0.01 USDC, so 0.12 USDC in total.
-3. Set a hold on the screen, then press "Try Seller A", "Try Seller B", "Try Seller D", "Try Seller E" or "Try Seller F".
+2. Run `SEALED_DELIVERY_ADDRESS=0x20ce7bbfaf66b28cb917f9331a8960eb563f2094 npx bun run scripts/sealed-setup.ts --dry-run` to see the plan, then run it again without `--dry-run`. It sends each of Seller A, D, E and F 0.03 USDC for gas and has each deposit 0.1 USDC, so 0.52 USDC in total.
+3. Set a hold on the screen, then press "Seller A, line stays up", "Try Seller A", "Try Seller B", "Try Seller D", "Try Seller E" or "Try Seller F".
 
-The sellers close the connection on purpose. Set `SELLER_DROP_RESPONSE=off` on the backend to see the normal path, where the key arrives over HTTP.
+The sellers close the connection on purpose, apart from the "line stays up" button.
 
 | Optional setting | What it turns on |
 |---|---|
@@ -117,7 +118,7 @@ The sellers close the connection on purpose. Set `SELLER_DROP_RESPONSE=off` on t
 
 ## Boundary
 
-Pre-event work ends at tag `mumbai-pre-event-2026` in the older repository. This repository starts after it, and the last two lines of this section name the only files here that I did not write at the event.
+Pre-event work ends at tag `mumbai-pre-event-2026` in the older repository. This repository starts after it, and the last two lines of this section name what is here that I did not write at the event.
 
 Pre-event, before 2026-11-05 15:30 UTC:
 
@@ -134,11 +135,11 @@ Built at ETHGlobal Mumbai:
 - First event commit: `4c452189d8a3943a46c5257d8bd1da448585f066` at 2026-11-05 15:30 UTC.
 - Arc Studio app id: `f6f547d3-78ad-4550-9805-8fc08ac65425`.
 - Brought in from before the event: `src/existing/arc-gateway.ts`, copied from the tag. Its first line says so.
-- Generated by Arc Studio at commit `a6e3fa2`: the starter app, including `AGENTS.md`, `scripts/compass-*`, `scripts/self-deploy.ts` and `scripts/fetch-abi.ts`.
+- Generated by Arc Studio at commit `a6e3fa2`: the starter app. Commit `341edd6` removed the parts this project does not use.
 
 ## Receipts on Arkiv
 
-vet402 keeps a copy of every receipt on Arkiv's Rabdi testnet, so a receipt stays readable when this app is down. The receipts page reads Arkiv directly from the browser.
+vet402 keeps a copy of each receipt on Arkiv's Rabdi testnet, so a receipt stays readable when this app is down. The receipts page reads Arkiv directly from the browser.
 
 Writer address: `0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5`
 
@@ -149,7 +150,7 @@ One query you can run. It returns the payment entity and the settlement entity f
 ```bash
 curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'1302d43e-32bb-4e10-a765-4c15488780d9'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'54df1711-eb16-4cb2-8feb-2a3636ec2675'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
 ```
 
 Explorer: https://rabdi.explorer.arkiv.network
@@ -158,19 +159,19 @@ More in [arkiv/](arkiv/schema.md).
 
 ## World ID
 
-vet402 pays with my money and its keys sit on my server. The credential is Proof of Human. The only question at the moment of a hold is whether a person, and not the agent, released the money. Nothing here needs to know who that person is.
+The moment that needs a person is the hold. vet402 pays with my money and its keys sit on my server. The credential is Proof of Human, because the only question is whether a person, and not the agent, released the money. Nothing here needs to know who that person is.
 
-The backend signs each request and sends each result to World's verify endpoint before it creates a hold. One session is created per budget. Each hold then needs a session proof with that hold's id and amount as its signal, and the backend compares the session id with the stored one in full. An approval made for another hold is refused with "Not approved: this approval is for another hold." Cancel leaves "Not approved. Nothing was held or paid."
+One session is created per budget. Each hold then needs a session proof of that session, with the hold's id and amount as its signal. The backend signs each request and sends each result to World's verify endpoint before it creates a hold. It accepts a proof only if the session matches the stored one in full, the signal matches this hold, and the session nullifier has never been used. An approval made for another hold reads "Not approved: this approval is for another hold." Cancel request reads "Not approved. Nothing was held or paid."
 
-The demo runs in World's staging Simulator. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
+The demo runs in World's staging Simulator and has not run in the real World App. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
 ## After judging
 
-The hold and the recovery rule go into vet402's production buyer, which paid through Gateway on Arc mainnet on 2026-09-28. The receipt writer keeps writing one Arkiv entity per payment on Rabdi until Arkiv announces a mainnet.
+The buyer side of this goes into vet402's production buyer, which paid through Gateway on Arc mainnet on 2026-09-28. The receipt writer keeps writing one Arkiv entity per payment on Rabdi until Arkiv announces a mainnet.
 
 ## How I used AI
 
-Arc Studio started the app (session `mumbai`). After `arc-studio pull`, Claude Code wrote code and these documents while I set the scope and made the decisions.
+Arc Studio started the app and the contract (session `mumbai`). After `arc-studio pull`, Claude Code wrote code and these documents while I set the scope and made the decisions.
 
 ## License
 
