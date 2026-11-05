@@ -7,6 +7,8 @@ import { createHoldService, HoldError } from './hold'
 import { createHoldStore } from './holdStore'
 import { loadKeys } from './keys'
 import { createHoldPorts } from './ports'
+import { createJobPorts } from './jobPorts'
+import { createJobService, JobError } from './jobs'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
 const RPC_URL = requireChain(ARC_TESTNET_CHAIN_ID).rpcUrls[0]
@@ -23,6 +25,21 @@ const holds = createHoldService(
   createHoldPorts(ARC_TESTNET_CHAIN_ID, buyerClient, holdClient),
   createHoldStore(DATA_DIR),
 )
+
+const jobs = createJobService(
+  createJobPorts({ chainId: ARC_TESTNET_CHAIN_ID, rpcUrl: RPC_URL, holdKey: keys.hold, holdClient }),
+)
+
+const MAX_JOB_CHARS = 500
+
+function sendJobError(res: express.Response, error: unknown) {
+  if (error instanceof JobError) {
+    res.status(error.code === 'BUSY' ? 409 : 400).json({ error: error.message, code: error.code })
+    return
+  }
+  console.error('job failed:', error instanceof Error ? error.message : error)
+  res.status(502).json({ error: 'Something went wrong. Please try again.' })
+}
 
 const app = express()
 app.use(express.json())
@@ -61,6 +78,28 @@ app.post('/hold', async (req, res) => {
     }
     console.error('hold failed:', error instanceof Error ? error.message : error)
     res.status(502).json({ error: 'The hold could not be set up. Please try again.' })
+  }
+})
+
+app.post('/jobs/plan', async (req, res) => {
+  const job = (req.body as { job?: unknown })?.job
+  if (typeof job !== 'string' || job.length > MAX_JOB_CHARS) {
+    res.status(400).json({ error: 'Describe the job in a sentence or two.' })
+    return
+  }
+  try {
+    res.json(await jobs.plan(job))
+  } catch (error) {
+    sendJobError(res, error)
+  }
+})
+
+// The user approves the amount. The seller was chosen by the agent and is never picked here.
+app.post('/jobs/:id/approve', async (req, res) => {
+  try {
+    res.json(await jobs.approve(req.params.id))
+  } catch (error) {
+    sendJobError(res, error)
   }
 })
 

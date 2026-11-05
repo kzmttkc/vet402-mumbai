@@ -1,5 +1,6 @@
 import { RefreshCw } from 'lucide-react'
 import { HoldCard } from '@/components/HoldCard'
+import { JobCard } from '@/components/JobCard'
 import { useBalances } from '@/hooks/useBalances'
 
 const formatDisplay = (value: string) =>
@@ -22,6 +23,7 @@ export default function App() {
         </div>
 
         <HoldCard data={data} reload={reload} />
+        <JobCard reload={reload} />
 
         {failed && (
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--danger)]" role="alert">
