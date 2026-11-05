@@ -90,6 +90,8 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
 
     mapping(address => uint256) public deposits;
     mapping(address => uint256) public openLiability;
+    /// @notice When the seller last revealed a key. Withdrawals wait COOLDOWN - MAX_EXPIRY after it.
+    mapping(address => uint256) public lastAnswerAt;
     mapping(address => uint256) public pendingWithdrawal;
     mapping(address => uint256) public withdrawReadyAt;
     mapping(address => uint256) public claimable;
@@ -125,6 +127,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     error CooldownActive();
     error NothingToWithdraw();
     error LiabilityOpen();
+    error ProofWindowOpen();
     error TimestampOverflow();
 
     event Claimed(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 liability, uint64 deadline);
@@ -181,7 +184,9 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     /// @dev Coverage can change before a claim; values whose double exceeds uint256 return false.
     function coverageFor(address seller, uint256 value) public view returns (bool) {
         if (value > type(uint256).max / 2) return false;
-        return coverage(seller) >= 2 * value;
+        uint256 uncommitted = coverage(seller);
+        uint256 held = openLiability[seller];
+        return uncommitted >= held && uncommitted - held >= 2 * value;
     }
 
     /// @notice Records a signed key-revelation promise bound to one buyer; moves no funds and reserves none.
@@ -234,6 +239,7 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         if (keccak256(abi.encodePacked(key)) != c.keyHash) revert WrongKey();
         c.status = Status.DELIVERED;
         openLiability[c.seller] -= c.liability;
+        lastAnswerAt[c.seller] = block.timestamp;
         emit KeyRevealed(claimId, c.paymentNonce, key);
     }
 
@@ -312,6 +318,8 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
         uint256 pending = pendingWithdrawal[msg.sender];
         if (pending == 0) revert NothingPending();
         if (block.timestamp < withdrawReadyAt[msg.sender]) revert CooldownActive();
+        // A key that just came out must stay provable, so the deposit waits for the proof window.
+        if (block.timestamp < lastAnswerAt[msg.sender] + COOLDOWN - MAX_EXPIRY) revert ProofWindowOpen();
         uint256 balance = deposits[msg.sender];
         uint256 held = openLiability[msg.sender];
         uint256 free = balance > held ? balance - held : 0;

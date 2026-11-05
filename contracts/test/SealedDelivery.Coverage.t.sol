@@ -59,12 +59,12 @@ contract SealedDeliveryCoverageForTest is SealedDeliveryTestBase {
     }
 
     /// Coverage is deposits minus the queue: open claims do not move it, a queued withdrawal does.
-    function test_CoverageFor_IgnoresOpenClaimsAndFollowsTheQueue() public {
+    function test_CoverageFor_CountsOpenClaimsAndFollowsTheQueue() public {
         _fund(sellerA, 400e6);
         assertTrue(sd.coverageFor(sellerA, 200e6));
         _claimOk(_prom(sellerA, buyer, 100e6, N1));
-        assertTrue(sd.coverageFor(sellerA, 200e6), "an open claim leaves coverage alone");
-        assertFalse(sd.coverageFor(sellerA, 200e6 + 1));
+        assertTrue(sd.coverageFor(sellerA, 100e6), "an open claim counts against what a buyer can rely on");
+        assertFalse(sd.coverageFor(sellerA, 100e6 + 1));
         assertEq(sd.openLiability(sellerA), 200e6, "buyers can read the open total separately");
         sd.answer(id1, KEY);
         assertTrue(sd.coverageFor(sellerA, 200e6));
@@ -119,10 +119,16 @@ contract SealedDeliveryCoverageForTest is SealedDeliveryTestBase {
             }
         }
         cov = sd.coverage(sellerA);
-        bool expected = query <= MAX / 2 && cov >= 2 * query;
+        uint256 held = sd.openLiability(sellerA);
+        bool expected = query <= MAX / 2 && cov >= held && cov - held >= 2 * query;
         assertEq(sd.coverageFor(sellerA, query), expected);
-        // boundary values around the current coverage
-        assertTrue(sd.coverageFor(sellerA, cov / 2));
-        assertEq(sd.coverageFor(sellerA, cov / 2 + 1), false);
+        // boundary values around what is left after open claims
+        if (cov >= held) {
+            uint256 free = cov - held;
+            assertTrue(sd.coverageFor(sellerA, free / 2));
+            assertEq(sd.coverageFor(sellerA, free / 2 + 1), false);
+        } else {
+            assertEq(sd.coverageFor(sellerA, 0), false);
+        }
     }
 }

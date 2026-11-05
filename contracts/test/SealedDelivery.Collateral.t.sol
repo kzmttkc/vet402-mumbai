@@ -121,7 +121,8 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
         assertEq(usdc.balanceOf(sellerA), 3 * V);
 
         sd.answer(id1, KEY);
-        _withdraw(sellerA); // no second cooldown
+        skip(COOLDOWN - MAX_EXPIRY); // the proof window, not a second cooldown
+        _withdraw(sellerA);
         assertEq(usdc.balanceOf(sellerA), 5 * V);
         assertEq(sd.deposits(sellerA), 0);
         assertEq(sd.pendingWithdrawal(sellerA), 0);
@@ -268,18 +269,28 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
 
     // ---------------------------------------------------------------- what the design does not cover
 
-    /// Documents the limit: answer releases the liability, so once the cooldown is over the seller can leave
-    /// right after a dishonest answer and a later proof gets nothing. The buyer's time to prove is the slack
-    /// in COOLDOWN beyond MAX_EXPIRY + ANSWER_WINDOW, which is why a deployment should set a generous COOLDOWN.
-    function test_Limit_WithdrawRightAfterAnswerOutrunsTheProof() public {
+    function test_WithdrawRightAfterAnswerWaitsForTheProofWindow() public {
         _fund(sellerA, 2 * V);
         _request(sellerA, 2 * V);
         vm.warp(T0 + COOLDOWN);
         (bytes32 id, bytes memory ct) = _sealedClaim(sellerA, buyer, V, N1, KEY, PLAIN, false);
         sd.answer(id, KEY);
-        _withdraw(sellerA);
+        vm.prank(sellerA);
+        vm.expectRevert(SealedDelivery.ProofWindowOpen.selector);
+        sd.withdrawDeposit();
         sd.prove(id, ct, KEY);
-        assertEq(sd.claimable(buyer), 0);
-        assertEq(sd.fraudCount(sellerA), 1, "the record stays even with nothing to take");
+        assertGt(sd.claimable(buyer), 0, "the proof was paid from the deposit");
+        assertEq(sd.fraudCount(sellerA), 1);
+    }
+
+    function test_WithdrawAfterTheProofWindowIsFree() public {
+        _fund(sellerA, 2 * V);
+        _request(sellerA, 2 * V);
+        vm.warp(T0 + COOLDOWN);
+        (bytes32 id,) = _sealedClaim(sellerA, buyer, V, N1, KEY, PLAIN, false);
+        sd.answer(id, KEY);
+        vm.warp(block.timestamp + COOLDOWN - MAX_EXPIRY);
+        _withdraw(sellerA);
+        assertEq(sd.deposits(sellerA), 0);
     }
 }
