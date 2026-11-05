@@ -1,3 +1,4 @@
+import type { PublicSealedFile } from './openSealed'
 import type { ReceiptStatus } from './receiptStatus'
 
 /** Where the export writes under public/, and so where the published screen reads. */
@@ -5,6 +6,7 @@ export const STATIC_PATHS = {
   receipts: '/static/receipts.json',
   statuses: '/static/statuses.json',
   check: '/static/check.json',
+  sealed: '/static/sealed.json',
 } as const
 
 /** One exported row. `ref` joins it to its status and means nothing else. */
@@ -51,7 +53,7 @@ export interface ReceiptView {
   status: ReceiptStatus
   batchTx: string | null
   outcome: string[]
-  demo: 'a' | 'b' | 'compare' | null
+  demo: 'a' | 'b' | 'compare' | 'd' | 'e' | 'f' | null
   comparison: boolean
 }
 
@@ -117,5 +119,15 @@ export async function loadCheckFile(fetchImpl: typeof fetch = fetch): Promise<Ch
     return { eventNonce: file?.eventNonce ?? null, eventTransferId: file?.eventTransferId ?? null }
   } catch {
     return { eventNonce: null, eventTransferId: null }
+  }
+}
+
+/** With no export there is nothing to open. */
+export async function loadSealedFile(fetchImpl: typeof fetch = fetch): Promise<PublicSealedFile> {
+  try {
+    const file = (await readJson(STATIC_PATHS.sealed, fetchImpl)) as Partial<PublicSealedFile> | null
+    return { contract: file?.contract ?? null, answers: Array.isArray(file?.answers) ? file.answers : [] }
+  } catch {
+    return { contract: null, answers: [] }
   }
 }

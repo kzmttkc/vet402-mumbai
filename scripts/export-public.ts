@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { createReceiptStore } from '../server/receiptStore'
 import type { ReceiptRow } from '../server/receiptStore'
+import type { PublicSealedFile } from '../src/lib/openSealed'
 import { COMPARISON_LINE } from '../src/lib/receiptStatus'
 import type { CheckFile, PublicReceiptsFile, PublicStatusesFile } from '../src/lib/publicData'
 import { formatUsdc } from '../src/onchain-money'
@@ -42,11 +43,22 @@ export interface Exported {
   receipts: PublicReceiptsFile
   statuses: PublicStatusesFile
   check: CheckFile
+  sealed: PublicSealedFile
 }
 
-export function toPublic(rows: ReceiptRow[]): Exported {
+/** Hex only, of the length it should be. The contract's own check is what makes the answer true. */
+const HASH32 = /^0x[0-9a-fA-F]{64}$/
+
+function assertSealed(ref: string, row: NonNullable<ReceiptRow['sealed']>) {
+  if (!HASH32.test(row.claimId) || !HASH32.test(row.plaintextHash)) throw new Error(`${ref}: a sealed hash is malformed. Nothing was written.`)
+  if (!/^0x[0-9a-fA-F]*$/.test(row.ciphertext)) throw new Error(`${ref}: the ciphertext is malformed. Nothing was written.`)
+  if (!/^[0-9]+$/.test(row.keyBlock)) throw new Error(`${ref}: the key block is malformed. Nothing was written.`)
+}
+
+export function toPublic(rows: ReceiptRow[], sealedContract: string | null = null): Exported {
   const receipts: PublicReceiptsFile = { receipts: [] }
   const statuses: PublicStatusesFile = { statuses: {} }
+  const sealed: PublicSealedFile = { contract: sealedContract, answers: [] }
 
   rows.forEach((row, index) => {
     const ref = `r${index}`
@@ -65,30 +77,57 @@ export function toPublic(rows: ReceiptRow[]): Exported {
       outcome,
     })
     statuses.statuses[ref] = { status: row.status, batchTx: row.batchTx }
+    if (row.sealed) {
+      assertSealed(ref, row.sealed)
+      // Only these fields, named one by one. The key is not among them: it is read from the chain.
+      sealed.answers.push({
+        ref,
+        sellerName: row.sellerName,
+        ciphertext: row.sealed.ciphertext,
+        claimId: row.sealed.claimId,
+        plaintextHash: row.sealed.plaintextHash,
+        keyBlock: row.sealed.keyBlock,
+      })
+    }
   })
 
   const event = pickEventPayment(rows)
   const check: CheckFile = { eventNonce: event?.nonce ?? null, eventTransferId: event?.transferId ?? null }
-  return { receipts, statuses, check }
+  return { receipts, statuses, check, sealed }
 }
 
-export function exportPublic({ dataDir, outDir }: { dataDir: string; outDir: string }) {
+export function exportPublic({
+  dataDir,
+  outDir,
+  sealedContract = null,
+}: {
+  dataDir: string
+  outDir: string
+  sealedContract?: string | null
+}) {
   const rows = readRows(dataDir)
-  const exported = toPublic(rows)
+  const exported = toPublic(rows, sealedContract)
   const files = {
     'receipts.json': exported.receipts,
     'statuses.json': exported.statuses,
     'check.json': exported.check,
+    'sealed.json': exported.sealed,
   }
   // Every file is built and checked before the first one is written.
   const texts = Object.entries(files).map(([name, content]) => [name, JSON.stringify(content)] as const)
-  for (const [name, text] of texts) {
+  // The contract's public address is the one address the sealed file holds, and only in its named field.
+  const checked = texts.map(([name, text]) =>
+    name === 'sealed.json' ? ([name, JSON.stringify({ ...exported.sealed, contract: null })] as const) : ([name, text] as const),
+  )
+  for (const [name, text] of checked) {
     if (ADDRESS.test(text)) throw new Error(`${name} would hold an address. Nothing was written.`)
   }
   mkdirSync(outDir, { recursive: true })
   for (const [name, text] of texts) writeFileSync(path.join(outDir, name), text)
   return { rows: rows.length, event: pickEventPayment(rows) }
 }
+
+const parseSealedContract = (value: string | undefined) => (value && /^0x[0-9a-fA-F]{40}$/.test(value) ? value : null)
 
 if (import.meta.main) {
   const option = (name: string) => {
@@ -98,7 +137,7 @@ if (import.meta.main) {
   const root = path.resolve(import.meta.dirname, '..')
   const dataDir = option('--data') ?? process.env.DATA_DIR ?? path.join(root, 'data')
   const outDir = option('--out') ?? path.join(root, 'public', 'static')
-  const { rows, event } = exportPublic({ dataDir, outDir })
+  const { rows, event } = exportPublic({ dataDir, outDir, sealedContract: parseSealedContract(process.env.SEALED_DELIVERY_ADDRESS) })
   console.log(`Exported ${rows} receipts to ${outDir}.`)
   console.log(
     event
