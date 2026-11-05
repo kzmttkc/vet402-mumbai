@@ -11,6 +11,9 @@ type KeyName =
   | 'SELLER_A_PRIVATE_KEY'
   | 'SELLER_B_PRIVATE_KEY'
   | 'SELLER_C_PRIVATE_KEY'
+  | 'SELLER_D_PRIVATE_KEY'
+  | 'SELLER_E_PRIVATE_KEY'
+  | 'SELLER_F_PRIVATE_KEY'
 
 type Env = Record<string, string | undefined>
 
@@ -64,4 +67,13 @@ export function loadKeys(env: Env = process.env, envPath: string = DEFAULT_ENV_P
     throw new Error('Buyer, hold and seller keys must all be different. The hold key is never a seller.')
   }
   return keys
+}
+
+/** The sellers that exist only with the contract. Without its address these keys are never made. */
+export function loadSealedSellerKeys(env: Env = process.env, envPath: string = DEFAULT_ENV_PATH) {
+  return {
+    sellerD: loadOrCreate('SELLER_D_PRIVATE_KEY', env, envPath),
+    sellerE: loadOrCreate('SELLER_E_PRIVATE_KEY', env, envPath),
+    sellerF: loadOrCreate('SELLER_F_PRIVATE_KEY', env, envPath),
+  }
 }

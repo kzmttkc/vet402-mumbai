@@ -11,6 +11,6 @@ trap 'rm -rf "$TMP"' EXIT
 if command -v bun > /dev/null 2>&1; then BUN=(bun); else BUN=(npx --yes bun); fi
 
 cd "$TMP"
-env -u DATA_DIR -u BUYER_PRIVATE_KEY -u HOLD_PRIVATE_KEY \
+env -u DATA_DIR -u BUYER_PRIVATE_KEY -u HOLD_PRIVATE_KEY -u SEALED_DELIVERY_ADDRESS \
   -u ARKIV_WRITER_KEY -u ARKIV_ACCESS_KEY -u ARKIV_OTHER_KEY -u SELLER_TTL_SECONDS \
   "${BUN[@]}" test "$ROOT/server/__tests__"

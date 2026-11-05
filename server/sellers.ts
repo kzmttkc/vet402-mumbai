@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import type { Request, Response } from 'express'
+import type { Hex } from 'viem'
 import {
   ARC_CAIP2,
   ARC_GATEWAY_DOMAIN_NAME,
@@ -42,6 +45,17 @@ export interface SellerConfig {
   confirmCharged: (nonce: string, payer: string) => Promise<boolean>
   /** The switch: close the connection after settling and before the first response. */
   dropAfterSettle: () => boolean
+  /** With this, answers and keys survive a restart, so an open claim can still be answered. */
+  storeFile?: string
+  /** With this, the paid answer is a sealed box and the key comes on a separate request. */
+  sealing?: SellerSealing
+}
+
+/** How a seller seals. Without it the seller answers in the clear, as it always did. */
+export interface SellerSealing {
+  seal(answer: string, payment: { from: string; nonce: string; value: string }): Promise<{ box: unknown; key: Hex }>
+  /** False closes the connection when the key is asked for. The switch, or a seller that never hands it over. */
+  handsOverKey: () => boolean
 }
 
 /** Built from constants, because Gateway's supported list does not return this network. */
@@ -74,6 +88,8 @@ interface Stored {
   headerHash: string
   body: string
   settledHeader: string
+  /** The key for the sealed answer. Only a seller that seals has one. */
+  key?: Hex
 }
 
 const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64')
@@ -105,9 +121,25 @@ function parsePayment(header: string): ParsedPayment | null {
   }
 }
 
-/** An Express handler for one seller. */
+function readStored(file: string): [string, Stored][] {
+  if (!existsSync(file)) return []
+  return Object.entries(JSON.parse(readFileSync(file, 'utf8')) as Record<string, Stored>)
+}
+
+function writeStored(file: string, stored: Map<string, Stored>): void {
+  mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.tmp`
+  writeFileSync(temporary, JSON.stringify(Object.fromEntries(stored)), { mode: 0o600 })
+  renameSync(temporary, file)
+}
+
+/** An Express handler for one seller. A sealing seller also has `key` for the key request, and `keyFor` for its lookout. */
 export function createSeller(config: SellerConfig) {
-  const stored = new Map<string, Stored>()
+  const stored = new Map<string, Stored>(config.storeFile ? readStored(config.storeFile) : [])
+  const remember = (nonce: string, item: Stored) => {
+    stored.set(nonce, item)
+    if (config.storeFile) writeStored(config.storeFile, stored)
+  }
   // Requests for the same payment are handled one at a time, so one payment is settled once.
   const queues = new Map<string, Promise<unknown>>()
 
@@ -127,7 +159,7 @@ export function createSeller(config: SellerConfig) {
     res.status(200).set({ 'Content-Type': 'application/json', 'PAYMENT-RESPONSE': item.settledHeader }).send(item.body)
   }
 
-  return async function handle(req: Request, res: Response): Promise<void> {
+  async function handle(req: Request, res: Response): Promise<void> {
     const requirements = paymentRequired(config, `${req.protocol}://${req.get('host')}${req.originalUrl}`)
     const reject = (status: number, error?: string) => {
       res
@@ -166,16 +198,22 @@ export function createSeller(config: SellerConfig) {
       const verified = await config.facilitator.verify(payment.payload, accept)
       if (!verified.isValid) return reject(402, verified.invalidReason ?? 'Payment not valid')
 
+      // Sealed before settling: a failure here leaves the buyer uncharged.
+      const sealed = config.sealing
+        ? await config.sealing.seal(answer(), { from: payment.from, nonce: payment.nonce, value: payment.value })
+        : null
+
       const settled = await config.facilitator.settle(payment.payload, accept)
       if (!settled.success) return reject(402, settled.errorReason ?? 'Payment not settled')
 
       const item: Stored = {
         headerHash: sha256(header),
-        body: answer(),
+        body: sealed ? JSON.stringify({ seller: config.name, sealed: sealed.box }) : answer(),
+        ...(sealed ? { key: sealed.key } : {}),
         settledHeader: b64({ success: true, transaction: settled.transaction ?? '', network: ARC_CAIP2, payer: payment.from }),
       }
       // Stored under the payment nonce, before anything is sent.
-      if (config.declaresRecovery) stored.set(payment.nonce, item)
+      if (config.declaresRecovery || sealed) remember(payment.nonce, item)
 
       if (config.dropAfterSettle()) {
         // Settled, but the connection closes before the first response.
@@ -185,4 +223,25 @@ export function createSeller(config: SellerConfig) {
       deliver(res, item)
     })
   }
+
+  /** The key request. Only the exact payment that was settled gets the key. */
+  async function key(req: Request, res: Response): Promise<void> {
+    const header = req.get('payment-signature')
+    const payment = header ? parsePayment(header) : null
+    const item = payment ? stored.get(payment.nonce) : undefined
+    if (!header || !item?.key || item.headerHash !== sha256(header)) {
+      res.status(409).end()
+      return
+    }
+    if (!config.sealing?.handsOverKey()) {
+      req.socket.destroy()
+      return
+    }
+    res.status(200).json({ key: item.key })
+  }
+
+  return Object.assign(handle, {
+    key,
+    keyFor: (nonce: string): Hex | null => stored.get(nonce)?.key ?? null,
+  })
 }
