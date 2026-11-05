@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { presentRequest } from '@/lib/worldRequestQr'
 
 export interface WorldRequestView {
   id: string
@@ -16,7 +17,7 @@ interface WorldStatus {
 
 interface IdkitParams {
   app_id: `app_${string}`
-  environment: 'staging'
+  environment: 'staging' | 'production'
   rp_context: { rp_id: string; nonce: string; created_at: number; expires_at: number; signature: string }
   session_id?: `session_${string}`
   signal?: string
@@ -60,6 +61,8 @@ export function useWorldApproval(onDone: () => Promise<void>) {
   const [status, setStatus] = useState<WorldStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [canCopy, setCanCopy] = useState(false)
+  // Production only: a QR code image of the request for World App. Never the URL as text.
+  const [qr, setQr] = useState<string | null>(null)
   const connectorURI = useRef<string | null>(null)
   // Only the newest loop may go on polling.
   const loop = useRef(0)
@@ -76,6 +79,7 @@ export function useWorldApproval(onDone: () => Promise<void>) {
     loop.current += 1
     connectorURI.current = null
     setCanCopy(false)
+    setQr(null)
     await load().catch(() => {})
     await onDone()
   }, [load, onDone])
@@ -155,7 +159,9 @@ export function useWorldApproval(onDone: () => Promise<void>) {
       try {
         const request = await openIdkitRequest(started.idkit)
         connectorURI.current = request.connectorURI
-        setCanCopy(true)
+        const shown = await presentRequest(started.idkit.environment, request.connectorURI)
+        if (shown.kind === 'qr') setQr(shown.image)
+        else setCanCopy(true)
         void poll(started.request.id, request)
       } catch {
         // IDKit could not open the request, so it can never be approved. The backend says how it ended.
@@ -192,6 +198,7 @@ export function useWorldApproval(onDone: () => Promise<void>) {
     hasLastApproval: status?.hasLastApproval ?? false,
     request: status?.request ?? null,
     canCopy,
+    qr,
     error,
     setBudget: (amount: string) => begin('budget', amount),
     hold: (amount: string) => begin('hold', amount),

@@ -111,6 +111,7 @@ The sellers close the connection on purpose, apart from the "line stays up" butt
 | Optional setting | What it turns on |
 |---|---|
 | `WORLD_APP_ID`, `WORLD_RP_ID`, `WORLD_SIGNER_KEY` | The World ID approval before a hold. Set all three or none |
+| `WORLD_ENVIRONMENT` | `staging` (default, the World ID Simulator) or `production` (the real World App, shown as a QR code) |
 | `ARKIV_WRITER_KEY`, `ARKIV_ACCESS_KEY` | The Arkiv receipts. Without them the app runs on local receipts alone |
 | `PORT`, `DATA_DIR` | The backend port, 3001 by default, and its data folder |
 

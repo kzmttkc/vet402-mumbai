@@ -20,7 +20,7 @@ import {
   WAITING,
   WorldError,
 } from '../world'
-import type { IdkitParams, VerifyAnswer } from '../world'
+import type { IdkitParams, VerifyAnswer, WorldEnvironment } from '../world'
 import { mountWorld } from '../worldRoutes'
 import { createWorldStore } from '../worldStore'
 
@@ -66,13 +66,13 @@ function fakeHoldPorts() {
   return { ports, deposits, state }
 }
 
-function setup(options: { ttlMs?: number } = {}) {
+function setup(options: { ttlMs?: number; environment?: WorldEnvironment } = {}) {
   const clock = { now: 1_000_000 }
   const hold = fakeHoldPorts()
   const holds = createHoldService(hold.ports, createHoldStore(dir))
   const verifyCalls: unknown[] = []
   const verifyAnswer: { current: () => Promise<VerifyAnswer> } = {
-    current: () => Promise.resolve({ success: true, environment: 'staging' }),
+    current: () => Promise.resolve({ success: true, environment: options.environment ?? 'staging' }),
   }
   let signs = 0
   const store = createWorldStore(dir)
@@ -80,6 +80,7 @@ function setup(options: { ttlMs?: number } = {}) {
     appId: 'app_staging_test',
     rpId: 'rp_test',
     store,
+    environment: options.environment,
     now: () => clock.now,
     ttlMs: options.ttlMs,
     ports: {
@@ -646,5 +647,148 @@ describe('the join with the rest of the app', () => {
     expect(hold.deposits).toEqual([usdc(2)])
 
     expect((await post('/world/requests/unknown/cancel')).status).toBe(404)
+  })
+})
+
+describe('production: the real World App', () => {
+  const production = { environment: 'production' } as const
+
+  test('WORLD_ENVIRONMENT picks the environment, unset stays staging, and a typo refuses to start', () => {
+    const base = { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: '0x01' }
+    expect(readWorldConfig(base)?.environment).toBe('staging')
+    expect(readWorldConfig({ ...base, WORLD_ENVIRONMENT: '' })?.environment).toBe('staging')
+    expect(readWorldConfig({ ...base, WORLD_ENVIRONMENT: 'staging' })?.environment).toBe('staging')
+    expect(readWorldConfig({ ...base, WORLD_ENVIRONMENT: 'production' })?.environment).toBe('production')
+    for (const wrong of ['prod', 'Production', 'sandbox']) {
+      expect(() => readWorldConfig({ ...base, WORLD_ENVIRONMENT: wrong })).toThrow('WORLD_ENVIRONMENT')
+    }
+    // The environment alone does not turn the approval on.
+    expect(readWorldConfig({ WORLD_ENVIRONMENT: 'production' })).toBeNull()
+  })
+
+  test('IDKit is told "production" for both steps', async () => {
+    const { world } = setup(production)
+    const budget = world.startBudget(usdc(10))
+    expect(budget.idkit.environment).toBe('production')
+    await world.complete(budget.request.id, { ...sessionResult(budget), ...production })
+    expect(world.startHold(usdc(1)).idkit.environment).toBe('production')
+  })
+
+  test('budget and hold go through when the verify answer and the result both say "production"', async () => {
+    const { world, hold, verifyCalls } = setup(production)
+    const budget = world.startBudget(usdc(10))
+    const result = { ...sessionResult(budget), ...production }
+    expect(await world.complete(budget.request.id, result)).toMatchObject({ state: 'done', message: BUDGET_SET })
+    expect(verifyCalls).toEqual([result])
+
+    const started = world.startHold(usdc(2))
+    const view = await world.complete(started.request.id, proofFor(started, '42', production))
+    expect(view).toMatchObject({ state: 'done', message: 'Held 2 USDC for this job.' })
+    expect(hold.deposits).toEqual([usdc(2)])
+  })
+
+  test('a staging proof or a staging verify answer is refused in production', async () => {
+    const { world, store, verifyAnswer } = setup(production)
+    const fromSimulator = world.startBudget(usdc(10))
+    expect((await world.complete(fromSimulator.request.id, sessionResult(fromSimulator))).message).toBe(NOT_APPROVED)
+    expect(store.read().budget).toBeNull()
+
+    verifyAnswer.current = () => Promise.resolve({ success: true, environment: 'staging' })
+    const stagingAnswer = world.startBudget(usdc(10))
+    expect((await world.complete(stagingAnswer.request.id, { ...sessionResult(stagingAnswer), ...production })).message).toBe(
+      NOT_APPROVED,
+    )
+    expect(store.read().budget).toBeNull()
+  })
+
+  test('the hold checks stay the same in production: signal, nonce, session and nullifier', async () => {
+    const { world, hold } = setup(production)
+    const budget = world.startBudget(usdc(10))
+    await world.complete(budget.request.id, { ...sessionResult(budget), ...production })
+
+    const staged = world.startHold(usdc(1))
+    expect((await world.complete(staged.request.id, proofFor(staged, '1'))).message).toBe(NOT_APPROVED)
+
+    const signal = world.startHold(usdc(1))
+    const other = proofFor(signal, '2', production) as ReturnType<typeof proofFor> & { responses: Array<Record<string, unknown>> }
+    other.responses[0].signal_hash = hashSignal('another-hold:1')
+    expect((await world.complete(signal.request.id, other)).message).toBe(ANOTHER_HOLD)
+
+    const nonce = world.startHold(usdc(1))
+    expect((await world.complete(nonce.request.id, proofFor(nonce, '3', { ...production, nonce: '0xbad' }))).message).toBe(
+      NOT_APPROVED,
+    )
+
+    const session = world.startHold(usdc(1))
+    const otherSession = `session_${'ef'.repeat(64)}`
+    expect(
+      (await world.complete(session.request.id, proofFor(session, '4', { ...production, session_id: otherSession }))).message,
+    ).toBe(NOT_APPROVED)
+
+    const first = world.startHold(usdc(1))
+    expect((await world.complete(first.request.id, proofFor(first, '5', production))).state).toBe('done')
+    const again = world.startHold(usdc(1))
+    expect((await world.complete(again.request.id, proofFor(again, '5', production))).message).toBe(NOT_APPROVED)
+
+    expect(hold.deposits).toEqual([usdc(1)])
+  })
+
+  test('over HTTP the backend hands IDKit "production" only when WORLD_ENVIRONMENT says so', async () => {
+    const signerKey = `0x${randomBytes(32).toString('hex')}`
+    const env = { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: signerKey }
+    const started = async (extra: Record<string, string>) => {
+      const app = express()
+      app.use(express.json())
+      mountWorld(app, { env: { ...env, ...extra }, dataDir: mkdtempSync(path.join(dir, 'env-')), createHold: () => Promise.resolve() })
+      const server = await new Promise<Server>((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s))
+      })
+      try {
+        const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/world/budget`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: '1' }),
+        })
+        return (await res.json()) as Started
+      } finally {
+        server.close()
+      }
+    }
+    expect((await started({})).idkit.environment).toBe('staging')
+    const prod = await started({ WORLD_ENVIRONMENT: 'production' })
+    expect(prod.idkit.environment).toBe('production')
+    expect(JSON.stringify(prod)).not.toContain(signerKey.slice(2))
+    expect(() =>
+      mountWorld(express(), { env: { ...env, WORLD_ENVIRONMENT: 'prod' }, dataDir: dir, createHold: () => Promise.resolve() }),
+    ).toThrow('WORLD_ENVIRONMENT')
+  })
+})
+
+describe('production keeps its own record', () => {
+  test('a staging budget does not carry over, and the staging file is left as it was', async () => {
+    const staging = createWorldService({
+      appId: 'app_x',
+      rpId: 'rp_x',
+      store: createWorldStore(dir),
+      ports: { sign: () => ({ sig: 's', nonce: '0x1', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'staging' }), createHold: () => Promise.resolve() },
+    })
+    const budget = staging.startBudget(usdc(5))
+    await staging.complete(budget.request.id, sessionResult(budget))
+    const before = readFileSync(path.join(dir, 'world.json'), 'utf8')
+
+    const production = createWorldService({
+      appId: 'app_x',
+      rpId: 'rp_x',
+      environment: 'production',
+      store: createWorldStore(dir, 'production'),
+      ports: { sign: () => ({ sig: 's', nonce: '0x2', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'production' }), createHold: () => Promise.resolve() },
+    })
+    expect(production.status().budgetSet).toBe(false)
+    const fresh = production.startBudget(usdc(5))
+    expect((await production.complete(fresh.request.id, { ...sessionResult(fresh), environment: 'production' })).message).toBe(BUDGET_SET)
+
+    expect(existsSync(path.join(dir, 'world-production.json'))).toBe(true)
+    expect(readFileSync(path.join(dir, 'world.json'), 'utf8')).toBe(before)
+    expect(staging.status().budgetSet).toBe(true)
   })
 })

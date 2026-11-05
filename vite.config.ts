@@ -45,6 +45,8 @@ export default defineConfig(({ mode }) => ({
       'lucide-react',
       'sonner',
       '@worldcoin/idkit-core',
+      // Bundled up front, so the first production request does not make Vite reload the page and lose it.
+      'qrcode',
       'clsx',
       'tailwind-merge',
       'vite-plugin-node-polyfills/shims/buffer',

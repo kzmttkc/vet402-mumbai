@@ -14,13 +14,17 @@ const SETUP_FAILED = 'The hold could not be set up. Please try again.'
 const REQUEST_TTL_SECONDS = 120
 const VERIFY_URL = 'https://developer.world.org/api/v4/verify'
 const VERIFY_TIMEOUT_MS = 20_000
-const ENVIRONMENT = 'staging'
 const UINT256_MAX = (1n << 256n) - 1n
+
+/** "staging" is the World ID Simulator. "production" is the real World App on a phone. */
+export type WorldEnvironment = 'staging' | 'production'
+const ENVIRONMENTS: readonly WorldEnvironment[] = ['staging', 'production']
 
 export interface WorldConfig {
   appId: string
   rpId: string
   signerKey: string
+  environment: WorldEnvironment
 }
 
 /** Returns null when none of the three is set. One or two of them is a mistake, and it must not turn the approval off quietly. */
@@ -29,7 +33,10 @@ export function readWorldConfig(env: Record<string, string | undefined>): WorldC
   const missing = names.filter((name) => !env[name])
   if (missing.length === names.length) return null
   if (missing.length > 0) throw new Error(`World ID is half configured. Missing: ${missing.join(', ')}`)
-  return { appId: env.WORLD_APP_ID!, rpId: env.WORLD_RP_ID!, signerKey: env.WORLD_SIGNER_KEY! }
+  // Unset means the Simulator, as before. A typo must not quietly fall back to the other environment.
+  const environment = (env.WORLD_ENVIRONMENT || 'staging') as WorldEnvironment
+  if (!ENVIRONMENTS.includes(environment)) throw new Error('WORLD_ENVIRONMENT must be "staging" or "production".')
+  return { appId: env.WORLD_APP_ID!, rpId: env.WORLD_RP_ID!, signerKey: env.WORLD_SIGNER_KEY!, environment }
 }
 
 export interface SignedRequest {
@@ -55,7 +62,7 @@ export interface WorldPorts {
 }
 
 export function createWorldPorts(
-  config: WorldConfig,
+  config: Pick<WorldConfig, 'rpId' | 'signerKey'>,
   createHold: (amount: bigint) => Promise<void>,
   fetchImpl: typeof fetch = fetch,
 ): WorldPorts {
@@ -103,7 +110,7 @@ export interface WorldStatus {
 /** What the browser passes to IDKit. It is never put on screen. */
 export interface IdkitParams {
   app_id: string
-  environment: typeof ENVIRONMENT
+  environment: WorldEnvironment
   rp_context: { rp_id: string; nonce: string; created_at: number; expires_at: number; signature: string }
   session_id?: string
   signal?: string
@@ -132,11 +139,21 @@ interface Options {
   rpId: string
   ports: WorldPorts
   store: WorldStore
+  /** Both the verify answer and the IDKit result must name this environment. */
+  environment?: WorldEnvironment
   now?: () => number
   ttlMs?: number
 }
 
-export function createWorldService({ appId, rpId, ports, store, now = Date.now, ttlMs = REQUEST_TTL_SECONDS * 1000 }: Options) {
+export function createWorldService({
+  appId,
+  rpId,
+  ports,
+  store,
+  environment = 'staging',
+  now = Date.now,
+  ttlMs = REQUEST_TTL_SECONDS * 1000,
+}: Options) {
   function close(record: WorldRecord, request: WorldRequest, message: string, reason: string): WorldRequestView {
     console.warn(`world: closed ${request.kind} request: ${reason}`)
     request.state = 'closed'
@@ -190,7 +207,7 @@ export function createWorldService({ appId, rpId, ports, store, now = Date.now, 
 
     const idkit: IdkitParams = {
       app_id: appId,
-      environment: ENVIRONMENT,
+      environment,
       rp_context: {
         rp_id: rpId,
         nonce: signed.nonce,
@@ -239,8 +256,8 @@ export function createWorldService({ appId, rpId, ports, store, now = Date.now, 
     if (request.state !== 'waiting') return viewOf(request)
     if (record.budget) return close(record, request, NOT_APPROVED, 'budget already saved')
     if (!answer.success) return close(record, request, NOT_APPROVED, 'verify failed')
-    if (answer.environment !== ENVIRONMENT) return close(record, request, NOT_APPROVED, 'verify environment')
-    if (result.environment !== ENVIRONMENT) return close(record, request, NOT_APPROVED, 'result environment')
+    if (answer.environment !== environment) return close(record, request, NOT_APPROVED, 'verify environment')
+    if (result.environment !== environment) return close(record, request, NOT_APPROVED, 'result environment')
     if (result.nonce !== request.nonce) return close(record, request, NOT_APPROVED, 'nonce')
     if (typeof result.session_id !== 'string' || !result.session_id) {
       return close(record, request, NOT_APPROVED, 'no session')
@@ -269,8 +286,8 @@ export function createWorldService({ appId, rpId, ports, store, now = Date.now, 
     const { record, request } = live(id)
     if (request.state !== 'waiting') return viewOf(request)
     if (!answer.success) return close(record, request, NOT_APPROVED, 'verify failed')
-    if (answer.environment !== ENVIRONMENT) return close(record, request, NOT_APPROVED, 'verify environment')
-    if (result.environment !== ENVIRONMENT) return close(record, request, NOT_APPROVED, 'result environment')
+    if (answer.environment !== environment) return close(record, request, NOT_APPROVED, 'verify environment')
+    if (result.environment !== environment) return close(record, request, NOT_APPROVED, 'result environment')
     if (result.nonce !== request.nonce) return close(record, request, NOT_APPROVED, 'nonce')
     // World accepts a changed tail of the session id and echoes it back. Only the whole saved string counts.
     if (!record.budget || result.session_id !== record.budget.sessionId) {
