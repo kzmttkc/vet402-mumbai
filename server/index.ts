@@ -9,6 +9,7 @@ import { loadKeys } from './keys'
 import { createHoldPorts } from './ports'
 import { createJobPorts } from './jobPorts'
 import { createJobService, JobError } from './jobs'
+import { createReceiptStore } from './receiptStore'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
 const RPC_URL = requireChain(ARC_TESTNET_CHAIN_ID).rpcUrls[0]
@@ -27,7 +28,8 @@ const holds = createHoldService(
 )
 
 const jobs = createJobService(
-  createJobPorts({ chainId: ARC_TESTNET_CHAIN_ID, rpcUrl: RPC_URL, holdKey: keys.hold, holdClient }),
+  createJobPorts({ network: `eip155:${ARC_TESTNET_CHAIN_ID}`, rpcUrl: RPC_URL, holdKey: keys.hold, holdClient }),
+  createReceiptStore(DATA_DIR),
 )
 
 const MAX_JOB_CHARS = 500
@@ -98,6 +100,14 @@ app.post('/jobs/plan', async (req, res) => {
 app.post('/jobs/:id/approve', async (req, res) => {
   try {
     res.json(await jobs.approve(req.params.id))
+  } catch (error) {
+    sendJobError(res, error)
+  }
+})
+
+app.get('/receipts', async (_req, res) => {
+  try {
+    res.json({ receipts: await jobs.listReceipts() })
   } catch (error) {
     sendJobError(res, error)
   }

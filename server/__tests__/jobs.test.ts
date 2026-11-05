@@ -3,6 +3,7 @@ import { fetchCandidates, toCandidate } from '../discovery'
 import type { Candidate, FetchLike } from '../discovery'
 import { createJobService, describeReceipt, JobError } from '../jobs'
 import type { JobPorts } from '../jobs'
+import { memoryStore } from './helpers'
 import { isSafeResource, planJob } from '../planner'
 import type { PlannedRequest } from '../planner'
 
@@ -10,6 +11,7 @@ import type { PlannedRequest } from '../planner'
 // outside memory. `bun run test` also runs them from an empty temporary folder.
 
 const NETWORK = 'eip155:5042002'
+
 const TX = `0x${'ab'.repeat(32)}`
 
 interface ListingOptions {
@@ -266,15 +268,23 @@ describe('The job flow', () => {
       holdAvailable: () => Promise.resolve(overrides.available ?? 1_000_000n),
       pay: (request, cap) => {
         paid.push({ request, cap })
-        return Promise.resolve({ data: { result: { status: '0x1' } }, paid: 100n })
+        return Promise.resolve({
+          data: { result: { status: '0x1' } },
+          paid: 100n,
+          nonce: `0x${'cd'.repeat(32)}`,
+          timesReceived: 1,
+          transaction: '',
+        })
       },
+      findTransfer: () => Promise.resolve({ id: 'transfer-1', status: 'received', txHash: null }),
+      fetchTransfer: () => Promise.resolve({ id: 'transfer-1', status: 'received', txHash: null }),
       ...overrides,
     }
     return { ports, paid, receiptReads: () => receiptReads }
   }
 
   test('the approval card carries only the seller, one sentence, and the amount', async () => {
-    const jobs = createJobService(setup().ports)
+    const jobs = createJobService(setup().ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
 
     expect(Object.keys(view).sort()).toEqual(['amount', 'covered', 'id', 'sellerName', 'summary'])
@@ -285,7 +295,7 @@ describe('The job flow', () => {
 
   test('approving pays once, capped at the approved amount, from the plan the agent chose', async () => {
     const { ports, paid } = setup()
-    const jobs = createJobService(ports)
+    const jobs = createJobService(ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
 
     const result = await jobs.approve(view.id)
@@ -298,7 +308,7 @@ describe('The job flow', () => {
 
   test('an approval works only once', async () => {
     const { ports, paid } = setup()
-    const jobs = createJobService(ports)
+    const jobs = createJobService(ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
 
     await jobs.approve(view.id)
@@ -308,7 +318,7 @@ describe('The job flow', () => {
 
   test('nothing is paid when the hold does not cover the amount', async () => {
     const { ports, paid } = setup({ available: 50n })
-    const jobs = createJobService(ports)
+    const jobs = createJobService(ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
     expect(view.covered).toBe(false)
 
@@ -318,14 +328,14 @@ describe('The job flow', () => {
 
   test('an unknown approval pays nothing', async () => {
     const { ports, paid } = setup()
-    await expect(createJobService(ports).approve('nope')).rejects.toBeInstanceOf(JobError)
+    await expect(createJobService(ports, memoryStore()).approve('nope')).rejects.toBeInstanceOf(JobError)
     expect(paid).toHaveLength(0)
   })
 
   test('an approval expires', async () => {
     let clock = 0
     const { ports, paid } = setup()
-    const jobs = createJobService(ports, () => clock)
+    const jobs = createJobService(ports, memoryStore(), () => clock)
     const view = await jobs.plan('did my payment go through')
 
     clock += 11 * 60 * 1000
@@ -336,7 +346,7 @@ describe('The job flow', () => {
 
   test('only reads payment history for payment jobs', async () => {
     const setupResult = setup()
-    const jobs = createJobService(setupResult.ports)
+    const jobs = createJobService(setupResult.ports, memoryStore())
 
     await jobs.plan('weather today')
     expect(setupResult.receiptReads()).toBe(0)
@@ -347,7 +357,7 @@ describe('The job flow', () => {
 
   test('a failed payment is reported without details', async () => {
     const { ports } = setup({ pay: () => Promise.reject(new Error('seller exploded eip155:5042002')) })
-    const jobs = createJobService(ports)
+    const jobs = createJobService(ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
 
     const error = await jobs.approve(view.id).catch((e: unknown) => e)

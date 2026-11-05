@@ -1,13 +1,16 @@
 import { RefreshCw } from 'lucide-react'
 import { HoldCard } from '@/components/HoldCard'
 import { JobCard } from '@/components/JobCard'
+import { ReceiptList } from '@/components/ReceiptList'
 import { useBalances } from '@/hooks/useBalances'
+import { useReceipts } from '@/hooks/useReceipts'
 
 const formatDisplay = (value: string) =>
   Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export default function App() {
   const { data, failed, reload } = useBalances()
+  const { receipts, reload: reloadReceipts } = useReceipts()
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
@@ -23,7 +26,8 @@ export default function App() {
         </div>
 
         <HoldCard data={data} reload={reload} />
-        <JobCard reload={reload} />
+        <JobCard reload={async () => { await Promise.all([reload(), reloadReceipts()]) }} />
+        <ReceiptList receipts={receipts} />
 
         {failed && (
           <div className="mt-4 flex items-center justify-between gap-3 text-sm text-[var(--danger)]" role="alert">
