@@ -259,6 +259,14 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
 
+One seller, ready to paste. For Seller F it returned its 2 Fraud rulings on 2026-11-06 at 16:43 UTC:
+
+```bash
+curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5) AND (pay_to = str('"'"'0x1401bd7c7fab3fe8a429672fc1c5371456c8445d'"'"') OR seller = str('"'"'0x1401bd7c7fab3fe8a429672fc1c5371456c8445d'"'"'))",{"select":{"key":true,"attributes":true}}]}'
+```
+
 The same query, read with no key on 2026-11-06 at 10:56:50 UTC, returned these 6, one line each with `createdAt` as an Arkiv block and a few attributes:
 
 ```
