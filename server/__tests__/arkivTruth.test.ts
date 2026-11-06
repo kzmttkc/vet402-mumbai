@@ -8,8 +8,10 @@ import {
   createSellerCheck,
   decideDelivery,
   keptPromise,
+  payToByName,
   RULED_AGAINST,
   UNREADABLE,
+  verdictToArkiv,
 } from '../arkiv'
 import type { ArkivWire, EntityOptions, ReceiptValues, SellerId, SellerRead, SellerValues, VerdictValues } from '../arkiv'
 import { createDemoService, KEY_FROM_CHAIN } from '../demo'
@@ -378,6 +380,41 @@ describe('Payment and seller entities carry the payTo address', () => {
   })
 })
 
+describe('The payTo of our own sellers, as server/index.ts builds it', () => {
+  const payToOf = payToByName({ 'Seller A': '0xA', 'Seller C': '0xC', 'Seller D': PAY_TO })
+
+  test('our sellers map to their address, and a catalog seller to null', () => {
+    expect(payToOf('Seller A')).toBe('0xA')
+    expect(payToOf('Seller C')).toBe('0xC')
+    expect(payToOf('Seller D')).toBe(PAY_TO)
+    expect(payToOf('Catalog seller')).toBeNull()
+    expect(payToOf('seller d')).toBeNull()
+  })
+
+  test('the check reads by that payTo, and the payment entity carries it', async () => {
+    const asked: SellerId[] = []
+    const check = createSellerCheck(
+      { readSeller: (seller) => (asked.push(seller), Promise.resolve(read({}))) },
+      () => undefined,
+      createScrubber([]),
+      payToOf,
+    )
+    await check('Seller D')
+    await check('Catalog seller')
+    expect(asked).toEqual([
+      { name: 'Seller D', payTo: PAY_TO },
+      { name: 'Catalog seller', payTo: null },
+    ])
+
+    const { wire, calls } = fakeWire()
+    const sink = sinkWith(wire, [], payToOf)
+    sink.store.add(row())
+    await sink.idle()
+    const payment = calls.find((c) => c.op === 'receipt')
+    expect(payment?.op === 'receipt' && payment.values.pay_to).toBe(PAY_TO_LOWER)
+  })
+})
+
 describe('Only a delivery that kept its promise extends the seller', () => {
   const sealedRecord = { ciphertext: '0x00' as Hex, claimId: CLAIM_ID, plaintextHash: '0x11' as Hex, keyBlock: '7' }
 
@@ -402,7 +439,12 @@ describe('Only a delivery that kept its promise extends the seller', () => {
 describe('The demo writes Arc’s ruling after finalize and prove', () => {
   const PAYER = '0xAbCdEf0000000000000000000000000000000002'
 
-  function setup(path: 'silent' | 'fraud', verdict: DemoPorts['verdict'], finalize: () => Promise<bigint> = () => Promise.resolve(1000n)) {
+  function setup(
+    path: 'silent' | 'fraud',
+    verdict: DemoPorts['verdict'],
+    finalize: () => Promise<bigint> = () => Promise.resolve(1000n),
+    receipts = memoryStore(),
+  ) {
     const promised = sealResponse('{"answer":"the promised one"}')
     // Fraud: the key opens the box, but the bytes inside are not the ones the seller promised.
     const delivered = sealResponse('{"answer":"a swapped one"}', promised.key)
@@ -451,7 +493,6 @@ describe('The demo writes Arc’s ruling after finalize and prove', () => {
       ...(verdict ? { verdict } : {}),
     }
     const seller = { name: 'Seller D', url: 'http://s/d', address: PAY_TO }
-    const receipts = memoryStore()
     const demos = createDemoService(ports, { a: seller, b: seller, d: seller, e: seller, f: seller }, receipts)
     return { demos, receipts }
   }
@@ -480,6 +521,35 @@ describe('The demo writes Arc’s ruling after finalize and prove', () => {
     expect(keptPromise(receipts.list()[0] as ReceiptRow)).toBe(false)
     await demos.act(run.id, 'prove')
     expect(rulings).toEqual([{ claimId: CLAIM_ID, payTo: PAY_TO, verdict: 'fraud', claimTx: CLAIM_TX }])
+  })
+
+  test('wired as server/index.ts wires it, the ruling lands on Arkiv under the payTo, with the contract and the chain', async () => {
+    const { wire, calls } = fakeWire()
+    const sink = createArkivSink({
+      wire,
+      store: memoryStore(),
+      sellerTtlSeconds: 604800,
+      log: () => undefined,
+      scrub: createScrubber([]),
+      payToOf: payToByName({ 'Seller D': PAY_TO }),
+    })
+    const { demos } = setup('silent', verdictToArkiv(sink, CONTRACT, 5042002), undefined, sink.store)
+    const run = await stopped(demos)
+    await demos.act(run.id, 'finalize')
+    await sink.idle()
+
+    const verdicts = calls.flatMap((c) => (c.op === 'verdict' ? [c.values] : []))
+    expect(verdicts).toEqual([
+      {
+        kind: 'verdict',
+        claim_id: CLAIM_ID,
+        seller: PAY_TO_LOWER,
+        verdict: 'silent',
+        claim_tx: CLAIM_TX,
+        contract: CONTRACT.toLowerCase(),
+        chain_id: 5042002n,
+      },
+    ])
   })
 
   test('a verdict writer that throws does not undo the ruling on screen', async () => {

@@ -95,6 +95,21 @@ export interface SellerId {
 /** The payTo address vet402 knows for a seller name, or null. Only vet402's own configuration answers it. */
 export type PayToOf = (sellerName: string) => string | null
 
+/** A PayToOf over the sellers vet402 runs itself. Any other name gets null, so it is found by name alone. */
+export function payToByName(addresses: Record<string, string>): PayToOf {
+  const known = new Map(Object.entries(addresses))
+  return (sellerName) => known.get(sellerName) ?? null
+}
+
+/** The demo's verdict port: the ruling as the demo reports it, with the contract and chain it was made on. */
+export function verdictToArkiv(
+  sink: { recordVerdict(record: VerdictRecord): void },
+  contract: string,
+  chainId: number,
+): (ruling: Omit<VerdictRecord, 'contract' | 'chainId'>) => void {
+  return (ruling) => sink.recordVerdict({ ...ruling, contract, chainId })
+}
+
 export interface EvidenceValues {
   kind: 'evidence'
   claim_id: string

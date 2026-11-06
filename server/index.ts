@@ -18,7 +18,7 @@ import type { DemoAction, DemoKind } from './demo'
 import { createDemoPorts } from './demoPorts'
 import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
 import { ARC_NET, createSealedDelivery, createSealedPorts, createSealedScene, parseSealedAddress } from './sealedDelivery'
-import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl } from './arkiv'
+import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl, payToByName, verdictToArkiv } from './arkiv'
 import { createEvidenceUploader } from './swarm'
 import { createSwarmWire, SWARM_GATEWAY } from '../src/lib/swarmBox'
 import type { Plan } from './planner'
@@ -49,6 +49,39 @@ const world = createWorld({ env: process.env, dataDir: DATA_DIR, createHold: (am
 // hold, and gas for the hold wallet's contract calls is taken from the approved budget. Staging keeps the filmed flow.
 const approvalOnly = world?.environment === 'production' ? world.service : null
 
+// The demo sellers. Each has its own key, and the hold key is never one of them.
+const sellerAddress = {
+  a: privateKeyToAccount(keys.sellerA).address,
+  b: privateKeyToAccount(keys.sellerB).address,
+  c: privateKeyToAccount(keys.sellerC).address,
+}
+
+// With a contract address the same switch moves to the key request. Without one nothing changes.
+const sealedAddress = parseSealedAddress(process.env.SEALED_DELIVERY_ADDRESS)
+// SEALED_RPC_URL points the contract calls at another node, for a local run.
+const sealedClient = sealedAddress
+  ? createSealedDelivery({ address: sealedAddress, net: { ...ARC_NET, rpcUrl: process.env.SEALED_RPC_URL ?? ARC_NET.rpcUrl } })
+  : null
+const sealedKeys = sealedClient ? loadSealedSellerKeys() : null
+// The sealed sellers' addresses. Only present with a contract address.
+const sealedSellerAddress = sealedKeys
+  ? {
+      d: privateKeyToAccount(sealedKeys.sellerD).address,
+      e: privateKeyToAccount(sealedKeys.sellerE).address,
+      f: privateKeyToAccount(sealedKeys.sellerF).address,
+    }
+  : null
+
+// Our own sellers are found on Arkiv by the address they are paid at. Catalog sellers by name.
+const payToOf = payToByName({
+  'Seller A': sellerAddress.a,
+  'Seller B': sellerAddress.b,
+  [SELLER_C_NAME]: sellerAddress.c,
+  ...(sealedSellerAddress
+    ? { 'Seller D': sealedSellerAddress.d, 'Seller E': sealedSellerAddress.e, 'Seller F': sealedSellerAddress.f }
+    : {}),
+})
+
 const localReceipts = createReceiptStore(DATA_DIR)
 
 // With no writer key the app runs on the local store alone, exactly as before.
@@ -65,6 +98,7 @@ const arkivSink = arkiv
       sellerTtlSeconds: parseSellerTtl(process.env.SELLER_TTL_SECONDS),
       log: arkivLog,
       scrub: arkivScrub,
+      payToOf,
     })
   : null
 const receiptStore = arkivSink?.store ?? localReceipts
@@ -81,28 +115,15 @@ const jobs = createJobService(
   createJobPorts({ network: `eip155:${ARC_TESTNET_CHAIN_ID}`, holdKey: keys.hold, holdClient }),
   receiptStore,
   undefined,
-  arkiv ? { sellerCheck: createSellerCheck(arkiv.wire, arkivLog, arkivScrub), sellerCPlan } : {},
+  arkiv ? { sellerCheck: createSellerCheck(arkiv.wire, arkivLog, arkivScrub, payToOf), sellerCPlan } : {},
 )
 
-// The demo sellers. Each has its own key, and the hold key is never one of them.
-const sellerAddress = {
-  a: privateKeyToAccount(keys.sellerA).address,
-  b: privateKeyToAccount(keys.sellerB).address,
-  c: privateKeyToAccount(keys.sellerC).address,
-}
 const facilitator = new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin })
 // The switch: close the connection after settling and before the first response. On for the demo.
 const DROP_AFTER_SETTLE = process.env.SELLER_DROP_RESPONSE !== 'off'
 // A demo run can keep the line up, to show that nothing touches the contract when the key arrives.
 let lineStaysUp = false
 
-// With a contract address the same switch moves to the key request. Without one nothing changes.
-const sealedAddress = parseSealedAddress(process.env.SEALED_DELIVERY_ADDRESS)
-// SEALED_RPC_URL points the contract calls at another node, for a local run.
-const sealedClient = sealedAddress
-  ? createSealedDelivery({ address: sealedAddress, net: { ...ARC_NET, rpcUrl: process.env.SEALED_RPC_URL ?? ARC_NET.rpcUrl } })
-  : null
-const sealedKeys = sealedClient ? loadSealedSellerKeys() : null
 const sealedScene = sealedClient && sealedKeys
   ? createSealedScene({
       storeDir: path.join(DATA_DIR, 'sellers'),
@@ -167,6 +188,8 @@ const demoPorts = {
                 chainId: ARC_NET.chain.id,
               }),
             }),
+        // Arc's Silent or Fraud ruling goes to Arkiv, where the delivery check refuses that seller for 7 days.
+        ...(arkivSink ? { verdict: verdictToArkiv(arkivSink, sealedClient.address, ARC_NET.chain.id) } : {}),
       }
     : {}),
 }
@@ -176,11 +199,11 @@ const demos = createDemoService(
   {
     a: { name: 'Seller A', url: `http://127.0.0.1:${PORT}/sellers/a`, address: sellerAddress.a },
     b: { name: 'Seller B', url: `http://127.0.0.1:${PORT}/sellers/b`, address: sellerAddress.b },
-    ...(sealedKeys
+    ...(sealedSellerAddress
       ? {
-          d: { name: 'Seller D', url: `http://127.0.0.1:${PORT}/sellers/d`, address: privateKeyToAccount(sealedKeys.sellerD).address },
-          e: { name: 'Seller E', url: `http://127.0.0.1:${PORT}/sellers/e`, address: privateKeyToAccount(sealedKeys.sellerE).address },
-          f: { name: 'Seller F', url: `http://127.0.0.1:${PORT}/sellers/f`, address: privateKeyToAccount(sealedKeys.sellerF).address },
+          d: { name: 'Seller D', url: `http://127.0.0.1:${PORT}/sellers/d`, address: sealedSellerAddress.d },
+          e: { name: 'Seller E', url: `http://127.0.0.1:${PORT}/sellers/e`, address: sealedSellerAddress.e },
+          f: { name: 'Seller F', url: `http://127.0.0.1:${PORT}/sellers/f`, address: sealedSellerAddress.f },
         }
       : {}),
   },

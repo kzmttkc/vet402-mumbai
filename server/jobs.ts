@@ -187,6 +187,9 @@ export const DEFAULT_NETWORK_NAME = 'Arc Testnet'
 /** 0.01 USDC: the most one job may cost unless the caller says otherwise. */
 export const DEFAULT_JOB_LIMIT = 10_000n
 
+/** The line above the card for a seller that was not paid: the check's own reason (ruled against, unreadable, no delivery). */
+const skipNotice = (seller: string, line: string) => `${seller}: ${line}`
+
 /**
  * Reads what Arkiv and the deposit contract say about the sellers the ranking would reach, at most
  * MAX_SELLERS_CHECKED of them, so the second ranking can skip a seller that stopped delivering.
@@ -255,7 +258,7 @@ export async function choosePlan(job: string, candidates: Candidate[], deps: Cho
   const notices = first.ranked
     .slice(0, pickAt < 0 ? first.ranked.length : pickAt)
     .filter((r) => signals.get(r.candidate.sellerName)?.delivery === 'expired')
-    .map((r) => `${r.candidate.sellerName}: ${NOT_PAID}`)
+    .map((r) => skipNotice(r.candidate.sellerName, lines.get(r.candidate.sellerName) ?? NOT_PAID))
   return { plan: outcome.plan, notices: [...new Set(notices)], delivery: lines.get(outcome.plan.sellerName) ?? null }
 }
 
@@ -287,8 +290,6 @@ export function createJobService(
   // Only the scene may buy from Seller C, and nothing in the catalog may pass as it.
   const listings = (candidates: Candidate[]) => candidates.filter((c) => c.sellerName !== SELLER_C_NAME)
 
-  const skipNotice = (seller: string) => `${seller}: ${NOT_PAID}`
-
   /** The Seller C scene: plans, reads the chosen seller, and moves on while the answer is "do not pay". */
   async function firstDeliverable(
     candidates: Candidate[],
@@ -301,7 +302,7 @@ export function createJobService(
       if (!outcome.ok) throw new JobError(outcome.reason)
       const check = sellerCheck ? await sellerCheck(outcome.plan.sellerName) : null
       if (check?.kind !== 'expired') return present(outcome.plan, notices, check?.line ?? null)
-      notices.push(skipNotice(outcome.plan.sellerName))
+      notices.push(skipNotice(outcome.plan.sellerName, check.line))
       const skipped = outcome.plan.sellerName
       pool = pool.filter((c) => c.sellerName !== skipped)
     }
@@ -330,7 +331,7 @@ export function createJobService(
     if (!sellerCPlan || !sellerCheck) throw new JobError('NO_SELLER')
     const first = await sellerCheck(sellerCPlan.sellerName)
     if (first.kind !== 'expired') return present(sellerCPlan, [], first.line)
-    return firstDeliverable(listings(await ports.candidates()), [skipNotice(sellerCPlan.sellerName)], (pool) =>
+    return firstDeliverable(listings(await ports.candidates()), [skipNotice(sellerCPlan.sellerName, first.line)], (pool) =>
       planCheapest(SCENE_JOB, pool),
     )
   }

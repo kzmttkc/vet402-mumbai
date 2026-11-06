@@ -12,8 +12,10 @@ import {
   decideDelivery,
   NOT_PAID,
   parseSellerTtl,
+  RULED_AGAINST,
   UNREADABLE,
 } from '../arkiv'
+import type { DeliveryCheck } from '../arkiv'
 import type { ArkivWire, EntityOptions, ReceiptValues, SellerRead } from '../arkiv'
 import { createDemoService } from '../demo'
 import type { DemoPorts } from '../demo'
@@ -554,6 +556,47 @@ describe('The approval card with the delivery check', () => {
     const view = await service.planSellerScene()
     expect(view.sellerName).toBe('Cheap')
     expect(view.notices).toEqual(['Seller C: No recent delivery from this seller. Not paid.'])
+  })
+
+  // A ruling and an unreadable record stop a purchase as surely as no delivery. The line above the card says which.
+  const because = (map: Record<string, DeliveryCheck>) => (seller: string) =>
+    Promise.resolve(map[seller] ?? ({ kind: 'first', line: 'First purchase from this seller.' } as const))
+
+  test('the line above the card says why each seller was passed over: ruled against, or unreadable', async () => {
+    const service = createJobService(
+      ports([candidate('Ruled', 1000n), candidate('Dark', 2000n), candidate('Fine', 3000n)]),
+      memoryStore(),
+      undefined,
+      {
+        sellerCheck: because({
+          Ruled: { kind: 'expired', line: RULED_AGAINST },
+          Dark: { kind: 'expired', line: UNREADABLE },
+          Fine: { kind: 'live', line: 'Delivered recently.' },
+        }),
+      },
+    )
+    const view = await service.plan('find prices')
+    expect(view.sellerName).toBe('Fine')
+    expect(view.notices).toEqual([`Ruled: ${RULED_AGAINST}`, `Dark: ${UNREADABLE}`])
+    expect(view.delivery).toBe('Delivered recently.')
+  })
+
+  test('in the Seller C scene too, each passed-over seller carries its own reason', async () => {
+    const service = createJobService(
+      ports([candidate('Dark', 1000n, 'unrelated words'), candidate('Fine', 5000n)]),
+      memoryStore(),
+      undefined,
+      {
+        sellerCheck: because({
+          [SELLER_C_NAME]: { kind: 'expired', line: RULED_AGAINST },
+          Dark: { kind: 'expired', line: UNREADABLE },
+        }),
+        sellerCPlan,
+      },
+    )
+    const view = await service.planSellerScene()
+    expect(view.sellerName).toBe('Fine')
+    expect(view.notices).toEqual([`${SELLER_C_NAME}: ${RULED_AGAINST}`, `Dark: ${UNREADABLE}`])
   })
 
   test('a catalog listing cannot pass as Seller C', async () => {
