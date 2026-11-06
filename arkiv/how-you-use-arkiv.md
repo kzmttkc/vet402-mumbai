@@ -62,7 +62,7 @@ Rows the live check writes have a "live-check-" seller name and expire within mi
 |---|---|
 | Direct reads from the browser | The receipts page opens and loads with the backend down |
 | `readonly` | "Settled in batch {tx}" arrives as a second entity, so the first receipt is never rewritten |
-| `permissionlessExtension` | "Kept outside this app until {date}" does not depend on vet402 staying alive |
+| `permissionlessExtension` | "Kept outside this app until {date}" holds whether or not vet402 keeps running |
 | Expiry on seller entities | "Seller active until {date}", and "No recent delivery from this seller. Not paid." when it runs out |
 | `extendEntity` | The seller's date moves to 7 days after each delivery that kept its promise |
 | `vet402_verdict` entities | "Arc ruled against this seller on {date}" on that seller's receipts, and no approval card for that seller for 7 days |

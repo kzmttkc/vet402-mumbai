@@ -2,7 +2,7 @@
 
 A receipt that lives inside the app that took the payment proves little. If vet402 stops, the receipt stops with it. I wanted a receipt the buyer can still open when the app is gone, one vet402 itself cannot quietly rewrite.
 
-Arkiv gives me that with four things a plain database does not.
+Arkiv gives me that with four things built in.
 
 **Nobody can edit a receipt, including vet402.** Receipts are created `readonly`, and every receipt on Rabdi reads its flags back as `raw: 3`, readonly and open to extension, on 2026-11-06 at 01:01 UTC. Arkiv's SDK says a readonly entity's attributes can never change, and the engine has a `ReadOnlyEntity` error for a write that tries. Step (11) of `scripts/arkiv-live.ts` has vet402's own key try to change a receipt and passes only when the network refuses.
 
@@ -28,9 +28,9 @@ The writer copies a ruling right after `finalize` or `prove` returns, from one q
 
 What each Arkiv feature changes on screen is in [how-you-use-arkiv.md](how-you-use-arkiv.md#what-each-arkiv-feature-changes-on-screen).
 
-## What I did not put on Arkiv, and why
+## What stays off Arkiv, and why
 
-Everything on Arkiv is public, and every entity is a fact that should not change. What fails either test stays off.
+Everything on Arkiv is public, and every entity is a fact that stays fixed. Arkiv holds what passes both tests.
 
 | Kept off Arkiv | Where it lives instead | Why |
 |---|---|---|

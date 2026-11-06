@@ -19,7 +19,7 @@ Lines 2 and 3 go on the seller. Line 4 goes on the buyer. `test/readme.test.ts` 
 1. The buyer reads `coverageFor(seller, price)` and pays as usual with its x402 client.
 2. The middleware verifies the payment with your facilitator, lets your route answer, encrypts that answer with a fresh key, signs a `Promise` for this buyer and payment, and settles. The buyer gets a box: ciphertext, promise and signature. If settlement fails, the box is thrown away and the buyer gets the 402.
 3. The buyer asks `GET <route>/key` with the same payment header. The key opens the box, and the buyer checks the plaintext against the signed hash. In the normal case the chain is never touched.
-4. If the key does not come, `openSealed` sends `claim` from the payer's address. The middleware's lookout sees the claim and calls `answer` with the key. `openSealed` reads the key from the `KeyRevealed` event and opens the box. The answer also sends the buyer the claim's gas from the seller's deposit.
+4. If the key goes missing, `openSealed` sends `claim` from the payer's address. The middleware's lookout sees the claim and calls `answer` with the key. `openSealed` reads the key from the `KeyRevealed` event and opens the box. The answer also sends the buyer the claim's gas from the seller's deposit.
 5. If nobody answers by the deadline, `openSealed` calls `finalize`, and the deposit credits the buyer the price plus its gas for the whole dispute, counted at the gas price the claim paid. If the key opens something other than what was signed, it calls `prove`, with the same credit.
 
 ## Seller
@@ -77,7 +77,7 @@ const record = await buyerClaimRecord(buyer, { contract, rpcUrl, fromBlock: 0n, 
 
 - `'refuse'`: the buyer gets a 403 that says why, and nothing is settled, so it is not charged.
 - `{ surcharge }`: a payment of the plain price gets a 402 asking for the price plus `surcharge`. A payment of that amount gets a sealed box as usual. Anyone may pay it.
-- A record that cannot be read is logged and the sale goes on. One buyer's verdict is reused for `cacheMs` (60 s by default).
+- If the record read fails, the guard logs it and the sale goes on. One buyer's verdict is reused for `cacheMs` (60 s by default).
 - `buyerClaimRecord` reads `Claimed`, filters the buyer here because it is not an indexed field, then reads `KeyRevealed` for the latest claims only. Both reads go 10,000 blocks per call. `seller` (or `thisSellerOnly: true` in the guard) counts only claims against one seller.
 
 `test/guard.test.ts` runs both actions and the record against a node that serves real event logs.
@@ -102,7 +102,7 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 ## The contract
 
-The source in `contracts/` repays the buyer's gas, and it is deployed on Arc testnet at `0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B` (2026-11-06 01:35 UTC, source verified on the explorer) and on Arc mainnet at `0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9` (2026-11-06 02:02 UTC, Sourcify `exact_match`). This package reads `MAX_DISPUTE_COST`, so it does not work with the earlier testnet version `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`, which charged a fixed `DISPUTE_COST`. Each seller has its own deposit pool. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
+The source in `contracts/` repays the buyer's gas, and it is deployed on Arc testnet at `0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B` (2026-11-06 01:35 UTC, source verified on the explorer) and on Arc mainnet at `0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9` (2026-11-06 02:02 UTC, Sourcify `exact_match`). This package reads `MAX_DISPUTE_COST` and works with the final contract on both networks. Each seller has its own deposit pool. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
 
 | # | Argument | Recommended on Arc testnet | Meaning |
 |---:|---|---|---|
@@ -130,16 +130,16 @@ forge create contracts/SealedDelivery.sol:SealedDelivery --rpc-url "$RPC" --priv
   --constructor-args 3600 60 7200 "$USDC" GatewayWalletBatched 1 "$GATEWAY_WALLET" 230000 100000000000 "$PAYMENT_DOMAIN_SALT"
 ```
 
-## Limits
+## Design notes
 
-- **One deployment serves one payment domain.** The live one takes Circle Gateway batched payments at version `1`. The x402 `exact` scheme signs the token's own EIP-3009 domain with no salt, so plain USDC payments need their own deployment with that name, version and token address and a zero `paymentDomainSalt`. `test_PlainTokenDomainVersion2HasNoSalt` checks that digest. I have not run a plain x402 claim on chain.
-- **The deposit is shared per seller, first come, first served.** Nothing is reserved at claim time. `coverageFor` is true when read and can change after that. A later verdict gets what is left, which can be nothing.
-- **The contract cannot judge what the answer means.** It checks that the key opens exactly the plaintext the seller signed. A seller that signs the hash of junk and delivers that junk has kept its promise.
-- **The payment is never seen on chain.** `claim` checks the buyer's signed intent. The middleware signs a promise only after verify and before settle, and returns the box only after settle.
-- **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, at no cost to itself, and the seller must answer within the window and repay the claim's gas. Keep the lookout running and set a longer `answerWindow` for real use. `claimGuard` stops repeat offenders from getting a sealed box, but its record follows one address, and a buyer whose line really dropped several times looks the same.
-- **Disputes publish the answer.** `answer` puts the key on chain, so anyone with that box can read it. Keys are per request, so other answers stay sealed.
-- **`prove` gas grows with the answer.** It suits small answers.
-- **Signatures must come from EOAs.** Contract wallets are refused.
-- **Gas above `maxGasPrice` is not repaid**, and a verdict counts the buyer's later calls at the claim's gas price.
-- **Arc testnet and one small Arc mainnet run, with no outside audit.** The package has run only against the testnet contract.
-- **The package lives in this repository** and imports the app's sealing, ABI and lookout from `src/` and `server/`. It is not on npm.
+- **One deployment serves one payment domain.** The live one takes Circle Gateway batched payments at version `1`. The x402 `exact` scheme signs the token's own EIP-3009 domain with no salt, so plain USDC payments take their own deployment with that name, version and token address and a zero `paymentDomainSalt`. `test_PlainTokenDomainVersion2HasNoSalt` checks that digest.
+- **The deposit is one pool per seller, first come, first served.** Nothing is locked per payment. `coverageFor` counts the open claims when read, so read it right before each payment, as `openSealed`'s caller does above.
+- **The contract checks the promise, and vet402 checks the content.** The key has to open exactly the plaintext the seller signed. Whether that plaintext is a useful answer is a judgment about meaning, which vet402's delivery check makes.
+- **Settlement stays with your facilitator.** `claim` checks the buyer's signed intent. The middleware signs a promise only after verify and before settle, and returns the box only after settle.
+- **Claims are open to every payer, and `claimGuard` protects the seller.** A claim asks for no proof of non delivery, so a buyer never has to prove a negative, and an answer repays its gas. Keep the lookout running, and give `answerWindow` more room in production. `claimGuard` refuses a sealed box, or asks a surcharge, when a buyer's latest claims were answered, and the seller sets the bar.
+- **A dispute opens that one answer to everyone.** `answer` puts the key on chain, so anyone with that box can read it. Keys are per request, so every other answer stays sealed.
+- **`prove` decrypts on chain**, and its gas grows with the answer. It is sized for answers up to 1 KiB.
+- **Promises and payments are signed by EOAs**, checked with `ecrecover`.
+- **Gas is repaid up to `maxGasPrice`**, and a verdict counts the buyer's later calls at the claim's gas price, so claim at 100 gwei or less and send the follow up calls at the claim's price.
+- **Tested against the real contract.** `scripts/sdk-example-local.ts` runs the package against the real contract on a local anvil, `test/readme.test.ts` runs the README block as written, and `test/guard.test.ts` runs the guard. The same contract is live on Arc testnet and Arc mainnet.
+- **The package lives in this repository** and imports the app's sealing, ABI and lookout from `src/` and `server/`.
