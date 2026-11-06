@@ -1,14 +1,20 @@
 # vet402 on Arc
 
-With Arc, vet402 gives every answer an AI agent pays for one of two endings: it arrives, or the seller's deposit pays the buyer back. The payment stays a plain Circle Gateway nanopayment, and SealedDelivery on Arc steps in only when a key goes missing, with the seller's deposit on Arc behind the sealed answer. World ID puts a person's approval on the moment money reaches the agent. Arkiv keeps every receipt and every ruling of Arc where anyone can read them, so the next purchase from a seller Arc ruled against stops before any money moves. Swarm holds each disputed box, on a postage batch my own Bee node bought.
+With Arc, vet402 gives every answer an AI agent pays for one of two endings: it arrives, or the seller's deposit pays the buyer back. The payment stays a plain Circle Gateway nanopayment, and SealedDelivery on Arc steps in only when a key goes missing, with the seller's deposit on Arc behind the sealed answer. On the owner's app, World ID puts a person's approval on the moment money reaches the agent. Arkiv keeps every receipt and every ruling of Arc where anyone can read them, so the next purchase from a seller Arc ruled against stops before any money moves. Swarm holds each disputed box, on a postage batch my own Bee node bought.
 
 Anyone can try a real dispute on Arc and a real purchase from a seller in Circle's catalog at https://vet402-mumbai-live.vercel.app, and the same contract runs on Arc mainnet. One payment, one receipt, and the chain only when a delivery needs it.
+
+What came before the event and what the event added ([Boundary](#boundary) has the commits):
+
+- **vet402 on 2026-11-03** (tag `mumbai-pre-event-2026`, commit `343cd0c`): an agent that bought from x402 sellers on ten chains with its own funds, Arc among them, and published every attempt, including the answers that never came.
+- **Built at ETHGlobal Mumbai, in the app Arc Studio started:** SealedDelivery on Arc testnet and Arc mainnet, so a seller's deposit stands behind each sealed answer, with the catalog agent, World ID approvals on the owner's app, Arc's rulings on Arkiv and dispute boxes on Swarm.
+- **What changes for the buyer:** a missing answer used to end as a published measurement, and now the seller's deposit on Arc pays the buyer back.
 
 ## The problem, and how vet402 solves it on Arc
 
 An agent that pays for an API today has no recourse when the answer never comes. On 2026-09-28, one Arc mainnet transaction settled 50 purchases by vet402, an AI agent I already own: 31 delivered, and 19 were charged and returned nothing it could use. A retry with a new signature pays again, as Seller B showed at the event: Circle's record shows 2 transfers, `e9cbd6d5-d3a3-4693-9e6d-f9d33a197b31` and `b9d962ef-6276-4f29-a94d-87618539a6fd`, 2026-11-05 16:04 UTC. [circlefin/arc-nanopayments#43](https://github.com/circlefin/arc-nanopayments/issues/43) describes the same problem (open on 2026-11-05 UTC).
 
-vet402 solves it on Arc. The answer arrives locked, and the key comes on a separate request. When the key goes missing, vet402 sends one claim to SealedDelivery, and the seller has 60 seconds to put the key on chain. An answer repays the buyer the gas of its claim from the seller's deposit, in the same transaction. Silence or a swapped answer costs the deposit twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer, the rest burned, so a seller that pays itself through a second address loses half. The buyer comes out whole whenever the claim's gas price is at most 100 gwei, its later calls use the claim's gas price, and the deposit covers the verdict, which vet402 checks with `coverageFor` before it pays.
+vet402 solves it on Arc. The answer arrives locked, and the key comes on a separate request. When the key goes missing, vet402 sends one claim to SealedDelivery, and the seller has 60 seconds to put the key on chain. An answer repays the buyer the gas of its claim from the seller's deposit, in the same transaction. Silence or a swapped answer costs the deposit twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer and the rest burned, sent to `0x000000000000000000000000000000000000dEaD`, where no one can spend it. So a seller that pays itself through a second address loses half. The buyer comes out whole whenever the claim's gas price is at most 100 gwei, its later calls use the claim's gas price, and the deposit covers the verdict, which vet402 checks with `coverageFor` before it pays.
 
 vet402's sellers answer a claim through Arc's Memo contract at their own cost, so the answer transaction on the explorer names the Circle Gateway transfer, the Swarm reference of the box, and the claim id the Arkiv evidence entity carries. Once 0.05 USDC of refunds has come back, vet402 puts it into the agent's Gateway balance in one Circle Gateway `depositFor`, ready for the next payment.
 
@@ -74,7 +80,7 @@ Before it pays, the card shows the pick, one line on why, and the top 3 it compa
 | How much USDC does my agent have? | vet402 Balance Check, protected on Arc | 0.001 USDC |
 | What's the weather in Mumbai? | Nobody. "None of the 134 Arc listings matched. Nothing was paid." | 0 |
 
-The public agent pays from its own Arc testnet wallet, `TRY_JOB_HOLD_KEY`, never the dispute wallet. The browser sends only the words of the job and, to approve, the signed id of the plan. The server plans again from the same words and pays only the same seller at the same price. One paid job every 2 minutes per address, and 40 a day across every instance (`TRY_JOB_DAILY_LIMIT`). Without the key the card says the agent is resting. The tests run on a saved copy of the catalog: `server/__tests__/agentPick.test.ts` and `server/__tests__/tryJob.test.ts`.
+The public agent pays from a fixed Arc testnet wallet of its own, `TRY_JOB_HOLD_KEY` (read in `server/tryJobWire.ts`), never the dispute wallet. World ID approvals belong to the owner's app, under [World ID](#world-id). The browser sends only the words of the job and, to approve, the signed id of the plan. The server plans again from the same words and pays only the same seller at the same price. One paid job every 2 minutes per address, and 40 a day across every instance (`TRY_JOB_DAILY_LIMIT`). Without the key the card says the agent is resting. The tests run on a saved copy of the catalog: `server/__tests__/agentPick.test.ts` and `server/__tests__/tryJob.test.ts`.
 
 ## Contract
 
@@ -124,7 +130,7 @@ On this contract, each seller's first `answer` used 131,604 gas and every later 
 
 The answer pays the buyer back. Claim `0x6fbe43cb…` cost the buyer 0.006775 USDC, and Seller A's answer sent it 0.006949 in the same transaction, so the buyer ended 0.000174 USDC ahead and had its answer.
 
-Deposits read from the contract on 2026-11-06 at 02:17 UTC: Seller A 0.487353 USDC, Seller D 0.448318, Seller E 0.450638, Seller F 0.437452. Each started at 0.5 at 01:37 UTC. Seller A repaid two claims' gas. Sellers D and E each had two SILENT verdicts and Seller F two FRAUD verdicts, one in each run, and Seller F also repaid two claims' gas. The buyer withdrew every credit, and its `claimable` read 0 at 02:17 UTC. A `flushBurn` after each verdict burned the other half.
+Deposits read from the contract on 2026-11-06 at 02:17 UTC: Seller A 0.487353 USDC, Seller D 0.448318, Seller E 0.450638, Seller F 0.437452. Each started at 0.5 at 01:37 UTC. Seller A repaid two claims' gas. Sellers D and E each had two SILENT verdicts and Seller F two FRAUD verdicts, one in each run, and Seller F also repaid two claims' gas. The buyer withdrew every credit, and its `claimable` read 0 at 02:17 UTC. A `flushBurn` after each verdict sent the other half to `0x…dEaD`, where no one can spend it.
 
 A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and the seller's deposit repays the dispute, under the same three conditions: a claim at 100 gwei or less, later calls at the claim's gas price, and a deposit that still covers the verdict. [contracts/README.md](contracts/README.md#the-economics) has the numbers, and [how vet402 uses it](contracts/README.md#using-it-well) shows how each claim stays inside them.
 
@@ -143,7 +149,7 @@ With nothing installed:
 
 With a clone (commands below, results from a clean clone of commit `dc06b0c` on 2026-11-06 between 10:03 and 10:10 UTC, with the packages of `bun.lock`, forge-std 1.16.2, forge 1.8.3 and Bun 1.3.14):
 
-9. `forge test`: 236 tests passed, 0 failed, in 19 suites. On my machine the run took 251 s and 303 s in two runs that day. The count in the Arc Studio sandbox, on forge 1.7.1, is in item 9 of [docs/arc-studio-feedback.md](docs/arc-studio-feedback.md).
+9. `forge test`: 236 tests passed, 0 failed, in 19 suites, on the clean clone with forge 1.8.3. On my machine the run took 251 s and 303 s in two runs that day. In the Arc Studio sandbox on forge 1.7.1, the same contract's tests reported 246 passed, 0 failed, before the deploy (item 9 of [docs/arc-studio-feedback.md](docs/arc-studio-feedback.md)).
 10. `bash scripts/test.sh`: 633 tests passed, 0 failed, in 35 files (10:04 UTC).
 11. `npx bun@1.3.14 run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected` (10:05 UTC).
 
@@ -245,7 +251,7 @@ key 0xb9e848408d22f4817f1c4cd6d855ce74dcdd7c562fa00676e1b38f1a41f3053c  expiresA
   payment_key 0xe7d98e45acb41fa9ddf27208c30985384633fad85a9d5518fa3539ce66ac5f81
 ```
 
-Arc's rulings, the entities the check reads before paying. On 2026-11-06 at 09:59 UTC it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND (pay_to = str('<payTo, lowercase>') OR seller = str('<payTo, lowercase>'))` for one seller. Rulings written since 2026-11-06 carry `pay_to`, and older ones have the address in `seller`.
+Arc's rulings, the entities the check reads before paying. On 2026-11-06 at 10:56 UTC it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND (pay_to = str('<payTo, lowercase>') OR seller = str('<payTo, lowercase>'))` for one seller. Rulings written since 2026-11-06 carry `pay_to`, and older ones have the address in `seller`.
 
 ```bash
 curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
@@ -253,7 +259,7 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
 
-The same query, read with no key on 2026-11-06 at 09:59:16 UTC, returned these 6, one line each with `createdAt` as an Arkiv block and a few attributes:
+The same query, read with no key on 2026-11-06 at 10:56:50 UTC, returned these 6, one line each with `createdAt` as an Arkiv block and a few attributes:
 
 ```
 createdAt 271815  verdict fraud   seller 0x1401bd7c7fab3fe8a429672fc1c5371456c8445d  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
@@ -286,7 +292,9 @@ More in [arkiv/](arkiv/schema.md).
 
 ## World ID
 
-The moment that needs a person is money reaching the agent. vet402 pays with my money and its keys sit on my server. With World ID on, an approval in World App is the only way money reaches the hold wallet. A passkey proves a device, and whoever runs the agent's host can enroll another one. A World ID session proof can come only from the same verified human who set the budget, on any phone, and it carries this hold's amount.
+The moment that needs a person is money reaching the agent. On the owner's app in production (`WORLD_ENVIRONMENT=production`), the backend moves money into the hold wallet only after an approval in World App. So the agent's own planner, another web page, or someone at the laptop without the owner's phone cannot move money into the agent's hold. A passkey proves a device. A World ID session proof comes only from the same verified human who set the budget, on their phone, and it carries this hold's amount.
+
+The public page runs apart from this. Its agent pays from the fixed test wallet `TRY_JOB_HOLD_KEY` (`server/tryJobWire.ts`), and World ID approvals run on the owner's app.
 
 There are two approvals. Both are World ID 4.0 session proofs. Every one asks for Proof of Human, and a hold above 0.5 USDC also asks for a selfie check in the same approval.
 
@@ -323,9 +331,9 @@ Everyday small holds stay a quick approval, because Proof of Human already says 
 
 For a large hold the browser asks IDKit for `proveSession(...).constraints(all(CredentialRequest('proof_of_human', { signal }), CredentialRequest('selfie', { signal })))`, so it is still one QR code and one approval. The backend decided at the start of the request that it needs the selfie check, and it holds only when every proof carries this hold's signal, the result holds exactly `proof_of_human` and `selfie` with issuer 11, both session nullifiers are new, and World's verify answer lists `selfie` with `success: true`. That last check matters because World's verify endpoint answers success when at least one proof passed, so vet402 reads each line. A large hold that comes back without a passing selfie check reads "Not approved: this hold needs a selfie check. Nothing was held." Before the QR code, the card says "This hold is above 0.5 USDC, so World App will also ask for a selfie check."
 
-When World App cannot give the selfie check, IDKit reports `credential_unavailable`, and the World ID Simulator does this on staging. The card then reads "Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held." The budget keeps its full room, and a hold of 0.5 USDC or less still goes through with Proof of Human alone.
+When World App cannot give the selfie check, IDKit reports `credential_unavailable`, as the World ID Simulator does on staging. `cancel` in `server/world.ts` then closes the request with `SELFIE_UNAVAILABLE`, and the card reads "Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held." The budget keeps its full room, and a hold of 0.5 USDC or less still goes through with Proof of Human alone (`server/__tests__/world.test.ts:1457`).
 
-It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. Those runs came before the budget had its own signal. The budget signal, the running total, the production rules for the demo scenes, the session token and the cross site check were added on 2026-11-06, and I ran that version in production the same day: "Budget set." for a 1.2 USDC budget at 02:10 UTC, "Held 1 USDC for your agent." at 02:10 UTC, Replay test refused with "Not approved: this approval is for another hold." at 02:11 UTC and again on film at 02:59 UTC, Cancel request at 02:11 UTC and on film at 02:59 UTC, and a 0.1 USDC hold approved in World App at 02:18 UTC while the iPhone screen was recorded. The budget then had 0.1 USDC left, so the running total held. The selfie check for holds above 0.5 USDC was added after those runs, on 2026-11-06, and the backend tests cover each of its checks. On the selfie version in production, a budget and a 0.5 USDC hold were approved in World App at 05:05 and 05:06 UTC ("Held 0.5 USDC for your agent."). What World App showed for a 1 USDC hold is item 8 of docs/world-feedback.md. The [demo video](https://ethglobal.com/showcase/vet402-ihsyd) shows the iPhone approval next to the app. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
+It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. Those runs came before the budget had its own signal. The budget signal, the running total, the production rules for the demo scenes, the session token and the cross site check were added on 2026-11-06, and I ran that version in production the same day: "Budget set." for a 1.2 USDC budget at 02:10 UTC, "Held 1 USDC for your agent." at 02:10 UTC, Replay test refused with "Not approved: this approval is for another hold." at 02:11 UTC and again on film at 02:59 UTC, Cancel request at 02:11 UTC and on film at 02:59 UTC, and a 0.1 USDC hold approved in World App at 02:18 UTC while the iPhone screen was recorded. The budget then had 0.1 USDC left, so the running total held. The selfie step came after those runs, on 2026-11-06: a hold above 0.5 USDC asks for Proof of Human and Selfie Check, and vet402 holds only when the selfie line of World's answer passed (`server/world.ts`, with each check in the backend tests). The holds approved in production on this version are 0.5 USDC or less: a budget at 05:05 UTC and a 0.5 USDC hold at 05:06 UTC ("Held 0.5 USDC for your agent."). On 2026-11-06 World App showed no approval sheet for a request that included the selfie check ([item 8 of docs/world-feedback.md](docs/world-feedback.md)), so that request closed at the app's 2 minute limit with nothing held. The [demo video](https://ethglobal.com/showcase/vet402-ihsyd) shows the iPhone approval next to the app. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
 Feedback for the sponsors, each with the step, what came back and the date: [Arc Studio](docs/arc-studio-feedback.md), [World ID](docs/world-feedback.md), [Arkiv](arkiv/friction.md).
 

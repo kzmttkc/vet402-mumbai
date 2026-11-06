@@ -9,7 +9,7 @@ This source is the one deployed. It repays the buyer's gas at the price the clai
 | Arc testnet, 5042002 | [`0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`](https://explorer.testnet.arc.io/address/0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B) | 2026-11-06 01:35:22, [`0x38095fb7…`](https://explorer.testnet.arc.io/tx/0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733), `forge create` from the terminal of the Arc Studio sandbox | Verified on the Arc testnet explorer (Blockscout) at 01:50 UTC. The verified file has the same sha256 as this one (`93a08889…`) |
 | Arc mainnet, 5042 | [`0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9) | 2026-11-06 02:02:56, [`0x6a276f7a…`](https://explorer.arc.io/tx/0x6a276f7a2ca79260ccdfc28a809b889a2febd95d684e9a5db818ecb2581eabd8), by script | Sourcify `exact_match`, with the same sha256 |
 
-Both take the recommended arguments under [Constructor](#constructor). Mainnet takes Arc mainnet's Gateway Wallet, `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Before the testnet deploy, the source was pasted into the code editor of the Studio sandbox and the tests copied in through its terminal, where every test passed and 0 failed on forge 1.7.1. A clean clone of commit `dc06b0c` passed 236 tests in 19 suites on forge 1.8.3 on 2026-11-06 at 10:10 UTC.
+Both take the recommended arguments under [Constructor](#constructor). Mainnet takes Arc mainnet's Gateway Wallet, `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Before the testnet deploy, the source was pasted into the code editor of the Studio sandbox and the tests copied in through its terminal, where 246 tests passed and 0 failed on forge 1.7.1. A clean clone of commit `dc06b0c` passed 236 tests in 19 suites, 0 failed, on forge 1.8.3 on 2026-11-06 at 10:10 UTC.
 
 Earlier versions charged a fixed dispute cost in place of the gas each claim paid: `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` on testnet (deployed by Arc Studio on 2026-11-05 at 22:20 UTC, `disputeCost` 0.0105 USDC) and `0xafdb8931eebdce7f714ac3905c65a50293eb6db6` on mainnet (2026-11-05 21:59 UTC, 0.009 USDC). `contract-metadata/SealedDelivery.json` lists deployments of earlier source.
 
@@ -56,7 +56,7 @@ stateDiagram-v2
 | OPEN | `finalize(claimId)` | Anyone | Status is OPEN (`NotOpen`). `now >= deadline` (`DeadlineNotReached`) | SILENT | `openLiability[seller] -= liability`. `silentCount[seller] += 1`. The deposit pays (below). Emits `Silent` |
 | OPEN or DELIVERED | `prove(claimId, ciphertext, key)` | Anyone with the key and ciphertext | Not already FRAUD (`AlreadyFraud`). Status is OPEN or DELIVERED (`NotProvable`). `keccak256(key) == keyHash` (`WrongKey`). `keccak256(ciphertext) == ciphertextHash` (`WrongCiphertext`). Decrypted hash differs from `plaintextHash` (`PromiseKept`). No deadline | FRAUD | From OPEN, `openLiability[seller] -= liability`. `fraudCount[seller] += 1`. The deposit pays (below). `proofHold` stays as it was. Emits `Fraud` |
 
-**When the deposit pays a verdict.** `payout = min(liability, deposits[seller])`. The deposit falls by `payout`, and `pendingWithdrawal[seller]` comes down with it if it would exceed the new deposit. The buyer's `claimable` grows by half of `payout`, rounded up, which is `value + disputeCost` when the deposit holds enough. The rest joins `pendingBurn`.
+**When the deposit pays a verdict.** `payout = min(liability, deposits[seller])`. The deposit falls by `payout`, and `pendingWithdrawal[seller]` comes down with it if it would exceed the new deposit. The buyer's `claimable` grows by half of `payout`, rounded up, which is `value + disputeCost` when the deposit holds enough. The rest joins `pendingBurn`, which `flushBurn` sends to `0x000000000000000000000000000000000000dEaD`, where no one can spend it (`DEAD`, line 36 of `SealedDelivery.sol`).
 
 **When an answer repays the claim.** `refund = min(gasRefund, deposits[seller])` leaves the deposit the same way and goes straight to the buyer in the same transaction. If the token refuses the transfer, it is credited to `claimable` instead, and `ClaimGasRepaid` says `sent = false`. An answer never fails over it.
 
@@ -107,7 +107,7 @@ The test deploys with `maxGasPrice` at 1000 gwei, its own ceiling, so the last r
 
 **The deposit is one pool per seller, and verdicts draw on it first come, first served.** Nothing is reserved at claim time. Each verdict takes its amount when it lands, and later verdicts get what is left. This keeps capital light: no funds are locked per payment. With `MAX_GAS_PRICE` at 100 gwei, `coverageFor` asks 0.112 USDC per open claim at a 0.001 USDC price, so a 0.5 USDC deposit covers 4. At 25 gwei a claim actually books about 0.0274.
 
-**Half burns.** A seller paying itself the deposit through a second address would otherwise lose nothing. The burn makes it lose half of what it pulls, rounded down, plus gas. The burn waits in `pendingBurn` until anyone calls `flushBurn`, so every verdict completes on its own.
+**Half burns.** A seller paying itself the deposit through a second address would otherwise lose nothing. The burn sends half of what it pulls, rounded down, to `0x…dEaD`, where no one can spend it, so the seller loses that half plus gas. The burn waits in `pendingBurn` until anyone calls `flushBurn`, so every verdict completes on its own.
 
 **Withdrawals wait.** `requestWithdraw` removes funds from coverage at once and starts `COOLDOWN`. Queued funds stay in `deposits`, and verdicts can take them until they leave. The constructor requires `cooldown >= maxExpiry + answerWindow`, so a seller that signs a promise and then asks to withdraw stays exposed past that claim's deadline. The proof hold keeps a fraud proof payable after an answer: each answer holds that claim's liability until `COOLDOWN - MAX_EXPIRY` after the seller's latest answer, 3600 s with the recommended values.
 
@@ -156,7 +156,7 @@ How the parts fit together, and how vet402 runs them.
 - **A dispute opens that one answer to everyone.** `answer` puts the key on chain, and `prove` puts key and ciphertext on chain, so anyone can read that answer. Keys are per request, so every other answer stays sealed.
 - **`prove` decrypts on chain.** Its gas grows with the answer, 148,451 at most for 1 KiB.
 - **Promises and payments are signed by EOAs**, checked with `ecrecover`.
-- **Tested and live.** The tests in `contracts/test` passed on 2026-11-06 at 10:10 UTC on a clean clone of commit `dc06b0c` (236 tests in 19 suites, 0 failed, forge 1.8.3), they passed in the Studio sandbox before the deploy, and the contract runs on Arc testnet and Arc mainnet.
+- **Tested and live.** The tests in `contracts/test` passed on 2026-11-06 at 10:10 UTC on a clean clone of commit `dc06b0c` (236 tests in 19 suites, 0 failed, forge 1.8.3), they passed in the Studio sandbox before the deploy (246 passed, 0 failed, forge 1.7.1), and the contract runs on Arc testnet and Arc mainnet.
 
 ## Use it with your own x402 seller
 

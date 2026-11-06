@@ -35,7 +35,9 @@ The public deploy writes too, when it holds the writer key. `api/try-dispute` pu
 
 ## Reading before paying
 
-Every path that pays a seller reads Arkiv first, and the reads filter on the writer with `ownedBy`. Receipts, sellers and rulings stay with the writer for life, so the owner is the writer. Evidence is read with `createdBy`, as above.
+Every path that pays a seller reads Arkiv first, and those reads filter on vet402's writer with `ownedBy`. Receipts, sellers and rulings stay with the writer for life, so the owner is the writer. Evidence is read with `createdBy`, as above.
+
+Two readers, two filters. **Before paying**, the backend and `isRuledAgainst(payTo, { writer })` count only rulings vet402's writer holds, so the date vet402 pays a seller again is set by vet402's own record alone. **"Check a seller" on the receipts page** answers a person's question, so it reads rulings from any writer (`createRulingsReader(writer, …, 'any')` in `src/arkiv/ReceiptsPage.tsx`) and keeps one only once Arc holds the Silent or Fraud event for its claim. `isRuledAgainst(payTo, { writers: 'any', verifyOnArc: true })` gives another buyer the same any-writer reading.
 
 | Path | Who | What is read | By |
 |---|---|---|---|
@@ -81,7 +83,7 @@ Rows the live check writes have a "live-check-" seller name and expire within mi
 | Expiry on seller entities | "Seller active until {date}". When it has run out and the last payment within 7 days got no answer back, "No recent delivery from this seller. Not paid." A seller that was simply not bought from goes on |
 | `extendEntity` | The seller's date moves to 7 days after each delivery that kept its promise |
 | `vet402_verdict` entities | "Arc ruled against this seller on {date}" on that seller's receipts, and no approval card for that seller for 7 days |
-| `ownedBy` queries | Every row comes from one writer, so a stranger cannot add a fake receipt or a fake ruling to the page |
+| `ownedBy` queries | Every receipt, and every ruling a payment waits on, comes from one writer, so a stranger cannot add a fake receipt or move vet402's pay-again date |
 | A ruling query with no writer filter, each row checked on Arc | "Check a seller" shows a ruling from any writer once Arc holds its event, with "Written to Arkiv by {address}, checked on Arc." or "by vet402" |
 | `executeBatch` | "Arkiv: 1 transaction, 3 entities" under a receipt's Details. A dispute's payment, seller and evidence land together |
 | `changeOwnership` and `createdBy` | "Arkiv: the evidence entity belongs to the buyer …" under Details, and "Open a sealed answer" still lists that box, read by its creator |
