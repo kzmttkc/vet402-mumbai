@@ -1,6 +1,6 @@
 # Reach
 
-- **vet402's buyer, ERC-8004 agent 9907**, reads Arc's rulings on Arkiv before it pays.
+- **The vet402 app in this repo** reads Arc's rulings on Arkiv before every payment, and the public agent runs the same check. vet402's production buyer, ERC-8004 agent 9907, takes the same check next (steps below).
 - **Two third-party sellers from Circle's Discovery catalog**, Quicknode and BotPay, have vet402's payments to them on Arkiv: 4 and 1.
 - **88 payment entities and 6 rulings** were on Arkiv on 2026-11-06 at 10:56 UTC, counted page by page in [the table below](#counted-from-arkiv).
 
