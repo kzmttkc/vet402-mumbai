@@ -99,7 +99,7 @@ The test deploys with `maxGasPrice` at 1000 gwei, its own ceiling, so the last r
 
 `scripts/sealed-local-e2e.ts` checks the same from real receipts on anvil: the buyer ends at or above zero after silence and fraud, and between zero and 5 % of its claim gas after an answer.
 
-**An answer is no profit for the buyer.** The claim measures its own gas from its first line, after booking its largest liability, so the first writes of every slot are inside the measurement. `CLAIM_TX_OVERHEAD` (42,000) covers the rest: the 21,000 base, the calldata, the dispatch and the event. That rest was about 35,100 gas on anvil, so an answered buyer ends about 2.5 % of its claim gas ahead: the 6,900 gas of margin that covers calldata with fewer zero bytes. A claim made while the seller already has one open costs less (254,225 gas), and the refund follows it.
+**An answer repays the buyer's claim, with a small margin.** The claim measures its own gas from its first line, after booking its largest liability, so the first writes of every slot are inside the measurement. `CLAIM_TX_OVERHEAD` (42,000) covers the rest: the 21,000 base, the calldata, the dispatch and the event. That rest was about 35,100 gas on anvil, so an answered buyer ends about 2.5 % of its claim gas ahead: the 6,900 gas of margin that covers calldata with fewer zero bytes. A claim made while the seller already has one open costs less (254,225 gas), and the refund follows it.
 
 **The cap bounds a seller's exposure.** Costs are counted at `min(tx.gasprice, MAX_GAS_PRICE)`, so one claim can cost a seller at most `MAX_DISPUTE_COST` in gas, and a buyer that claims at or below the cap is repaid in full.
 
