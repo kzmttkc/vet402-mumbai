@@ -100,3 +100,11 @@ export function receiptLine(paid: string, settled: boolean): string {
   if (Number(paid) === 0) return 'Nothing was charged.'
   return settled ? `Paid ${paid} USDC.` : `Paid ${paid} USDC. Confirming…`
 }
+
+/** The approval card's line for a seller the agent found in Circle's Discovery catalog. */
+export const CATALOG_CARD_LINE = "Found in Circle's Discovery catalog, paid with Arc Nanopayments."
+/** The same line for vet402's own seller, which the agent ranks beside the catalog rather than finds in it. */
+export const OWN_CARD_LINE = "Ranked beside Circle's Discovery catalog, paid with Arc Nanopayments."
+
+/** Which Circle line the approval card shows, by the plan's own mark. */
+export const circleCardLine = (own: boolean | undefined) => (own ? OWN_CARD_LINE : CATALOG_CARD_LINE)

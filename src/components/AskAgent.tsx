@@ -5,7 +5,7 @@ import { LimitRow, PurchaseList } from '@/components/AgentControls'
 import { OWN_SELLER_MARK, PlanWhy } from '@/components/PlanWhy'
 import { addPurchase, LIMIT_CHOICES, loadLimit, loadPurchases, saveLimit } from '@/lib/agentHistory'
 import type { LimitChoice, Purchase } from '@/lib/agentHistory'
-import { answerLine, approvePlan, arcTxUrl, askAgent, receiptLine, SETTLING_LINE, settlementOf } from '@/lib/askAgent'
+import { answerLine, approvePlan, arcTxUrl, askAgent, circleCardLine, receiptLine, SETTLING_LINE, settlementOf } from '@/lib/askAgent'
 import type { AgentPlan as Plan, Compared, Paid as PaidReply } from '@/lib/askAgent'
 import { splitLines } from '@/lib/receiptLines'
 
@@ -42,14 +42,18 @@ type State =
   | { step: 'paying'; plan: AgentPlan; lineDropped?: boolean }
   | { step: 'done'; paid: Paid }
 
-/** The question on the card, with the limit under it. A pick that seals, with a deposit that covers it, also has the protection line. */
-export function SpendQuestion({ plan }: { plan: Pick<AgentPlan, 'amount' | 'protection' | 'limitLine'> }) {
+/**
+ * The question on the card, with the limit under it, then where the seller came from and how it is paid. A pick that seals,
+ * with a deposit that covers it, also has the protection line.
+ */
+export function SpendQuestion({ plan }: { plan: Pick<AgentPlan, 'amount' | 'protection' | 'limitLine' | 'own'> }) {
   return (
     <>
       <p className="display text-xl font-semibold text-balance">
         May I spend up to <span className="tabular-nums">{plan.amount} USDC</span> on this job?
       </p>
       {plan.limitLine && <p className="text-sm text-pretty text-[var(--muted)]">{plan.limitLine}</p>}
+      <p className="text-sm text-pretty text-[var(--muted)]">{circleCardLine(plan.own)}</p>
       {plan.protection && (
         <p className="flex items-start gap-2 text-sm text-pretty">
           <ShieldCheck size={18} className="mt-0.5 shrink-0 text-[var(--success)]" aria-hidden />

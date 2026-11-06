@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SealedLines, SpendQuestion } from '../../src/components/AskAgent'
+import { CATALOG_CARD_LINE, circleCardLine, OWN_CARD_LINE } from '../../src/lib/askAgent'
 import { OWN_SELLER_MARK, PlanWhy } from '../../src/components/PlanWhy'
 import { answerChecked, DELIVERED_SEALED, KEY_CHECKED, PAYMENT_CHECK_NAME } from '../paymentCheckSeller'
 import { DEMO_PRICE } from '../sellers'
@@ -57,5 +58,34 @@ describe('the screen for vet402 Payment Check', () => {
     expect(html.indexOf('Details')).toBeGreaterThan(html.indexOf('Delivered sealed'))
     expect(html).not.toContain('Detail: ')
     expect(renderToStaticMarkup(<SealedLines />)).toBe('')
+  })
+})
+
+describe('the Circle line on the approval card', () => {
+  const textOf = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim()
+
+  test('a seller from the catalog says it was found in Circle Discovery and paid with Arc Nanopayments', () => {
+    const text = textOf(renderToStaticMarkup(<SpendQuestion plan={{ amount: '0.0001', limitLine: limitLine(TRY_JOB_LIMIT) }} />))
+    expect(text).toContain(CATALOG_CARD_LINE)
+    expect(CATALOG_CARD_LINE).toBe("Found in Circle's Discovery catalog, paid with Arc Nanopayments.")
+    expect(text).not.toContain(OWN_CARD_LINE)
+    expect(text.indexOf('on this job?')).toBeLessThan(text.indexOf(CATALOG_CARD_LINE))
+  })
+
+  test("vet402's own seller says it was ranked beside the catalog, not found in it", () => {
+    const text = textOf(renderToStaticMarkup(<SpendQuestion plan={{ amount: '0.001', own: true, protection: PROTECTED_LINE }} />))
+    expect(text).toContain(OWN_CARD_LINE)
+    expect(OWN_CARD_LINE).toBe("Ranked beside Circle's Discovery catalog, paid with Arc Nanopayments.")
+    expect(text).not.toContain('Found in')
+    expect(text.indexOf(OWN_CARD_LINE)).toBeLessThan(text.indexOf('Protected on Arc'))
+    expect(circleCardLine(true)).toBe(OWN_CARD_LINE)
+    expect(circleCardLine(undefined)).toBe(CATALOG_CARD_LINE)
+  })
+
+  test('both lines keep to the wording rules', () => {
+    for (const line of [CATALOG_CARD_LINE, OWN_CARD_LINE]) {
+      expect(line).not.toMatch(/\b(we|our|us)\b/i)
+      expect(line).not.toMatch(/[;\u2013\u2014-]/)
+    }
   })
 })
