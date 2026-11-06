@@ -249,3 +249,45 @@ describe('Check a seller reads every writer', () => {
     expect(() => createRulingsReader(VET402, custom({ request: () => Promise.resolve(null) }), null, 'any')).toThrow('Arc')
   })
 })
+
+/** Arkiv pages the rows by offset, 100 a page, as the real node does. Arc confirms only the claims in `onArc`. */
+function paged(rows: Row[], onArc: number[]) {
+  let pages = 0
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const { method, params } = JSON.parse(init.body as string) as { method: string; params: unknown[] }
+    if (!url.includes('arkiv')) return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: arcAnswer(onArc, method, params) }))
+    if (method === 'arkiv_getBlockTiming') return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: TIMING }))
+    pages++
+    const { limit, offset } = params[1] as { limit: string; offset: string }
+    const from = Number(BigInt(offset))
+    const data = rows.slice(from, from + Number(BigInt(limit))).map((r, i) => entity(r, from + i))
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { data } }))
+  }) as unknown as typeof fetch
+  return { fetch: fetchImpl, pages: () => pages }
+}
+
+/** `count` rows from another writer, each naming its own claim, numbered from 1. */
+const flood = (count: number, writer = SECOND) => Array.from({ length: count }, (_, i) => ({ writer, createdAt: RECENT - i, claim: i + 1 }))
+
+describe("isRuledAgainst with writers: 'any' past 2,000 rows", () => {
+  test('a flood of rows Arc does not confirm reads as clear, and does not throw', async () => {
+    const { fetch, pages } = paged(flood(2_500), [])
+    expect(await isRuledAgainst(PAY_TO, { writers: 'any', verifyOnArc: true, fetch })).toBe(false)
+    expect(pages()).toBe(20)
+  })
+
+  test('a confirmed ruling among the rows read still counts behind the flood', async () => {
+    const { fetch } = paged(flood(2_500), [1_900])
+    expect(await isRuledAgainst(PAY_TO, { writers: 'any', verifyOnArc: true, fetch })).toBe(true)
+  })
+
+  test('a confirmed ruling past the rows read is not reached, and the answer comes from the confirmed rows read', async () => {
+    const { fetch } = paged(flood(2_500), [2_100])
+    expect(await isRuledAgainst(PAY_TO, { writers: 'any', verifyOnArc: true, fetch })).toBe(false)
+  })
+
+  test('with one trusted writer, more than 2,000 rows still throws, as before', async () => {
+    const { fetch } = paged(flood(2_500, VET402), [])
+    await expect(isRuledAgainst(PAY_TO, { writer: VET402, verifyOnArc: true, fetch })).rejects.toThrow('More than 2000 rulings')
+  })
+})

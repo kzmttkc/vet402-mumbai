@@ -12,7 +12,7 @@ import { TRANSFER_STATUSES } from './receiptStore'
 import type { TransferStatus } from './receiptStore'
 import { createBalanceCheck } from './balanceCheckSeller'
 import { createPaymentCheck } from './paymentCheckSeller'
-import type { OwnSealedSeller, OwnSellerOptions, PaymentCheck } from './paymentCheckSeller'
+import type { OwnSealedSeller, OwnSellerOptions, PaymentCheck, SellerNames } from './paymentCheckSeller'
 import { createSealedDelivery, createSealedPorts, parseSealedAddress } from './sealedDelivery'
 import { createTryJob, parseJobDailyLimit } from './tryJob'
 import type { TryJob, TryJobPorts } from './tryJob'
@@ -79,10 +79,10 @@ function ownSellerOptions(env: Env, { sealedAddress, holdKey, holdAvailable }: O
   }
 }
 
-/** vet402 Payment Check, or null under the same conditions as ownSellerOptions. */
-export function paymentCheckFromEnv(env: Env, wiring: OwnSellerEnv): PaymentCheck | null {
+/** vet402 Payment Check, or null under the same conditions as ownSellerOptions. `sellerNames` lets its answer name the seller paid. */
+export function paymentCheckFromEnv(env: Env, wiring: OwnSellerEnv, sellerNames?: SellerNames): PaymentCheck | null {
   const options = ownSellerOptions(env, wiring)
-  return options ? createPaymentCheck(options) : null
+  return options ? createPaymentCheck({ ...options, ...(sellerNames ? { sellerNames } : {}) }) : null
 }
 
 /** vet402 Balance Check, from the same wallets and contract as Payment Check, or null under the same conditions. */
@@ -112,7 +112,7 @@ export function tryJobFromEnv(env: Env = process.env): TryJob | null {
 
   const sellerCheck = readOnlySellerCheck(env)
   const wiring = sealedAddress ? { sealedAddress, holdKey, holdAvailable: () => jobPorts.holdAvailable() } : null
-  const ownSellers = wiring ? [paymentCheckFromEnv(env, wiring), balanceCheckFromEnv(env, wiring)].filter((o) => o !== null) : []
+  const ownSellers = wiring ? [paymentCheckFromEnv(env, wiring, () => jobPorts.candidates()), balanceCheckFromEnv(env, wiring)].filter((o) => o !== null) : []
   const ports: TryJobPorts = {
     ...(sellerCheck ? { sellerCheck } : {}),
     ...(ownSellers.length ? { ownSellers } : {}),

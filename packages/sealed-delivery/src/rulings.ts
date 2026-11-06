@@ -149,7 +149,8 @@ interface RulingRow {
  * payTo address within the window. With `verifyOnArc`, only a ruling whose event Arc holds counts.
  * With `writers: 'any'`, a ruling from any writer counts once Arc confirms it, and without `verifyOnArc`
  * it throws. A row is judged by its `pay_to` when it has one. A failed read throws, so the caller decides whether to pay without it. vet402 itself does not pay
- * when the read fails.
+ * when the read fails. With `writers: 'any'`, more rows than the read takes (2,000) is not a failed read: the answer comes
+ * from the rows read, and only a ruling Arc confirms among them makes it true. With `writer`, more rows than that throws.
  */
 export async function isRuledAgainst(payTo: string, options: RulingOptions): Promise<boolean> {
   const fetchImpl = options.fetch ?? fetch
@@ -193,5 +194,8 @@ export async function isRuledAgainst(payTo: string, options: RulingOptions): Pro
     }
     if (rows.length < PAGE) return false
   }
+  // Anyone can write rows that name this address. Only rows Arc confirms count, and none of those read did, so a flood
+  // of unconfirmed rows ends the read here and never stops an honest seller.
+  if (anyWriter) return false
   throw new Error(`More than ${MAX_PAGES * PAGE} rulings. Not all were read.`)
 }

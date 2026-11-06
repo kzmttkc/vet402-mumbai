@@ -25,6 +25,8 @@ import {
   createPaymentCheck,
   DELIVERED_SEALED,
   describeLastPayment,
+  lastPaymentFromCircle,
+  listingsWithin,
   PAYMENT_CHECK_NAME,
   PAYMENT_CHECK_RESOURCE,
   paymentCheckCandidate,
@@ -101,6 +103,60 @@ describe('vet402 Payment Check, the listing', () => {
     )
     expect(describeLastPayment([{ status: 'failed', amount: '100', toAddress: to, createdAt: '2026-11-06T02:00:00Z' }])).toBe(
       "No, your agent's last payment of 0.0001 USDC to 0xf463…623c did not go through.",
+    )
+  })
+})
+
+describe('the answer names the seller it paid, from the Discovery catalog', () => {
+  const quicknode = '0xf46394addda95a3d5bcc1124605e3d15d204623c'
+  const at = '2026-11-06T02:00:00Z'
+
+  test('Quicknode by its name from the 2026-11-06 catalog, with no 0x address in the sentence', () => {
+    const settled = describeLastPayment([{ status: 'completed', amount: '100', toAddress: quicknode, createdAt: at }], undefined, catalog)
+    console.log(`[Payment Check answer from the Quicknode listing] ${settled}`)
+    expect(settled).toBe("Yes, your agent's last payment went through. It paid 0.0001 USDC to Quicknode, and Arc has settled it.")
+    expect(settled).not.toMatch(/0x/i)
+    expect(describeLastPayment([{ status: 'batched', amount: '100', toAddress: quicknode.toUpperCase().replace('0X', '0x'), createdAt: at }], undefined, catalog)).toBe(
+      "Yes, your agent's last payment went through. It paid 0.0001 USDC to Quicknode, and Circle is settling it on Arc.",
+    )
+    expect(describeLastPayment([{ status: 'failed', amount: '100', toAddress: quicknode, createdAt: at }], undefined, catalog)).toBe(
+      "No, your agent's last payment of 0.0001 USDC to Quicknode did not go through.",
+    )
+  })
+
+  test('a payee no listing names keeps its short address', () => {
+    const unlisted = '0x00000000000000000000000000000000000000d5'
+    expect(describeLastPayment([{ status: 'completed', amount: '100', toAddress: unlisted, createdAt: at }], undefined, catalog)).toBe(
+      "Yes, your agent's last payment went through. It paid 0.0001 USDC to 0x0000…00d5, and Arc has settled it.",
+    )
+  })
+
+  test('two names for one payee, or a name that could pass as vet402, keep the short address', () => {
+    const row = [{ status: 'completed', amount: '100', toAddress: quicknode, createdAt: at }]
+    const short = "Yes, your agent's last payment went through. It paid 0.0001 USDC to 0xf463…623c, and Arc has settled it."
+    expect(describeLastPayment(row, undefined, [...catalog, { payTo: quicknode, sellerName: 'Someone Else' }])).toBe(short)
+    expect(describeLastPayment(row, undefined, [{ payTo: quicknode, sellerName: 'vet402 Payment Check' }])).toBe(short)
+    expect(describeLastPayment(row, undefined, [{ payTo: quicknode, sellerName: 'x'.repeat(61) }])).toBe(short)
+  })
+
+  test('names that fail or come late leave the answer as before, and never hold it up', async () => {
+    expect(await listingsWithin(() => Promise.reject(new Error('Discovery down')))).toEqual([])
+    const startedAt = Date.now()
+    expect(await listingsWithin(() => new Promise(() => {}), 50)).toEqual([])
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(await listingsWithin(undefined)).toEqual([])
+  })
+
+  test("Circle's record and the catalog together give the named sentence", async () => {
+    const fetchImpl = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ transfers: [{ status: 'completed', amount: '100', toAddress: quicknode, createdAt: at }] })),
+      )) as unknown as typeof fetch
+    expect(await lastPaymentFromCircle(HOLD, fetchImpl, SELLER, () => Promise.resolve(catalog))).toBe(
+      "Yes, your agent's last payment went through. It paid 0.0001 USDC to Quicknode, and Arc has settled it.",
+    )
+    expect(await lastPaymentFromCircle(HOLD, fetchImpl, SELLER)).toBe(
+      "Yes, your agent's last payment went through. It paid 0.0001 USDC to 0xf463…623c, and Arc has settled it.",
     )
   })
 })

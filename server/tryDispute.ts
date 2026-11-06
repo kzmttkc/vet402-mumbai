@@ -57,6 +57,27 @@ const PLAIN_RECEIPT: [RegExp, (amount: string) => string][] = [
   [/^The seller sent the wrong key\. Arc refused it\.$/, () => 'The seller sent something that does not open the answer. Arc refused it.'],
 ]
 
+const SWARM_REF = /^[0-9a-f]{64}$/i
+const ENTITY_KEY = /^0x[0-9a-f]{64}$/i
+const BATCH_LINE = /^Detail: Arkiv: 1 transaction, (\d+) entities$/
+
+/**
+ * The lines the public record adds after the result, from the try's own row once the writes are done. A box that
+ * did not reach Swarm, or entities that did not reach Arkiv in time, add nothing.
+ */
+export function recordEvents(row: ReceiptRow | undefined, atMs: number): TryEvent[] {
+  if (!row) return []
+  const events: TryEvent[] = []
+  const ref = row.evidence?.swarmRef
+  if (ref && SWARM_REF.test(ref)) events.push({ type: 'record', what: 'swarm', ref, atMs })
+  const entityKey = [row.arkivEvidenceKey, row.arkivPaymentKey].find((key): key is string => !!key && ENTITY_KEY.test(key))
+  if (entityKey) {
+    const batch = (row.outcome ?? []).map((line) => BATCH_LINE.exec(line)).find((found) => found !== null)
+    events.push({ type: 'record', what: 'arkiv', entityKey, entities: batch ? Number(batch[1]) : null, atMs })
+  }
+  return events
+}
+
 export function plainReceipt(lines: readonly string[]): string[] {
   return lines.flatMap((line) => {
     for (const [pattern, plain] of PLAIN_RECEIPT) {
@@ -111,6 +132,13 @@ export type TryEvent =
       totalMs: number
     }
   | { type: 'result'; ok: false; message: string; claimTx: string | null; totalMs: number }
+  /** After the result: the claimed box is on Swarm under this reference. Sent only when the upload came back. */
+  | { type: 'record'; what: 'swarm'; ref: string; atMs: number }
+  /**
+   * After the result: the try reached Arkiv. `entityKey` is the evidence entity, or the payment entity when there is no
+   * evidence. `entities` is the count of the one transaction that wrote them together, or null when Arkiv took them one by one.
+   */
+  | { type: 'record'; what: 'arkiv'; entityKey: string; entities: number | null; atMs: number }
 
 /** Everything a try needs from the outside. The real one is in tryDisputeWire.ts, the tests pass fakes. */
 export interface TryPorts {
@@ -344,7 +372,10 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
       fail(TRY_MESSAGES.UNREACHABLE)
     }
     try {
-      if (ports.record && kept) await keepOnRecord(ports.record, local, kept, tx.claim !== null, startedAt + recordByMs)
+      if (ports.record && kept) {
+        await keepOnRecord(ports.record, local, kept, tx.claim !== null, startedAt + recordByMs)
+        for (const event of recordEvents(local.list()[0], now() - startedAt)) emit(event)
+      }
     } catch (error) {
       log(`try-dispute record failed: ${messageOf(error)}`)
     } finally {

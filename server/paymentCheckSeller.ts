@@ -100,27 +100,72 @@ interface Row {
   createdAt?: unknown
 }
 
+/** A Discovery listing as the answer reads it: who it pays and the seller's name. */
+export interface NamedListing {
+  payTo: string | null
+  sellerName: string
+}
+
+/** The catalog the agent ranks, for the seller names in the answer. */
+export type SellerNames = () => Promise<readonly NamedListing[]>
+
+/** The names are waited for at most this long. Past it the answer names the short address, as before. */
+export const NAMES_WAIT_MS = 2_000
+const MAX_NAME = 60
+
+/**
+ * The seller's name for a payee, from the listings that pay it. Null when no listing pays it, when two listings
+ * that pay it disagree on the name, or when the name could pass as one of vet402's own sellers.
+ */
+export function sellerNameFor(listings: readonly NamedListing[], address: string): string | null {
+  const names = new Set(
+    listings.filter((l) => typeof l.payTo === 'string' && l.payTo.toLowerCase() === address.toLowerCase()).map((l) => l.sellerName.trim()),
+  )
+  if (names.size !== 1) return null
+  const [name] = [...names] as [string]
+  if (!name || name.length > MAX_NAME || /^vet402\b/i.test(name)) return null
+  return name
+}
+
 /**
  * The answer in plain words, from the payer's newest transfer on Circle's record. Payments to `skipTo`, this seller,
- * are left out, so the answer is about the payment before the check and not the check itself.
+ * are left out, so the answer is about the payment before the check and not the check itself. The payee is named by
+ * its seller name in `listings` when it has one there, and by its short address otherwise.
  */
-export function describeLastPayment(transfers: Row[], skipTo?: string): string {
+export function describeLastPayment(transfers: Row[], skipTo?: string, listings: readonly NamedListing[] = []): string {
   const skip = skipTo?.toLowerCase()
   const newest = transfers
     .filter((t) => !skip || typeof t.toAddress !== 'string' || t.toAddress.toLowerCase() !== skip)
     .sort((a, b) => Date.parse(String(b.createdAt ?? '')) - Date.parse(String(a.createdAt ?? '')))[0]
   if (!newest) return "Circle's record shows no payments from your agent yet."
   const amount = typeof newest.amount === 'string' && /^\d+$/.test(newest.amount) ? `${formatUsdc(BigInt(newest.amount))} USDC` : 'a payment'
-  const to = typeof newest.toAddress === 'string' ? ` to ${short(newest.toAddress)}` : ''
+  const to = typeof newest.toAddress === 'string' ? ` to ${sellerNameFor(listings, newest.toAddress) ?? short(newest.toAddress)}` : ''
   if (newest.status === 'failed') return `No, your agent's last payment of ${amount}${to} did not go through.`
   if (newest.status === 'completed') return `Yes, your agent's last payment went through. It paid ${amount}${to}, and Arc has settled it.`
   return `Yes, your agent's last payment went through. It paid ${amount}${to}, and Circle is settling it on Arc.`
 }
 
-/** Reads the payer's newest transfers from Circle's record and answers. */
-export async function lastPaymentFromCircle(payer: string, fetchImpl: typeof fetch = fetch, skipTo?: string): Promise<string> {
-  const transfers = await fetchTransfers(`from=${encodeURIComponent(payer)}&network=${ARC_CAIP2}&pageSize=20`, fetchImpl)
-  return describeLastPayment(transfers as Row[], skipTo)
+/** The listings for the names, or none when they fail or take longer than `waitMs`. Never throws. */
+export async function listingsWithin(sellerNames: SellerNames | undefined, waitMs = NAMES_WAIT_MS): Promise<readonly NamedListing[]> {
+  if (!sellerNames) return []
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<readonly NamedListing[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), waitMs)
+  })
+  try {
+    return await Promise.race([sellerNames().catch(() => []), late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Reads the payer's newest transfers from Circle's record and answers. The names are read beside it, so they add no wait when cached. */
+export async function lastPaymentFromCircle(payer: string, fetchImpl: typeof fetch = fetch, skipTo?: string, sellerNames?: SellerNames): Promise<string> {
+  const [transfers, listings] = await Promise.all([
+    fetchTransfers(`from=${encodeURIComponent(payer)}&network=${ARC_CAIP2}&pageSize=20`, fetchImpl),
+    listingsWithin(sellerNames),
+  ])
+  return describeLastPayment(transfers as Row[], skipTo, listings)
 }
 
 /** What the agent gets from one of vet402's own sellers: the payment as usual, the answer as text, and the receipt's lines. */
@@ -157,6 +202,8 @@ export interface OwnPayment {
 export interface PaymentCheckOptions extends OwnSellerOptions {
   /** The answer for a payer. Defaults to Circle's record. */
   lastPayment?: (payer: string) => Promise<string>
+  /** The catalog the agent ranks, so the answer names the seller it paid. Absent names the short address. */
+  sellerNames?: SellerNames
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message.split('\n')[0] : String(error))
@@ -345,10 +392,10 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
 export type OwnSealedSeller = ReturnType<typeof createOwnSealedSeller>
 
 export function createPaymentCheck(options: PaymentCheckOptions): OwnSealedSeller {
-  const { lastPayment } = options
+  const { lastPayment, sellerNames } = options
   return createOwnSealedSeller(
     PAYMENT_CHECK,
-    (payment, seller) => (lastPayment ? lastPayment(payment.from) : lastPaymentFromCircle(payment.from, fetch, seller)),
+    (payment, seller) => (lastPayment ? lastPayment(payment.from) : lastPaymentFromCircle(payment.from, fetch, seller, sellerNames)),
     options,
   )
 }

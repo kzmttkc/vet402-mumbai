@@ -12,13 +12,17 @@ import {
   NO_ANSWER,
   parseDailyLimit,
   plainReceipt,
+  recordEvents,
   TRY_MESSAGES,
 } from '../tryDispute'
 import type { TryEvent, TryPorts, TryRecord } from '../tryDispute'
 import type { ReceiptRow } from '../receiptStore'
 import { recentPaymentTimes } from '../tryDisputeWire'
 import { sealResponse } from '../../src/lib/sealed'
-import { splitLines } from '../../src/lib/receiptLines'
+import { detail, splitLines } from '../../src/lib/receiptLines'
+import { ARKIV_ENTITY, recordStep, startTry, SWARM_BYTES } from '../../src/lib/tryDispute'
+import type { TryStep } from '../../src/lib/tryDispute'
+import { batchLine } from '../arkiv'
 
 // The try runs the real demo service against fakes: no chain, no Gateway, no Circle. The real
 // contract is covered by scripts/try-dispute-local.ts on anvil.
@@ -50,6 +54,8 @@ interface Setup {
   recent?: () => Promise<number[]>
   dailyLimit?: number
   answerWaitMs?: number
+  /** How long after the start the record gives up. A test without a box on Swarm passes a short one, so it does not wait 20 s. */
+  recordByMs?: number
   clock?: { t: number }
   record?: TryRecord
   evidence?: DemoPorts['evidence']
@@ -119,6 +125,7 @@ function setup(over: Setup = {}) {
   const tries = createTryDispute(ports, {
     dailyLimit: over.dailyLimit ?? 40,
     answerWaitMs: over.answerWaitMs ?? 5000,
+    ...(over.recordByMs ? { recordByMs: over.recordByMs } : {}),
     ...(clock ? { now: () => clock.t } : {}),
   })
   return { tries, log }
@@ -423,5 +430,131 @@ describe('the try on the public record', () => {
     const { events } = await runTry(tries)
     expect(resultOf(events)?.type).toBe('result')
     expect(log.payments).toBe(1)
+  })
+})
+
+const SWARM_REF = 'ab'.repeat(32)
+const EVIDENCE_KEY = `0x${'e1'.repeat(32)}`
+const PAYMENT_KEY = `0x${'f2'.repeat(32)}`
+
+/**
+ * A record port that stands in for the Arkiv sink: once the row has its transfer id, `writes` decides what lands, as
+ * the sink would put it on the row (the keys and the batch line under Details).
+ */
+function arkivFake(writes: 'batch' | 'one by one' | 'fails') {
+  const record: TryRecord = {
+    wrap(store) {
+      let tail: Promise<void> = Promise.resolve()
+      return {
+        store: {
+          list: () => store.list(),
+          add: (row) => store.add(row),
+          update: (id, patch) => {
+            store.update(id, patch)
+            if (!patch.transferId || writes === 'fails') return
+            tail = tail.then(() => {
+              const row = store.list().find((r) => r.id === id)
+              const evidence = row?.evidence ? { arkivEvidenceKey: EVIDENCE_KEY } : {}
+              const outcome = writes === 'batch' ? [...(row?.outcome ?? []), detail(batchLine(3))] : (row?.outcome ?? [])
+              store.update(id, { arkivPaymentKey: PAYMENT_KEY, arkivSellerDone: true, ...evidence, outcome })
+            })
+          },
+        },
+        idle: () => tail,
+      }
+    },
+    findTransfer: () => Promise.resolve({ id: 'transfer-1', status: 'received', txHash: null }),
+  }
+  return record
+}
+
+const recordsOf = (events: TryEvent[]) => events.filter((e) => e.type === 'record')
+
+describe('the public record on the try stream', () => {
+  test('after the result: the box on Swarm, then Arkiv with its one transaction and three entities', async () => {
+    const { tries } = setup({ record: arkivFake('batch'), evidence: () => Promise.resolve(SWARM_REF) })
+    const { events } = await runTry(tries)
+    const at = (pick: (e: TryEvent) => boolean) => events.findIndex(pick)
+    const result = at((e) => e.type === 'result')
+    expect((events[result] as { ok: boolean }).ok).toBe(true)
+    // Every step comes before the result, as before, and the record lines only after it.
+    expect(events.slice(0, result).every((e) => e.type === 'step')).toBe(true)
+    expect(recordsOf(events).map((e) => ({ ...e, atMs: 0 }))).toEqual([
+      { type: 'record', what: 'swarm', ref: SWARM_REF, atMs: 0 },
+      { type: 'record', what: 'arkiv', entityKey: EVIDENCE_KEY, entities: 3, atMs: 0 },
+    ])
+    expect(at((e) => e.type === 'record')).toBeGreaterThan(result)
+  })
+
+  test('Arkiv writes that fail add no Arkiv line and no error, and the box on Swarm still shows', async () => {
+    const { tries } = setup({ record: arkivFake('fails'), evidence: () => Promise.resolve(SWARM_REF) })
+    const { events } = await runTry(tries)
+    expect(events.filter((e) => e.type === 'result')).toHaveLength(1)
+    expect((resultOf(events) as { ok: boolean }).ok).toBe(true)
+    expect(recordsOf(events)).toEqual([expect.objectContaining({ what: 'swarm', ref: SWARM_REF })])
+  })
+
+  test('a Swarm upload that fails and Arkiv writes that fail add nothing at all', async () => {
+    const { tries } = setup({ record: arkivFake('fails'), evidence: () => Promise.reject(new Error('gateway down')), recordByMs: 11_000 })
+    const { events } = await runTry(tries)
+    expect((resultOf(events) as { ok: boolean }).ok).toBe(true)
+    expect(recordsOf(events)).toEqual([])
+  })
+
+  test('without the writer key nothing is recorded, so no record line is sent', async () => {
+    const { tries } = setup({ evidence: () => Promise.resolve(SWARM_REF) })
+    const { events } = await runTry(tries)
+    expect(recordsOf(events)).toEqual([])
+  })
+
+  test('entities written one by one give the Arkiv line without a count, and malformed values give nothing', () => {
+    const row = { id: 'r', evidence: { claimId: CLAIM_ID, swarmRef: SWARM_REF }, arkivPaymentKey: PAYMENT_KEY, outcome: [] } as unknown as ReceiptRow
+    expect(recordEvents(row, 9)).toEqual([
+      { type: 'record', what: 'swarm', ref: SWARM_REF, atMs: 9 },
+      { type: 'record', what: 'arkiv', entityKey: PAYMENT_KEY, entities: null, atMs: 9 },
+    ])
+    const bad = { id: 'r', evidence: { claimId: CLAIM_ID, swarmRef: 'not a ref' }, arkivPaymentKey: '0x12', outcome: [] } as unknown as ReceiptRow
+    expect(recordEvents(bad, 9)).toEqual([])
+    expect(recordEvents(undefined, 9)).toEqual([])
+  })
+})
+
+describe('the browser reads the record lines', () => {
+  const stream = (lines: unknown[]) =>
+    (() => Promise.resolve(new Response(lines.map((l) => JSON.stringify(l)).join('\n'), { status: 200 }))) as unknown as typeof fetch
+
+  test('the steps and the result arrive as before, and each record line becomes a linked line of its own', async () => {
+    const steps: TryStep[] = []
+    const records: TryStep[] = []
+    const results: unknown[] = []
+    const final = await startTry(
+      (step) => steps.push(step),
+      stream([
+        { type: 'step', name: 'delivered', label: 'Delivered', atMs: 4100 },
+        { type: 'result', ok: false, message: 'x', claimTx: null, totalMs: 4200 },
+        { type: 'record', what: 'swarm', ref: SWARM_REF, atMs: 9000 },
+        { type: 'record', what: 'arkiv', entityKey: EVIDENCE_KEY, entities: 3, atMs: 12000 },
+        { type: 'record', what: 'arkiv', entityKey: 'javascript:alert(1)', entities: 3, atMs: 12000 },
+        { type: 'record', what: 'other', atMs: 1 },
+      ]),
+      (result) => results.push(result),
+      (record) => records.push(record),
+    )
+    expect(steps).toEqual([{ label: 'Delivered', atMs: 4100, name: 'delivered' }])
+    expect(results).toHaveLength(1)
+    expect(final.ok).toBe(false)
+    expect(records).toEqual([
+      { label: 'Box on Swarm', atMs: 9000, name: 'swarm', href: `${SWARM_BYTES}${SWARM_REF}` },
+      { label: 'Recorded on Arkiv: 1 transaction, 3 entities', atMs: 12000, name: 'arkiv', href: `${ARKIV_ENTITY}${EVIDENCE_KEY}` },
+    ])
+    expect(SWARM_BYTES).toBe('https://api.gateway.ethswarm.org/bytes/')
+    expect(ARKIV_ENTITY).toBe('https://rabdi.explorer.arkiv.network/entity/')
+  })
+
+  test('without a count the Arkiv line names Arkiv alone, and an old caller without onRecord sees no change', async () => {
+    expect(recordStep({ what: 'arkiv', entityKey: PAYMENT_KEY, entities: null, atMs: 1 })?.label).toBe('Recorded on Arkiv')
+    const steps: TryStep[] = []
+    await startTry((step) => steps.push(step), stream([{ type: 'record', what: 'swarm', ref: SWARM_REF, atMs: 9000 }]))
+    expect(steps).toEqual([])
   })
 })

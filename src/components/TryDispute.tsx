@@ -84,6 +84,7 @@ export function TryDispute() {
         setRecording(true)
         seen.opens = open(done)
       },
+      (record) => setSteps((current) => [...current, record]),
     )
     if (!seen.result) setResult(final)
     setRecording(false)
@@ -127,7 +128,14 @@ export function TryDispute() {
         <ol className="mt-4 space-y-1" aria-live="polite">
           {steps.map((step, i) => (
             <li key={`${i}-${step.label}`} className="flex items-baseline justify-between gap-3 text-sm">
-              <span>{step.label}</span>
+              {step.href ? (
+                <a className="min-w-0 font-semibold underline underline-offset-2" href={step.href} target="_blank" rel="noreferrer">
+                  {step.label}
+                  <ExternalLink size={14} className="ml-1 inline align-[-2px]" aria-hidden />
+                </a>
+              ) : (
+                <span>{step.label}</span>
+              )}
               <span className="shrink-0 tabular-nums text-[var(--muted)]">{seconds(step.atMs)}</span>
             </li>
           ))}
