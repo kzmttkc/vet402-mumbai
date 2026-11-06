@@ -136,8 +136,8 @@ With nothing installed:
 
 With a clone (commands below, results from a fresh clone of commit `4ad89eb` on 2026-11-06 between 02:10 and 02:20 UTC, forge 1.8.3):
 
-9. `forge test`: 236 tests passed in 19 suites. In the Arc Studio sandbox, which also holds `contracts/test-integration`, forge 1.7.1 passed 246 and failed 0 before the deploy.
-10. `bash scripts/test.sh`: 440 tests passed, 0 failed.
+9. `forge test`: 236 tests passed in 19 suites on forge 1.8.3. In the Arc Studio sandbox, forge 1.7.1 passed 246 and failed 0 on the same 19 test files before the deploy.
+10. `bash scripts/test.sh`: 543 tests passed, 0 failed (2026-11-06 05:33 UTC).
 11. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
 
 ## Run it
@@ -240,7 +240,7 @@ More in [arkiv/](arkiv/schema.md).
 
 ## World ID
 
-The moment that needs a person is money reaching the agent. vet402 pays with my money and its keys sit on my server. With World ID on, an approval in World App is the only way money reaches the hold wallet. A passkey or a login would prove a device or an account, and the server that runs the agent holds both. World ID proves a verified human, fresh for this hold and this amount, which is the one thing the agent's host cannot produce on its own.
+The moment that needs a person is money reaching the agent. vet402 pays with my money and its keys sit on my server. With World ID on, an approval in World App is the only way money reaches the hold wallet. A passkey proves a device, and whoever runs the agent's host can enroll another one. A World ID session proof can come only from the same verified human who set the budget, on any phone, and it carries this hold's amount.
 
 There are two approvals. Both are World ID 4.0 session proofs. Every one asks for Proof of Human, and a hold above 0.5 USDC also asks for a selfie check in the same approval.
 

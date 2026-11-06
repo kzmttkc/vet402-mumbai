@@ -178,9 +178,9 @@ Swarm is required. There is no copy on the page to open instead, so when a sourc
 
 ## Swarm in the demo video
 
-From 2:20.3: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order.
+From 2:51.2: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order. At 2:55.7 Seller A's box opens to "Matches the seller's promise." and Seller F's to "Does not match the seller's promise."
 
-The scenes at 2:20.3 and 2:24.8 open Seller A's and Seller F's boxes from the 2026-11-06 runs on the live contract `0xE9C35ad2…`: Seller A's matches the seller's promise and Seller F's does not. Every box of those runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above. An earlier take on 2026-11-05 between 22:40 and 22:49 UTC, before the batch was bought at 22:53 UTC, used the public gateway.
+The boxes are Seller A's and Seller F's from the 2026-11-06 runs on the live contract `0xE9C35ad2…`. Every box of those runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above.
 
 ## What would make Swarm even better
 
