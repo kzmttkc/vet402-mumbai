@@ -202,6 +202,9 @@ contract SealedDeliveryGasTest is SealedDeliveryTestBase {
 
     function test_Gas_PerKbSlope() public {
         _build(100 * 1024, false);
+        // One unmeasured prove first. Some forge versions charge the first call for slots the later calls find
+        // warm, which made 100 B look dearer than 1 KB in Arc Studio's sandbox (105,217 against 92,432 gas).
+        _attempt(100, CAP, FRAUD_HASH, false);
         uint256[4] memory lens = [uint256(100), 1024, 10 * 1024, 100 * 1024];
         uint256[4] memory gasUsed;
         for (uint256 i; i < lens.length; ++i) {
