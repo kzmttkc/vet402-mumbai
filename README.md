@@ -4,17 +4,19 @@ When an AI agent pays for an API, nothing guarantees the answer arrives. On 2026
 
 A retry with a new signature pays again. I measured it at the event with Seller B, which declares nothing: Circle's record shows 2 transfers, `e9cbd6d5-d3a3-4693-9e6d-f9d33a197b31` and `b9d962ef-6276-4f29-a94d-87618539a6fd`, 2026-11-05 16:04 UTC. [circlefin/arc-nanopayments#43](https://github.com/circlefin/arc-nanopayments/issues/43) describes the same problem (open, 0 comments, read 2026-11-05 UTC).
 
-With vet402, the answer arrives locked, and the key comes on a separate request. When the key does not come, vet402 sends one claim to SealedDelivery on Arc. The seller then has 60 seconds to put the key on chain. If it stays silent or swaps the answer, its deposit pays 2 x (price + 0.0105 USDC): half to the buyer, the rest burned.
+With vet402, the answer arrives locked, and the key comes on a separate request. When the key does not come, vet402 sends one claim to SealedDelivery on Arc. The seller then has 60 seconds to put the key on chain. If it answers, the same transaction repays the buyer the gas of its claim from the seller's deposit. If it stays silent or swaps the answer, its deposit pays twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer, the rest burned.
 
-Proof on Arc testnet, 2026-11-05 22:40 to 22:46 UTC, on the final contract, each at a price of 0.001 USDC. Each seller deposited 0.1 USDC between 22:21 and 22:22 UTC. I run these sellers, so every payout comes from a seller I stopped or told to cheat. All rows, and a second run from 23:11 to 23:16 UTC, are in [DEMO.md](DEMO.md).
+Proof on Arc testnet, 2026-11-06 01:59 to 02:04 UTC, on the final contract, each at a price of 0.001 USDC. Sellers A, D, E and F each deposited 0.5 USDC at 01:37 UTC. The "line stayed up" row is from the run of 01:42 UTC on the same contract. I run these sellers, so every payout comes from a seller I stopped or told to cheat. All rows, the run of 01:42 to 01:46 UTC, and the runs on earlier versions are in [DEMO.md](DEMO.md).
 
 | Seller | What it did | Result | Onchain proof |
 |---|---|---|---|
-| A | Line stayed up | "Charged once. Delivered." 1.3 s from the start | Transfer `271b8452-365d-4fda-8d49-0019cbdcb4e2`, 0 transactions to the contract |
-| A | Dropped the key request, answered the claim | "Charged once. Key read from Arc." "Circle record: 1 transfer for this payment." 9.0 s from the start | Claim [`0xe5bc6bdb…`](https://explorer.testnet.arc.io/tx/0xe5bc6bdb0cecef65b542e66917fe290429952774973af6b92d0605b76138d3cb), answer [`0xd437bafb…`](https://explorer.testnet.arc.io/tx/0xd437bafb360742a03be9f4900f2efaa96a3d2fd8387179e5f2c4c83f50dc792d) |
-| E | Said nothing | "The seller stayed silent. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0x24182416…`](https://explorer.testnet.arc.io/tx/0x24182416082b271fe9a2a94897e4151e3a2b80bb0aeda1c991d2a3189c3e3fd6), finalize [`0xc60c0312…`](https://explorer.testnet.arc.io/tx/0xc60c0312308f03d84561f7f81671947c3095b255f6cc7a60531c178cabe8d127) |
-| D | Tried a wrong key, then said nothing | "Wrong key rejected by the contract." "The seller stayed silent. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0xf011ece9…`](https://explorer.testnet.arc.io/tx/0xf011ece93a231868a637ac2a881411d1150af78230a920f4f4b07bdb7a12ac26), reverted answer [`0x66112b6d…`](https://explorer.testnet.arc.io/tx/0x66112b6d4e17ffc01e84a3fde32eb6d3a6fc65a3e20140df14238355f3d1f100), finalize [`0xcf628ca2…`](https://explorer.testnet.arc.io/tx/0xcf628ca23d50eb6e9197c0bfc1882d2d5fda81c73f3018fb1ca9f161d7a053a5) |
-| F | Swapped the answer, then gave its key | "The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0xb9214a10…`](https://explorer.testnet.arc.io/tx/0xb9214a1089666e9b82106c425095b94e2da39f968ea71056d6fbdc7afd1d8db1), answer [`0x211a089a…`](https://explorer.testnet.arc.io/tx/0x211a089a2bd47d5a549accd135fa84ae36d6e49d20a9dbbb34a9d06cb590ec49), prove [`0xe72c3f4c…`](https://explorer.testnet.arc.io/tx/0xe72c3f4cb07caf1c19757c1b1029749fc89f8c19e31004aa338547b30af3d46b) |
+| A | Line stayed up | "Charged once. Delivered." 2.1 s from the start, 01:42 UTC | Transfer `8df8ff6d-df86-4aa1-b9fb-840347074510`, 0 transactions to the contract |
+| A | Dropped the key request, answered the claim | "Charged once. Key read from Arc." "Claim gas repaid by the seller: 0.006949 USDC." "Circle record: 1 transfer for this payment." Key on chain 7.2 s from the start | Claim [`0x6fbe43cb…`](https://explorer.testnet.arc.io/tx/0x6fbe43cb52a151c51b4b01736bcc99f94bc9f98b249c42de09acf54c1af0d5da), answer [`0x7e816df8…`](https://explorer.testnet.arc.io/tx/0x7e816df8f4631d9b0172c9a3da16f820f56dc4360f0657816d9914bc29f3fc11) |
+| E | Said nothing | "The seller stayed silent. Its deposit paid 0.011413 USDC back: the 0.001 USDC price and 0.010413 USDC for the gas of the dispute." | Claim [`0xf1ba70bd…`](https://explorer.testnet.arc.io/tx/0xf1ba70bd45d40f05cccaae9fbf8e3d39b6f027375f3cf28ed5b9b2fa89aa681f), finalize [`0x924ad0c9…`](https://explorer.testnet.arc.io/tx/0x924ad0c91688abcb24c83d9c99efd72e365102f2b626fc0045f39166c716a9ed) |
+| D | Tried a wrong key, then said nothing | "Wrong key rejected by the contract." "The seller stayed silent. Its deposit paid 0.012142 USDC back: the 0.001 USDC price and 0.011142 USDC for the gas of the dispute." | Claim [`0x67698fff…`](https://explorer.testnet.arc.io/tx/0x67698fff825e33a5246cbd352e0e22287a39c4f01138e14112dee3842efc066d), reverted answer [`0x95b35393…`](https://explorer.testnet.arc.io/tx/0x95b353935b893116dd398828157e1ef7676a368e4428284acd1abc9361d72aa1), finalize [`0x9baef1dd…`](https://explorer.testnet.arc.io/tx/0x9baef1dd448e64221aa186f77a46e3d8ed720e245aabcf42f60e2502d02baa98) |
+| F | Swapped the answer, then gave its key | "Claim gas repaid by the seller: 0.006949 USDC." "The answer did not match the seller's promise. Its deposit paid 0.013699 USDC back: the 0.001 USDC price and 0.012699 USDC for the gas of the dispute." | Claim [`0x0bd9b723…`](https://explorer.testnet.arc.io/tx/0x0bd9b7234d1c29973260969109a2827ef35b0d45be73fd9efb570f285361f48f), answer [`0x5a5e0606…`](https://explorer.testnet.arc.io/tx/0x5a5e06064433ab10ea339b76f5a8c3da64b6fdd37c97175182a67b173a1a74d0), prove [`0xccfb2bd7…`](https://explorer.testnet.arc.io/tx/0xccfb2bd733da6f8a0980a8a6a2a80f04706a792ba78b973a1cc8d6c7d819df12) |
+
+The same contract runs on Arc mainnet at [`0xf3e2a77e…`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9). On 2026-11-06 between 02:02 and 02:04 UTC, a seller of mine there answered one claim and stayed silent on a second. The buyer ended 0.000139 USDC and 0.001355 USDC ahead, after its own gas. [Contract](#contract) has the transactions.
 
 ## Why this matters
 
@@ -24,9 +26,9 @@ Other fixes put every payment through an escrow or a job contract. vet402 leaves
 
 | | [x402r](https://docs.x402r.org) | [authCapture](https://github.com/x402-foundation/x402/pull/1425) | [x402B](https://github.com/bosonprotocol/x402b) | [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) | vet402 |
 |---|---|---|---|---|---|
-| Escrow or job contract calls on a payment with no dispute | 1 or more. The buyer pays into escrow and the merchant captures | 1 or more. Authorize then capture on `AuthCaptureEscrow`, or one call when it captures at once | 1 or more. The money goes into Boson's escrow at commit | 4: `createJob`, `fund`, `submit`, `complete` | 0 to SealedDelivery, measured with Seller A on 2026-11-05 at 22:42 UTC ([Architecture](#architecture)) |
+| Escrow or job contract calls on a payment with no dispute | 1 or more. The buyer pays into escrow and the merchant captures | 1 or more. Authorize then capture on `AuthCaptureEscrow`, or one call when it captures at once | 1 or more. The money goes into Boson's escrow at commit | 4: `createJob`, `fund`, `submit`, `complete` | 0 to SealedDelivery, measured with Seller A on 2026-11-06 at 01:42 UTC ([Architecture](#architecture)) |
 | Buyer signatures per payment | Not stated in the docs | 1, an ERC-3009 or Permit2 signature | 2 or more, a meta transaction and a token authorization | 2 or more transactions, `createJob` and `fund` | 1, the EIP-3009 signature x402 already asks for |
-| Works with Circle Gateway batched payments | Not stated. The docs list Base and Base Sepolia | Not stated | Not stated | Not stated | Yes. The contract checks the buyer's `GatewayWalletBatched` signature, and every payment of the [runs on the live contract](DEMO.md#runs-on-the-live-contract) settled in a Gateway batch |
+| Works with Circle Gateway batched payments | Not stated. The docs list Base and Base Sepolia | Not stated | Not stated | Not stated | Yes. The contract checks the buyer's `GatewayWalletBatched` signature, and every payment of the [run of 01:42 UTC on the live contract](DEMO.md#the-run-of-0142-to-0146-utc) settled in a Gateway batch |
 | What a seller adds | Not measured | Not measured | Not measured | Not measured | One middleware and its route, 2 lines in the [package README](packages/sealed-delivery/README.md) that `test/readme.test.ts` runs. The package source is 692 lines |
 
 ERC-8183 also says it has "No dispute resolution or arbitration". In a dispute vet402 sends one claim, and a seller that stays silent or lies pays the buyer from its deposit.
@@ -37,7 +39,7 @@ ERC-8183 also says it has "No dispute resolution or arbitration". In a dispute v
 
 Vector version: [docs/architecture.svg](docs/architecture.svg).
 
-A payment that goes normally sends no transaction to SealedDelivery. Measured on Arc testnet, 2026-11-05 22:42 UTC: Seller A with the line up, delivered 1.3 s from the start, and no claim for that payment among the contract's 15 `Claimed` events, read at 23:31 UTC. Circle still settles the payment in a Gateway batch that Circle sends, and one batch carries many payments. A seller's deposit takes one transaction up front.
+A payment that goes normally sends no transaction to SealedDelivery. Measured on Arc testnet, 2026-11-06 01:42 UTC: Seller A with the line up, delivered 2.1 s from the start, and no claim for that payment among the contract's 12 `Claimed` events, read at 02:10 UTC. Circle still settles the payment in a Gateway batch that Circle sends, and one batch carries many payments. A seller's deposit takes one transaction up front.
 
 Before paying, vet402 reads `coverageFor(seller, price)`. If the deposit does not cover the verdict, the seller gets the same treatment as Seller B: no claim and no second charge. A box lost on the way comes back on a second fetch with the same payment, for a seller that declares it.
 
@@ -64,56 +66,71 @@ The public agent pays from its own Arc testnet wallet, `TRY_JOB_HOLD_KEY`, never
 | | |
 |---|---|
 | Contract | `SealedDelivery`, source in [contracts/SealedDelivery.sol](contracts/SealedDelivery.sol), mechanism and limits in [contracts/README.md](contracts/README.md) |
-| Address | [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5) |
+| Address | [`0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`](https://explorer.testnet.arc.io/address/0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B) |
 | Network | Arc testnet, chain id 5042002 |
-| Deploy transaction | [`0x9ef26675a98f8323f0cb623651a63e4ae325ce5bf9c05741747186d4cf35e75a`](https://explorer.testnet.arc.io/tx/0x9ef26675a98f8323f0cb623651a63e4ae325ce5bf9c05741747186d4cf35e75a), 2026-11-05 22:20 UTC, sent by Arc Studio |
-| Arguments | `maxExpiry` 3600 s, `answerWindow` 60 s, `cooldown` 7200 s, USDC `0x3600000000000000000000000000000000000000`, payment domain `GatewayWalletBatched` version `1` at `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` with a zero `paymentDomainSalt`, `disputeCost` 10500 (0.0105 USDC) |
-| Earlier deployments | Four, all from earlier source. The last of them is `0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`, and its runs are under [Earlier runs](DEMO.md#earlier-runs). The demo no longer uses them |
+| Deploy transaction | [`0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733`](https://explorer.testnet.arc.io/tx/0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733), 2026-11-06 01:35:22 UTC. Sent with `forge create` from the terminal of the Arc Studio sandbox, by `0xBdccB9ef5aBf024A513566dB8d45DE0315e0735f`, a key used only on testnet |
+| Arguments | `maxExpiry` 3600 s, `answerWindow` 60 s, `cooldown` 7200 s, USDC `0x3600000000000000000000000000000000000000`, payment domain `GatewayWalletBatched` version `1` at `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` with a zero `paymentDomainSalt`, `followUpGas` 230000, `maxGasPrice` 100 gwei. `MAX_DISPUTE_COST` reads 55000 (0.055 USDC) |
+| Source | Verified on the Arc testnet explorer (Blockscout) at 2026-11-06 01:50 UTC, solc 0.8.28, optimizer on, EVM `cancun`. The verified file has the same sha256 as `contracts/SealedDelivery.sol` on `main` (`93a08889…`) |
+| Arc mainnet | [`0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9), chain id 5042, the same source and arguments with Arc mainnet's Gateway Wallet `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Deployed by script at 2026-11-06 02:02:56 UTC, [`0x6a276f7a…`](https://explorer.arc.io/tx/0x6a276f7a2ca79260ccdfc28a809b889a2febd95d684e9a5db818ecb2581eabd8). Sourcify `exact_match` |
+| Earlier versions | On testnet, five deployments by Arc Studio's agent, all from earlier source. The last of them, `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` (2026-11-05 22:20 UTC), charged a fixed `disputeCost` of 0.0105 USDC in place of the gas each claim paid. On mainnet, the earlier version `0xafdb8931eebdce7f714ac3905c65a50293eb6db6` (2026-11-05 21:59 UTC) charged a fixed 0.009 USDC. Their runs are under [Earlier runs](DEMO.md#earlier-runs). The demo no longer uses them |
 | Arc Studio | App id `f6f547d3-78ad-4550-9805-8fc08ac65425`, [workspace](https://studio.arc.io/app/f6f547d3-78ad-4550-9805-8fc08ac65425) |
 | Share link | {{SHARE_URL}} |
-| Live screen | https://vet402-mumbai-live.vercel.app |
+| Live screen | https://vet402-mumbai-live.vercel.app, whose Try a dispute claims on `0xE9C35ad2…` since 2026-11-06 01:38 UTC |
 
-I compared the runtime bytecode at that address with a build of `contracts/SealedDelivery.sol` at commit `2d6d920` on 2026-11-05 at 23:20 UTC. All 9,841 bytes match once the 27 immutable slots are masked, metadata hash included. The constructor arguments above appear as written in the input of the deploy transaction.
+The two mainnet rounds, all status 1, at 20.001 to 20.00115 gwei:
+
+| UTC | Step | Gas used | Fee in USDC | Transaction |
+|---|---|---:|---:|---|
+| 02:03:08 | Round 1 `claim` | 271,037 | 0.005421 | [`0x183be3f0…`](https://explorer.arc.io/tx/0x183be3f0fb87c826b6f26f2a4103e5419772843d842c3718f96e284c85e37fa8) |
+| 02:03:10 | Round 1 `answer`, `ClaimGasRepaid` 0.00556 USDC to the buyer | 131,604 | 0.002632 | [`0x7541a28b…`](https://explorer.arc.io/tx/0x7541a28bc973fec1969705db7a5e407e48b8ec27c8ff9419732ceb03fd235124) |
+| 02:03:13 | Round 2 `claim` | 271,049 | 0.005421 | [`0x9c7229b0…`](https://explorer.arc.io/tx/0x9c7229b0d124973484991ff5cd59858a612ed20d6c1ec4e11cff8d0d9e4c61d0) |
+| 02:04:20 | Round 2 `finalize`, `Silent` with 0.01116 USDC for the buyer | 115,874 | 0.002318 | [`0x52162804…`](https://explorer.arc.io/tx/0x521628040a75d008ab4fed04c01f7351ea2035d4c6ed93e5b3fe581b99865555) |
+| 02:04:22 | Round 2 `withdrawClaimable` | 53,316 | 0.001066 | [`0x229c82ee…`](https://explorer.arc.io/tx/0x229c82ee7e4c5b14f7c52cea0bc8f3e8bfd31713868ab2236768b38a91fef960) |
+| 02:04:24 | `flushBurn`, 0.01116 USDC burned | 57,256 | 0.001145 | [`0x25935b41…`](https://explorer.arc.io/tx/0x25935b4186918c293b415e295b75b6f6d3db4bd27b14f5ab8676265176af8d7c) |
+
+The buyer ended round 1 0.000139 USDC ahead (0.00556 repaid against 0.005421 of claim gas) and round 2 0.001355 USDC ahead (0.01116 credited, less the 0.001 price and its three transactions). Circle's record shows 1 transfer for each payment. The whole mainnet run cost 0.084055 USDC: 0.072895 in gas for twelve transactions, from the deploy to a `requestWithdraw`, and the 0.01116 burned. The seller's remaining 0.11612 USDC can be withdrawn from 2026-11-06 04:04:27 UTC.
 
 ## Measured costs
 
-The filmed run on this contract, Arc testnet, 2026-11-05 22:21 to 22:46 UTC. The fee is gas used times the gas price each transaction paid, 24.675 to 25 gwei in this run. Arc counts gas in USDC with 18 decimals.
+The run of 2026-11-06 01:59 to 02:04 UTC on the testnet contract, and the deposit before it. Every transaction below read status 1 except the one marked reverted, which the contract refused on purpose. The fee is gas used times the gas price each transaction paid, 20.25 to 25 gwei in this run. Arc counts gas in USDC with 18 decimals.
 
-| Call | Gas used | Fee in USDC | Transaction |
-|---|---:|---:|---|
-| `deposit` | 76,917 | 0.0019 | [`0xebf7b029…`](https://explorer.testnet.arc.io/tx/0xebf7b0293c574e6bd63bfed5b4ed45ecb51c97962d4d6e968da5ecbd43b6466f) |
-| `claim` | 268,460 | 0.0067 | [`0x24182416…`](https://explorer.testnet.arc.io/tx/0x24182416082b271fe9a2a94897e4151e3a2b80bb0aeda1c991d2a3189c3e3fd6) |
-| `answer` by Seller F | 87,400 | 0.0022 | [`0x211a089a…`](https://explorer.testnet.arc.io/tx/0x211a089a2bd47d5a549accd135fa84ae36d6e49d20a9dbbb34a9d06cb590ec49) |
-| `answer` by Seller A | 52,811 | 0.0013 | [`0xd437bafb…`](https://explorer.testnet.arc.io/tx/0xd437bafb360742a03be9f4900f2efaa96a3d2fd8387179e5f2c4c83f50dc792d) |
-| `answer` with a wrong key, reverted | 29,279 | 0.0007 | [`0x66112b6d…`](https://explorer.testnet.arc.io/tx/0x66112b6d4e17ffc01e84a3fde32eb6d3a6fc65a3e20140df14238355f3d1f100) |
-| `finalize` | 115,781 | 0.0029 | [`0xc60c0312…`](https://explorer.testnet.arc.io/tx/0xc60c0312308f03d84561f7f81671947c3095b255f6cc7a60531c178cabe8d127) |
-| `prove` on a 70 byte answer | 123,426 | 0.0031 | [`0xe72c3f4c…`](https://explorer.testnet.arc.io/tx/0xe72c3f4cb07caf1c19757c1b1029749fc89f8c19e31004aa338547b30af3d46b) |
-| `flushBurn` | 57,278 | 0.0014 | [`0xbbcf078a…`](https://explorer.testnet.arc.io/tx/0xbbcf078aa93e38ab4c01f183713c22a2686fc173b363b95d0e855d1ce594add4) |
-| `withdrawClaimable` | 53,249 | 0.0013 | [`0xdb2e65cb…`](https://explorer.testnet.arc.io/tx/0xdb2e65cb3ac1bae0ea03982d9ef797a402b77d9d55a05936e91d3a429aa59d77) |
+| Call | Gas used | Gas price in gwei | Fee in USDC | Transaction |
+|---|---:|---:|---:|---|
+| `deposit` | 76,873 | 25 | 0.001922 | [`0x5b33f435…`](https://explorer.testnet.arc.io/tx/0x5b33f435b8c014a645ab9d19513758eea9792995fd053fbbc2493836c26cf3ec) |
+| `claim` | 271,013 | 25 | 0.006775 | [`0x6fbe43cb…`](https://explorer.testnet.arc.io/tx/0x6fbe43cb52a151c51b4b01736bcc99f94bc9f98b249c42de09acf54c1af0d5da) |
+| `answer` by Seller A, with the refund of the claim gas | 97,015 | 25 | 0.002425 | [`0x7e816df8…`](https://explorer.testnet.arc.io/tx/0x7e816df8f4631d9b0172c9a3da16f820f56dc4360f0657816d9914bc29f3fc11) |
+| `answer` with a wrong key, reverted | 29,279 | 21.935 | 0.000642 | [`0x95b35393…`](https://explorer.testnet.arc.io/tx/0x95b353935b893116dd398828157e1ef7676a368e4428284acd1abc9361d72aa1) |
+| `finalize` | 98,774 | 20.5 | 0.002025 | [`0x924ad0c9…`](https://explorer.testnet.arc.io/tx/0x924ad0c91688abcb24c83d9c99efd72e365102f2b626fc0045f39166c716a9ed) |
+| `prove` on a 70 byte answer | 106,352 | 20.5 | 0.002180 | [`0xccfb2bd7…`](https://explorer.testnet.arc.io/tx/0xccfb2bd733da6f8a0980a8a6a2a80f04706a792ba78b973a1cc8d6c7d819df12) |
+| `flushBurn` | 57,256 | 20.5 | 0.001174 | [`0x16884749…`](https://explorer.testnet.arc.io/tx/0x16884749ae92cdc46d60a4c143e140be5ac3ef2874fb35f7047de56c27ee1071) |
+| `withdrawClaimable` | 53,316 | 20.5 | 0.001093 | [`0xc7be5f1e…`](https://explorer.testnet.arc.io/tx/0xc7be5f1eb6d04ddb1bf4fe0ce56ddee642bdbe4b618c0ab2d0b3f9a03a5ce76f) |
 
-On this contract, each seller's first `answer` used 87,400 gas and every later one 52,811. `finalize` used between 81,581 and 115,781 gas across both runs of 2026-11-05. [DEMO.md](DEMO.md#contract-transactions) lists all 37 transactions.
+On this contract, each seller's first `answer` used 131,604 gas and every later one 97,015. The first `finalize` against a seller used 115,862 gas and the next 98,774. The first `prove` used 123,452. [DEMO.md](DEMO.md#contract-transactions) lists all 46 transactions of this contract up to 2026-11-06 02:05 UTC.
 
-Deposits read from the contract on 2026-11-05 at 23:23 UTC: Seller A 0.1 USDC, Seller D 0.054, Seller E 0.054, Seller F 0.054. Each started at 0.1. Sellers D, E and F each had two verdicts of 0.023 USDC, one in this run and one between 23:14 and 23:16 UTC. After this run the buyer withdrew its three credits of 0.0115 USDC in [`0xdb2e65cb…`](https://explorer.testnet.arc.io/tx/0xdb2e65cb3ac1bae0ea03982d9ef797a402b77d9d55a05936e91d3a429aa59d77), [`0xa42627d4…`](https://explorer.testnet.arc.io/tx/0xa42627d42459b92d6d2d9dab7bb067316b5359a6eb79ef4e208d25b56c4d4903) and [`0x638c68d7…`](https://explorer.testnet.arc.io/tx/0x638c68d78d887691b7fc7ca5c75844def3f6abd4ffea57455a58c205ce582523). Six `flushBurn` calls burned the other 0.0115 USDC of each verdict.
+The answer pays the buyer back. Claim `0x6fbe43cb…` cost the buyer 0.006775 USDC, and Seller A's answer sent it 0.006949 in the same transaction, so the buyer ended 0.000174 USDC ahead and had its answer.
 
-A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and a verdict repays the dispute. [contracts/README.md](contracts/README.md#the-economics) has the numbers.
+Deposits read from the contract on 2026-11-06 at 02:17 UTC: Seller A 0.487353 USDC, Seller D 0.448318, Seller E 0.450638, Seller F 0.437452. Each started at 0.5 at 01:37 UTC. Seller A repaid two claims' gas. Sellers D and E each had two SILENT verdicts and Seller F two FRAUD verdicts, one in each run, and Seller F also repaid two claims' gas. The buyer withdrew every credit, and its `claimable` read 0 at 02:17 UTC. A `flushBurn` after each verdict burned the other half.
+
+A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and the seller's deposit repays the dispute. [contracts/README.md](contracts/README.md#the-economics) has the numbers.
 
 ## How to check this, in order
 
 With nothing installed:
 
-1. Open the [contract](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5) on the explorer.
-2. Open claim [`0xe5bc6bdb…`](https://explorer.testnet.arc.io/tx/0xe5bc6bdb0cecef65b542e66917fe290429952774973af6b92d0605b76138d3cb) and answer [`0xd437bafb…`](https://explorer.testnet.arc.io/tx/0xd437bafb360742a03be9f4900f2efaa96a3d2fd8387179e5f2c4c83f50dc792d). The `KeyRevealed` event holds the key.
-3. Open reverted answer [`0x66112b6d…`](https://explorer.testnet.arc.io/tx/0x66112b6d4e17ffc01e84a3fde32eb6d3a6fc65a3e20140df14238355f3d1f100). The chain refused a wrong key.
-4. Open finalize [`0xc60c0312…`](https://explorer.testnet.arc.io/tx/0xc60c0312308f03d84561f7f81671947c3095b255f6cc7a60531c178cabe8d127). The `Silent` event names Seller E and the 0.0115 USDC credit.
-5. Run the Arkiv query further down. It returns the payment entity and the settlement entity for transfer `2db76ef8-52a2-4548-bbb6-3bdbc943aad9`, Seller A at 23:11 UTC.
-6. Open the box of that payment's claim on Swarm: https://api.gateway.ethswarm.org/bytes/bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0. Its `claimId` is the one in claim [`0xca9db10c…`](https://explorer.testnet.arc.io/tx/0xca9db10caa096dc345a90e92a03d5e9f3c884ca7b8e6af3714c48e0a52b04ee4). [arkiv/swarm.md](arkiv/swarm.md#one-entity-and-the-box-it-points-to) shows the Arkiv entity that points to it.
-7. Open the live screen, listed in the contract table. It shows receipts and checks them, and nothing on it can pay.
+1. Open the [contract](https://explorer.testnet.arc.io/address/0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B) on the explorer. Its source is verified there.
+2. Open claim [`0x6fbe43cb…`](https://explorer.testnet.arc.io/tx/0x6fbe43cb52a151c51b4b01736bcc99f94bc9f98b249c42de09acf54c1af0d5da) and answer [`0x7e816df8…`](https://explorer.testnet.arc.io/tx/0x7e816df8f4631d9b0172c9a3da16f820f56dc4360f0657816d9914bc29f3fc11). The `KeyRevealed` event holds the key, and `ClaimGasRepaid` sends the buyer 0.006949 USDC.
+3. Open reverted answer [`0x95b35393…`](https://explorer.testnet.arc.io/tx/0x95b353935b893116dd398828157e1ef7676a368e4428284acd1abc9361d72aa1). The chain refused a wrong key.
+4. Open finalize [`0x924ad0c9…`](https://explorer.testnet.arc.io/tx/0x924ad0c91688abcb24c83d9c99efd72e365102f2b626fc0045f39166c716a9ed). The `Silent` event names Seller E and the 0.011413 USDC credit.
+5. Run the Arkiv query further down. It returns the payment entity and the settlement entity for transfer `4c985dc0-a59d-4674-9e8a-3d5d25def02b`, Seller A at 01:42 UTC.
+6. Open the box of that payment's claim on Swarm: https://api.gateway.ethswarm.org/bytes/678485f34be28e46bc7791341ea987e149b38b592ff52ad9aecfa6e292696ec8. Its `claimId` is the one in claim [`0x1269e948…`](https://explorer.testnet.arc.io/tx/0x1269e9487f9fbe1207f1791cfdc9963bf9fb20d93854722c9f794f79c597f94b). [arkiv/swarm.md](arkiv/swarm.md#one-entity-and-the-box-it-points-to) shows the Arkiv entity that points to it.
+7. Open the [mainnet contract](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9) and its answer [`0x7541a28b…`](https://explorer.arc.io/tx/0x7541a28bc973fec1969705db7a5e407e48b8ec27c8ff9419732ceb03fd235124) and finalize [`0x52162804…`](https://explorer.arc.io/tx/0x521628040a75d008ab4fed04c01f7351ea2035d4c6ed93e5b3fe581b99865555).
+8. Open the live screen, listed in the contract table. It shows receipts and checks them, and nothing on it can pay.
 
-With a clone (commands below, results from a fresh checkout of commit `2d6d920` on 2026-11-05 between 23:18 and 23:26 UTC):
+With a clone (commands below, results from a fresh clone of commit `4ad89eb` on 2026-11-06 between 02:10 and 02:20 UTC, forge 1.8.3):
 
-8. `forge test`: 219 tests passed in 16 suites.
-9. `bash scripts/test.sh`: 350 tests passed.
-10. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
+9. `forge test`: 236 tests passed in 19 suites. In the Arc Studio sandbox, which also holds `contracts/test-integration`, forge 1.7.1 passed 246 and failed 0 before the deploy.
+10. `bash scripts/test.sh`: 440 tests passed, 0 failed.
+11. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
 
 ## Run it
 
@@ -129,7 +146,7 @@ forge install foundry-rs/forge-std --no-git
 Start the backend in one terminal and the screen in another:
 
 ```bash
-SEALED_DELIVERY_ADDRESS=0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5 npx bun run server/index.ts
+SEALED_DELIVERY_ADDRESS=0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B npx bun run server/index.ts
 ```
 
 ```bash
@@ -141,7 +158,7 @@ Open http://localhost:5173. The first backend start writes fresh keys for the bu
 To pay for real on Arc testnet:
 
 1. Print the buyer address with `cast wallet address --private-key <BUYER_PRIVATE_KEY from .env>` and send it testnet USDC from https://faucet.circle.com.
-2. Run `SEALED_DELIVERY_ADDRESS=0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5 npx bun run scripts/sealed-setup.ts --dry-run` to see the plan, then run it again without `--dry-run`. It sends each of Seller A, D, E and F 0.03 USDC for gas and has each deposit 0.1 USDC, so 0.52 USDC in total.
+2. Run `SEALED_DELIVERY_ADDRESS=0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B npx bun run scripts/sealed-setup.ts --dry-run` to see the plan, then run it again without `--dry-run`. It sends each of Seller A, D, E and F 0.03 USDC for gas and tops each deposit up to 0.5 USDC, so 2.12 USDC in total for fresh sellers. The dry run prints the exact amounts.
 3. Open http://localhost:5173/?demo, which shows the scene buttons. Set a hold, then press "Seller A, line stays up", "Try Seller A", "Try Seller B", "Try Seller D", "Try Seller E" or "Try Seller F".
 
 The sellers close the connection on purpose, apart from the "line stays up" button.
@@ -225,11 +242,11 @@ The buyer side of this goes into vet402's production buyer, which paid through G
 
 ## How I used AI
 
-Two AI tools wrote the code. Arc Studio (session `mumbai`) started the app and wrote, tested and deployed the contract. Claude Code wrote the instructions sent to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents. Every instruction sent to Arc Studio is in [prompts/](prompts/README.md), with what each turn built. The table says who wrote each part first, who changed it, and what I decided. Times are 2026-11-05 UTC unless a date is given. "None recorded" means no decision of mine about that part is written down anywhere.
+Two AI tools wrote the code. Arc Studio (session `mumbai`) started the app, and its agent wrote, tested and deployed the first five versions of the contract on testnet. The final testnet contract was not an agent turn: its source was pasted into the code editor of the same Studio sandbox, tested in the sandbox terminal with forge 1.7.1 (246 passed, 0 failed), and deployed from that terminal with `forge create` on 2026-11-06 at 01:35 UTC. The app's full source, copied into the sandbox, passed `tsc` and 432 tests there. On 2026-11-06 at 02:06 UTC, Studio's Preview ran the published screen from the sandbox, and its Tracing listed the screen's calls to `/api/receipts`, Circle's `/v1/x402/transfers` and Arkiv's `arkiv_query`. Claude Code wrote the instructions sent to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents. Every instruction sent to Arc Studio is in [prompts/](prompts/README.md), with what each turn built. The table says who wrote each part first, who changed it, and what I decided. Times are 2026-11-05 UTC unless a date is given. "None recorded" means no decision of mine about that part is written down anywhere.
 
 | Part | First written by | Changed by | What I decided |
 |---|---|---|---|
-| `contracts/SealedDelivery.sol` | Arc Studio, turn sd1 at 16:17. Turns sd2 and sd3 keyed claims by claim id and added the double verdict with a burned half, `coverageFor` and `prove` | Claude Code from 17:24: collateral taken at the verdict, token and payment domain as constructor arguments, `DISPUTE_COST`, the payment domain salt, and on 2026-11-06 the claim's own gas repaid in every outcome (`81d1f32`). Arc Studio built, tested and made all 5 testnet deployments, in turns sd2 and sd4 to sd7 | A deposit per seller, in place of money held for each payment. At about 16:25 I asked why the plan gave up limits first while time was left. The plan written under that question kept `prove` and made silence and fraud cost twice, with half burned, so a seller paying itself through a second address loses money |
+| `contracts/SealedDelivery.sol` | Arc Studio, turn sd1 at 16:17. Turns sd2 and sd3 keyed claims by claim id and added the double verdict with a burned half, `coverageFor` and `prove` | Claude Code from 17:24: collateral taken at the verdict, token and payment domain as constructor arguments, `DISPUTE_COST`, the payment domain salt, and on 2026-11-06 the claim's own gas repaid in every outcome (`81d1f32`). Arc Studio's agent built, tested and made the first 5 testnet deployments, in turns sd2 and sd4 to sd7. The sixth and final testnet deployment was a `forge create` from the Studio sandbox terminal on 2026-11-06 at 01:35 UTC, after 246 tests passed there. I deployed both mainnet contracts by script | A deposit per seller, in place of money held for each payment. At about 16:25 I asked why the plan gave up limits first while time was left. The plan written under that question kept `prove` and made silence and fraud cost twice, with half burned, so a seller paying itself through a second address loses money |
 | `contracts/test` | Arc Studio, 14 of the 16 files, in turns sd1 and sd3 | Claude Code added `SealedDelivery.Holes.t.sol` and `SealedDelivery.Collateral.t.sol`, edited the others with each contract change, and turned the gas slope test into a bound (`b7edde7`) | None recorded |
 | `server/sealedDelivery.ts` | Claude Code at 17:15 (`2a88276`) | Claude Code (`aa7720b`, `3a602f1`, `131230d`) | None recorded beyond the deposit rule in the first row |
 | `server/world.ts` | Claude Code at 16:20 (`6262f7b`), from the instruction [prompt-p6w.txt](prompts/studio/prompt-p6w.txt). Arc Studio never ran it | Claude Code: production mode (`a8219d0`), and on 2026-11-06 the budget signal and the rule that only an approval moves money to the hold (`bd05f86`) | Proof of Human as the credential, not Selfie Check (2026-11-04). I made the production approvals at 22:16 and 23:25 with my own World App, verified at an Orb |

@@ -38,27 +38,31 @@ That is safe here because the box is already a ciphertext. The seller sealed the
 
 ## One entity and the box it points to
 
-Seller A, 2026-11-05 23:11 UTC, on the live contract `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`. The box went up through my own Bee node with my own postage batch.
+Seller A, 2026-11-06 01:42 UTC, on the live contract `0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`. The box went up through my own Bee node with my own postage batch.
 
 | | Value |
 |---|---|
-| Arkiv entity key | `0x0c8a2ee0a536c341398f2f0dbd4b0006c1e578d943249b3bb84e7d5494c66162` |
-| `claim_id` in it | `0x7eeb3f36efec914a69c0d49320ec6724bed39a1e55f65b8e56a5bd275051fe62` |
-| `gateway_transfer_id` in it | `2db76ef8-52a2-4548-bbb6-3bdbc943aad9` |
-| `swarm_ref` in it | `bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0` |
-| Open the box | https://api.gateway.ethswarm.org/bytes/bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0 |
-| The claim on Arc | [`0xca9db10c…`](https://explorer.testnet.arc.io/tx/0xca9db10caa096dc345a90e92a03d5e9f3c884ca7b8e6af3714c48e0a52b04ee4), 23:11:01 UTC |
-| The key on Arc | [`0x0f6752e5…`](https://explorer.testnet.arc.io/tx/0x0f6752e5cabab8a243601cc6b79d93fbd6c1490cff61174a4a7beb3344557c95), `KeyRevealed` at 23:11:04 UTC |
+| Arkiv entity key | `0x23d6b0048670a9413f774ba86c7db4bca5acaab69a8ab6aa77496e3c0ce13f3c` |
+| `claim_id` in it | `0x2c880d2b0768269fb827dca6e23aba464c5aa686f62310d4153d0971b8b582a5` |
+| `gateway_transfer_id` in it | `4c985dc0-a59d-4674-9e8a-3d5d25def02b` |
+| `swarm_ref` in it | `678485f34be28e46bc7791341ea987e149b38b592ff52ad9aecfa6e292696ec8` |
+| Open the box | https://api.gateway.ethswarm.org/bytes/678485f34be28e46bc7791341ea987e149b38b592ff52ad9aecfa6e292696ec8 |
+| The claim on Arc | [`0x1269e948…`](https://explorer.testnet.arc.io/tx/0x1269e9487f9fbe1207f1791cfdc9963bf9fb20d93854722c9f794f79c597f94b), 01:42:03 UTC |
+| The key on Arc | [`0xa63eaf5a…`](https://explorer.testnet.arc.io/tx/0xa63eaf5ac05d8ebb22c1467ddc407984e92a7fe573d167f001ab403ac16117a4), `KeyRevealed` at 01:42:09 UTC |
 
-The public gateway returned the box with status 200 on 2026-11-05 at 23:24 UTC, although my node uploaded it. Its `claimId` and `contract` match the claim transaction, and its `chainId` is 5042002. The same query that README.md uses for receipts returns this entity with `vet402_evidence` in place of `vet402_receipt`.
+The public gateway returned the box with status 200 on 2026-11-06 at 02:23 UTC, although my node uploaded it. Its `claimId` and `contract` match the claim transaction, and its `chainId` is 5042002. The same query that README.md uses for receipts returns this entity with `vet402_evidence` in place of `vet402_receipt`.
 
-The boxes of the three other disputes in that run, Seller E at 23:15, Seller D at 23:16 and Seller F at 23:16 UTC, went up the same way. My node lists an upload tag for each of the four boxes, from 23:11:02 to 23:16:40 UTC, every chunk synced. The public gateway returned each box with status 200 at 23:24 UTC:
+The boxes of the seven other disputes on this contract that day went up the same way: Seller F, E and D from 01:42 to 01:45 UTC, and Seller A, F, E and D from 01:59 to 02:02 UTC. My node lists an upload tag for each of the eight boxes, from 01:42:05 to 02:02:35 UTC, every chunk synced. The public gateway returned each box with status 200 at 02:23 UTC:
 
-- https://api.gateway.ethswarm.org/bytes/2a12ecc1691996d7d0af105e53b5b6ad4ff9dc99dfec72c4919fb7e2153eb3e5
-- https://api.gateway.ethswarm.org/bytes/4d4a9e9c95662d123e69c6634405861460446d7ea2941bea9db9d6561aaf0840
-- https://api.gateway.ethswarm.org/bytes/82cd27c6378f1020b0d24bb6198770f00f187b498192f1fcade04728b0688103
+- https://api.gateway.ethswarm.org/bytes/35f6fbb546122abef6e34da823a2912ea79fd04ae66ddb29ccedd44a011fbd28
+- https://api.gateway.ethswarm.org/bytes/2a8bf0d7f2369652f787ee3f92d5f54546b24646fefd87d47dd61225bce83b12
+- https://api.gateway.ethswarm.org/bytes/19dfd43783e2e309273cbf00efd432bd5e7915ee906df7628453c422d0a4a5ed
+- https://api.gateway.ethswarm.org/bytes/8b5135d8023faa2ad42f54ed389ef9d0eaa7aa1265d2218fe318769561a5fb7e
+- https://api.gateway.ethswarm.org/bytes/8109114001313445e30688118ea3d5244f7461636854bf96897e223dff33e5f8
+- https://api.gateway.ethswarm.org/bytes/07cf85b947baaeebeed763937f89c868d2e39fb15dd1d8d8180db15818cb503a
+- https://api.gateway.ethswarm.org/bytes/6fece4c29d688611fd23bedf4830328f502270cddb40dea623aa8948eb53d20d
 
-The filmed run, 22:40 to 22:46 UTC, came before I had a batch. Its boxes went through the public gateway with bee-js's `NULL_STAMP`, as described below.
+On the earlier contract `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`, the run of 2026-11-05 from 23:11 to 23:16 UTC also went through my node, and Seller A's box of that run is https://api.gateway.ethswarm.org/bytes/bb095832b29db08053c5506b49c33dd3d45d40cd5d48c2903cdb8f9970a9eaa0. The filmed run of 22:40 to 22:46 UTC came before I had a batch. Its boxes went through the public gateway with bee-js's `NULL_STAMP`, as described below.
 
 A box from the live check (`scripts/swarm-live.ts`, 2026-11-05 UTC), not tied to an entity, to show the read works:
 https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e651f6e8bce5e9d35f9ad4c712
@@ -72,12 +76,13 @@ https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e65
 - **Lifetime:** `GET /stamps/<batch>` on my node answered `batchTTL` 2360122 s on 2026-11-05 at 23:24 UTC, so the batch lasts until about 2026-12-03 07:00 UTC unless I top it up.
 - **Code:** `SWARM_API_URL` names the Bee API and `SWARM_POSTAGE_BATCH_ID` the batch it stamps with (commit `2d6d920`). Without them the upload goes to the public gateway at `https://api.gateway.ethswarm.org` with bee-js's `NULL_STAMP` (64 zeros), and the gateway stamps it with a batch of its own. That batch belongs to the gateway, and its ID is not visible from outside.
 
-Which boxes went which way, all on 2026-11-05:
+Which boxes went which way:
 
 | Run | Upload path | Stamp |
 |---|---|---|
-| The filmed run, 22:40 to 22:46 UTC | The public gateway | The gateway's own batch, through `NULL_STAMP` |
-| The second run, 23:11 to 23:16 UTC | My Bee node | `b6455d93…` |
+| 2026-11-05 22:40 to 22:46 UTC, earlier contract `0xa1eff55d…` | The public gateway | The gateway's own batch, through `NULL_STAMP` |
+| 2026-11-05 23:11 to 23:16 UTC, earlier contract `0xa1eff55d…` | My Bee node | `b6455d93…` |
+| 2026-11-06 01:42 to 01:46 UTC and 01:59 to 02:04 UTC, live contract `0xE9C35ad2…` | My Bee node | `b6455d93…`, the only batch on the node |
 
 ## Files that upload to Swarm and read from it
 

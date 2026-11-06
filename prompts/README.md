@@ -22,5 +22,7 @@ Times are 2026-11-05 UTC, taken from when each turn's output was saved. A turn's
 | [prompt-sd4.txt](studio/prompt-sd4.txt) | sd4 | 16:58 | Build, tests, scan, and the deploy of `0x087f60c05a283299c3d315ef8da67be4a958ba43` (`a15df1e`) |
 | [prompt-sd5.txt](studio/prompt-sd5.txt) | sd5 | 17:47 | The contract and tests Claude Code sent, with the token and payment domain as constructor arguments. Deployed `0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2` |
 | [prompt-sd6.txt](studio/prompt-sd6.txt) | sd6 | 18:23 | The same with `disputeCost` 10500. Deployed `0x20ce7bbfaf66b28cb917f9331a8960eb563f2094` |
-| [prompt-sd7.txt](studio/prompt-sd7.txt) | sd7 | 22:20 | The final contract with the payment domain salt. Deployed `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`, the contract the demo uses |
+| [prompt-sd7.txt](studio/prompt-sd7.txt) | sd7 | 22:20 | The contract with the payment domain salt. Deployed `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`, an earlier version with a fixed `disputeCost` that the demo no longer uses. It was the last deployment made by an Arc Studio turn |
 | [prompt-share.txt](studio/prompt-share.txt) | share | | Claude Code sent the current app files to Arc Studio, and this turn only confirmed they were in place, with no change, build or test |
+
+The final contract, `0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`, came from no instruction here. On 2026-11-06 its source was pasted into the code editor of the same Studio sandbox, tested there with forge 1.7.1 (246 passed, 0 failed), and deployed at 01:35:22 UTC with `forge create` from the sandbox terminal ([`0x38095fb7…`](https://explorer.testnet.arc.io/tx/0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733)). The five deployments above were the turns of Studio's agent.
