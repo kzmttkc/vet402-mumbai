@@ -6,7 +6,7 @@ import type { Hex, Transport } from 'viem'
 import { rulingOnArc } from '../../packages/sealed-delivery/src/rulings'
 import type { ArcCheckOptions, ArcRuling } from '../../packages/sealed-delivery/src/rulings'
 import { latestRuling } from './sellerCheck'
-import type { RulingsRead } from './sellerCheck'
+import type { RawRuling, RulingsRead } from './sellerCheck'
 import type { RawRead } from './receiptsFeed'
 import { PAGE_SIZE, readAllPages } from './pages'
 import { addressColumn, EvidenceSchema, ReceiptSchema, SellerSchema, VerdictSchema } from './schema'
@@ -184,13 +184,23 @@ export function createEvidenceLister(writer: Hex, transport: Transport = http(un
  * The filter matches either address column, and a row is kept only when its own address is the one
  * asked for, so an entity with `pay_to` is judged by `pay_to`. No key and no backend are involved.
  * The latest ruling is then looked up on Arc. A failed Arc read only leaves out the line it would give.
+ *
+ * With `writers` set to 'any', every writer's rulings are read, and a ruling is kept only once Arc holds
+ * its event. `writer` is then vet402's own address, which names vet402 in the answer and alone sets the
+ * date vet402 pays again. Without an Arc check there is nothing to keep, so 'any' needs `arc`.
  */
 export function createRulingsReader(
   writer: Hex,
   transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 }),
   arc: ArcCheckOptions | null = {},
+  writers: 'own' | 'any' = 'own',
 ) {
   const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
+
+  if (writers === 'any') {
+    if (!arc) throw new Error("writers 'any' keeps only rulings Arc confirms, so it needs the Arc check")
+    return (payTo: string) => readAnyWriter(payTo, arc)
+  }
 
   return async function readRulings(payTo: string): Promise<RulingsRead> {
     const read = await readRows(payTo)
@@ -209,6 +219,77 @@ export function createRulingsReader(
       return found === undefined || found === null ? null : String(found)
     }
     return rulingOnArc(payTo, { ...ruling, contract: value('contract'), chainId: value('chain_id') }, options)
+  }
+
+  // Newest first. The newest confirmed ruling decides the answer, and vet402's newest confirmed one sets
+  // the date it pays again, so the Arc reads stop once both are found. When Arc confirms none and a read
+  // of it failed, the whole read fails, so a node that is down never reads as a clear seller.
+  async function readAnyWriter(payTo: string, arc: ArcCheckOptions): Promise<RulingsRead> {
+    const address = addressColumn(payTo)
+    const own = writer.toLowerCase()
+    const [rows, timing] = await Promise.all([
+      readAllPages((offset) =>
+        client
+          .select({
+            $key: true,
+            $createdAt: true,
+            $creator: true,
+            claim_id: true,
+            claim_tx: true,
+            seller: true,
+            pay_to: true,
+            verdict: true,
+            contract: true,
+            chain_id: true,
+          })
+          .from(VerdictSchema)
+          .where(eq('kind', 'verdict'))
+          .where(or(eq('pay_to', address), eq('seller', address)))
+          .orderBy(asc('$key'))
+          .limit(PAGE_SIZE)
+          .offset(offset)
+          .fetch(),
+      ),
+      client.getBlockTiming(),
+    ])
+    const newestFirst = rows
+      .filter((row) => verdictAddress(row) === address)
+      .sort((a, b) => ((b.$createdAt ?? 0n) > (a.$createdAt ?? 0n) ? 1 : (b.$createdAt ?? 0n) < (a.$createdAt ?? 0n) ? -1 : 0))
+    const kept: RawRuling[] = []
+    let failed: unknown = null
+    for (const row of newestFirst) {
+      const by = row.$creator?.toLowerCase()
+      const haveAny = kept.length > 0
+      const haveOwn = kept.some((r) => r.writer === own)
+      if (haveAny && haveOwn) break
+      if (haveAny && by !== own) continue
+      const createdAt = row.$createdAt ?? 0n
+      const writtenAt = timing.currentBlockTime - Number((timing.currentBlock - createdAt) * BigInt(timing.blockDuration))
+      const ruling = {
+        claimId: row.claim_id.value,
+        claimTx: row.claim_tx?.value ?? null,
+        contract: row.contract.value,
+        chainId: row.chain_id.value,
+        verdict: row.verdict.value,
+        writtenAt,
+      }
+      const confirmed = await rulingOnArc(payTo, ruling, arc).catch((error: unknown) => {
+        failed = error
+        return false
+      })
+      if (!confirmed) continue
+      kept.push({
+        verdict: ruling.verdict,
+        claimId: ruling.claimId,
+        claimTx: ruling.claimTx,
+        key: row.$key,
+        createdAt,
+        onArc: true,
+        ...(by ? { writer: by } : {}),
+      })
+    }
+    if (kept.length === 0 && failed) throw failed
+    return { rulings: kept, timing, own }
   }
 
   async function readRows(payTo: string): Promise<RulingsRead> {

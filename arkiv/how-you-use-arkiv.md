@@ -82,6 +82,7 @@ Rows the live check writes have a "live-check-" seller name and expire within mi
 | `extendEntity` | The seller's date moves to 7 days after each delivery that kept its promise |
 | `vet402_verdict` entities | "Arc ruled against this seller on {date}" on that seller's receipts, and no approval card for that seller for 7 days |
 | `ownedBy` queries | Every row comes from one writer, so a stranger cannot add a fake receipt or a fake ruling to the page |
+| A ruling query with no writer filter, each row checked on Arc | "Check a seller" shows a ruling from any writer once Arc holds its event, with "Written to Arkiv by {address}, checked on Arc." or "by vet402" |
 | `executeBatch` | "Arkiv: 1 transaction, 3 entities" under a receipt's Details. A dispute's payment, seller and evidence land together |
 | `changeOwnership` and `createdBy` | "Arkiv: the evidence entity belongs to the buyer …" under Details, and "Open a sealed answer" still lists that box, read by its creator |
 | An evidence column with the box's postage date | "Kept on Swarm until {date}" under a box my own Bee node uploaded |

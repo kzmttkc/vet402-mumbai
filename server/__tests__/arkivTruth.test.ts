@@ -41,10 +41,14 @@ const keyOf = (n: number) => `0x${n.toString(16).padStart(64, '0')}`
 /** A node that holds `rows` and answers each query by its filters, one page at a time, as the real node does. */
 function fakeNode(rows: { key: string; createdAt?: number; attributes: ReturnType<typeof attr>[] }[]) {
   const queries: { query: string; limit: number; offset: number }[] = []
+  // Clauses joined by AND all have to hold. A bracketed group joined by OR holds when one of its terms does.
   const matches = (query: string, row: (typeof rows)[number]) =>
-    [...query.matchAll(/(\w[\w.]*) = str\('([^']*)'\)/g)].every(([, name, value]) =>
-      row.attributes.some((a) => a.name === name && a.value === value),
-    )
+    query.split(' AND ').every((part) => {
+      const terms = [...part.matchAll(/(\w[\w.]*) = str\('([^']*)'\)/g)].map(([, name, value]) =>
+        row.attributes.some((a) => a.name === name && a.value === value),
+      )
+      return part.includes(' OR ') ? terms.some(Boolean) : terms.every(Boolean)
+    })
   const transport = custom({
     request: ({ method, params }: { method: string; params?: unknown }) => {
       if (method === 'arkiv_getBlockTiming') {
@@ -249,6 +253,37 @@ describe('The real client finds a seller by payTo', () => {
 
     await wire.findSellerKey({ name: 'Seller A', payTo: PAY_TO })
     expect(queries.at(-1)?.query).toContain(`pay_to = str('${PAY_TO_LOWER}')`)
+  })
+
+  test('rulings are read by pay_to or seller, as the receipts page reads them, and every ruling vet402 writes still counts', async () => {
+    const verdict = (n: number, createdAt: number, columns: ReturnType<typeof attr>[]) => ({
+      key: keyOf(n),
+      createdAt,
+      attributes: [
+        attr('arkiv.schema', 'str', 'vet402_verdict'),
+        attr('kind', 'str', 'verdict'),
+        attr('claim_id', 'str', CLAIM_ID),
+        attr('verdict', 'str', 'fraud'),
+        attr('contract', 'str', CONTRACT.toLowerCase()),
+        attr('chain_id', 'u64', '0x4cef52'),
+        ...columns,
+      ],
+    })
+    const rows = [
+      // vet402's own shape: both columns hold the payTo address.
+      verdict(6001, 999_980, [attr('seller', 'str', PAY_TO_LOWER), attr('pay_to', 'str', PAY_TO_LOWER)]),
+      // Written before pay_to existed.
+      verdict(6002, 999_970, [attr('seller', 'str', PAY_TO_LOWER)]),
+      // pay_to decides, so a row that names another pay_to is left out.
+      verdict(6003, 999_960, [attr('seller', 'str', PAY_TO_LOWER), attr('pay_to', 'str', '0x' + '9'.repeat(40))]),
+    ]
+    const { transport, queries } = fakeNode(rows)
+    const { wire } = createArkivWire({ writerKey: KEY, accessKey: '', transport })
+    const got = await wire.readSeller({ name: 'Seller A', payTo: PAY_TO })
+    expect(got.verdictBlocks.sort()).toEqual([999_970n, 999_980n])
+    const query = queries.find((q) => q.query.includes("arkiv.schema = str('vet402_verdict')"))!.query
+    expect(query).toContain(`(pay_to = str('${PAY_TO_LOWER}') OR seller = str('${PAY_TO_LOWER}'))`)
+    expect(query.toLowerCase()).toContain('$owner = addr(')
   })
 })
 

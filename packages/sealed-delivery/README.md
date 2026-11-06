@@ -98,6 +98,8 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 Before paying, `await isRuledAgainst(accept.payTo, { writer: '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5', verifyOnArc: true })` is true when vet402 recorded a Silent or Fraud ruling against that address in the last 7 days and Arc holds the contract's event for it.
 `verifyOnArc` reads Arc testnet by default (`arcRpcUrl` for another node, `contracts` for other deployments), counts only rulings whose event it found, and throws when a node cannot be read, so you decide what a failed read means.
+`await isRuledAgainst(accept.payTo, { writers: 'any', verifyOnArc: true })` counts a ruling from any writer, vet402 among them, once Arc holds the contract's event for it. Anyone who copies an Arc ruling to Arkiv adds to the same record.
+`writers: 'any'` requires `verifyOnArc: true` and throws without it, so a ruling from an unknown writer always rests on Arc's own event.
 
 ## Also exported
 
