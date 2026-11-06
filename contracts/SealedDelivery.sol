@@ -48,9 +48,9 @@ contract SealedDelivery is EIP712, ReentrancyGuard {
     /// @notice Gas is paid in USDC at 18 decimals on Arc, and the deposit token has 6.
     uint256 public constant WEI_PER_USDC_UNIT = 1e12;
     /// @notice A claim transaction's gas outside the part claim() measures itself: the 21,000 base, the calldata, the
-    /// call dispatch and the closing event. That part was 35,369 gas on anvil on 2026-11-06. The other 6,631 cover a
-    /// claim whose calldata has fewer zero bytes (at most about 1,200 gas more) and leave the buyer at most 2.5 %
-    /// of its claim gas ahead when the seller answers.
+    /// call dispatch and the closing event. That part was about 35,100 gas on anvil on 2026-11-06. The other 6,900
+    /// cover a claim whose calldata has fewer zero bytes (at most about 1,200 gas more) and leave the buyer about
+    /// 2.5 % of its claim gas ahead when the seller answers.
     uint256 public constant CLAIM_TX_OVERHEAD = 42_000;
     /// @notice The most gas a claim is repaid for. A whole claim used 254,225 to 271,336 gas on 2026-11-06.
     uint256 public constant CLAIM_GAS_CAP = 320_000;

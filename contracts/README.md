@@ -2,7 +2,7 @@
 
 SealedDelivery lets a seller stand behind a paid answer without holding the buyer's money. The payment settles through Circle Gateway and goes to the seller. The contract decides only what happens when the key to a sealed answer does not arrive, or opens something other than what the seller signed.
 
-Live on Arc testnet at [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5), deployed by Arc Studio on 2026-11-05 at 22:20 UTC. `contract-metadata/SealedDelivery.json` lists earlier deployments of earlier source, and the demo does not use them.
+This source repays the buyer's gas at the price it actually paid, and it is not deployed yet. The contract live on Arc testnet at [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5), deployed by Arc Studio on 2026-11-05 at 22:20 UTC, runs the earlier source with a fixed `DISPUTE_COST`. `contract-metadata/SealedDelivery.json` lists deployments of earlier source.
 
 ## Where the idea comes from
 
@@ -15,8 +15,8 @@ SealedDelivery adapts that to nanopayments settled in Gateway batches. FairSwap 
 1. Before paying, the buyer reads `coverageFor(seller, value)`. Then it signs a Gateway payment (`TransferWithAuthorization`).
 2. The seller verifies the payment, seals the answer with a fresh key for this request, signs a `Promise`, and settles through Gateway. Then it returns the box: ciphertext, promise and seller signature.
 3. The buyer asks for the key on a separate request with the same payment, and asks once more if that fails. If the key opens the box and the plaintext matches the signed hash, the job is done and the contract never hears about it.
-4. If the key does not come, the buyer sends `claim` with the promise and its own payment signature.
-5. The seller, or anyone else holding the key, sends `answer(claimId, key)` before the deadline. The buyer reads the key from the `KeyRevealed` event.
+4. If the key does not come, the buyer sends `claim` with the promise and its own payment signature. The claim measures its own gas, so whichever way the dispute ends, the buyer gets that gas back from the seller's deposit.
+5. The seller, or anyone else holding the key, sends `answer(claimId, key)` before the deadline. The buyer reads the key from the `KeyRevealed` event, and the same transaction sends it the claim's gas.
 6. If the deadline passes, anyone can send `finalize(claimId)`. If the key opens something other than the signed plaintext, anyone holding the key and ciphertext can send `prove(claimId, ciphertext, key)`.
 
 The sealing is keccak in counter mode: for block `i`, the keystream is `keccak256(abi.encodePacked(key, uint256(i)))`, XORed with each 32 byte chunk. `src/lib/sealed.ts` is the off chain side and `_plaintextHash` is the on chain side.
@@ -34,16 +34,24 @@ stateDiagram-v2
     DELIVERED --> FRAUD: prove
 ```
 
-`Status` is `NONE`, `OPEN`, `DELIVERED`, `SILENT` or `FRAUD`. SILENT and FRAUD are final. Below, `liability` is `2 * (value + DISPUTE_COST)`, capped at `type(uint128).max`.
+`Status` is `NONE`, `OPEN`, `DELIVERED`, `SILENT` or `FRAUD`. SILENT and FRAUD are final. Below, `price` is `min(tx.gasprice, MAX_GAS_PRICE)` at the claim, `claimGas` is the claim's own gas (measured by `claim`, plus `CLAIM_TX_OVERHEAD`, at most `CLAIM_GAS_CAP`), and every gas amount becomes USDC units at `WEI_PER_USDC_UNIT` (1e12), rounded up.
+
+- `gasRefund = claimGas * price`, what an answer repays the buyer.
+- `disputeCost = (claimGas + FOLLOW_UP_GAS) * price`, the buyer's gas for the whole dispute.
+- `liability = 2 * (value + disputeCost)`, capped at `type(uint128).max`.
 
 | From | Call | Who | Required, or it reverts with | To | Effect |
 |---|---|---|---|---|---|
-| NONE | `claim(p, sellerSignature, auth, buyerSignature)` | The buyer: `msg.sender == auth.from` (`NotBuyer`) | Seller signature recovers to `p.seller` (`InvalidSellerSignature`). Buyer signature recovers to `auth.from` (`InvalidBuyerSignature`). `p.buyer == auth.from` (`WrongBuyer`). `auth.to == p.seller` (`WrongPayee`). `auth.value == p.value` (`WrongValue`). `auth.nonce == p.paymentNonce` (`WrongNonce`). `now < p.expiry` (`PromiseExpired`). `p.expiry - now <= MAX_EXPIRY` (`ExpiryTooFar`). Claim id unused (`AlreadyClaimed`) | OPEN | No money moves. `openLiability[seller] += liability`. `deadline = now + ANSWER_WINDOW`. Emits `Claimed` |
-| OPEN | `answer(claimId, key)` | Anyone | Status is OPEN (`NotOpen`). `now < deadline` (`AnswerWindowClosed`). `keccak256(key) == keyHash` (`WrongKey`) | DELIVERED | `openLiability[seller] -= liability`. `proofHold[seller]` grows by `liability`, after resetting to 0 if the last hold had ended. `proofHoldUntil[seller] = now + COOLDOWN - MAX_EXPIRY`. Emits `KeyRevealed` |
+| NONE | `claim(p, sellerSignature, auth, buyerSignature)` | The buyer: `msg.sender == auth.from` (`NotBuyer`) | Seller signature recovers to `p.seller` (`InvalidSellerSignature`). Buyer signature recovers to `auth.from` (`InvalidBuyerSignature`). `p.buyer == auth.from` (`WrongBuyer`). `auth.to == p.seller` (`WrongPayee`). `auth.value == p.value` (`WrongValue`). `auth.nonce == p.paymentNonce` (`WrongNonce`). `now > auth.validAfter` (`PaymentNotYetValid`). `auth.validBefore > auth.validAfter + 1` (`PaymentNeverValid`). `now < p.expiry` (`PromiseExpired`). `p.expiry - now <= MAX_EXPIRY` (`ExpiryTooFar`). Claim id unused (`AlreadyClaimed`) | OPEN | No money moves. Stores `gasRefund` and `liability`. `openLiability[seller] += liability`. `deadline = now + ANSWER_WINDOW`. Emits `Claimed` |
+| OPEN | `answer(claimId, key)` | Anyone | Status is OPEN (`NotOpen`). `now < deadline` (`AnswerWindowClosed`). `keccak256(key) == keyHash` (`WrongKey`) | DELIVERED | `openLiability[seller] -= liability`. `proofHold[seller]` grows by `liability`, after resetting to 0 if the last hold had ended. `proofHoldUntil[seller] = now + COOLDOWN - MAX_EXPIRY`. The deposit repays the buyer (below). Emits `KeyRevealed`, then `ClaimGasRepaid` |
 | OPEN | `finalize(claimId)` | Anyone | Status is OPEN (`NotOpen`). `now >= deadline` (`DeadlineNotReached`) | SILENT | `openLiability[seller] -= liability`. `silentCount[seller] += 1`. The deposit pays (below). Emits `Silent` |
 | OPEN or DELIVERED | `prove(claimId, ciphertext, key)` | Anyone with the key and ciphertext | Not already FRAUD (`AlreadyFraud`). Status is OPEN or DELIVERED (`NotProvable`). `keccak256(key) == keyHash` (`WrongKey`). `keccak256(ciphertext) == ciphertextHash` (`WrongCiphertext`). Decrypted hash differs from `plaintextHash` (`PromiseKept`). No deadline | FRAUD | From OPEN, `openLiability[seller] -= liability`. `fraudCount[seller] += 1`. The deposit pays (below). `proofHold` stays as it was. Emits `Fraud` |
 
-**When the deposit pays.** `payout = min(liability, deposits[seller])`. The deposit falls by `payout`, and `pendingWithdrawal[seller]` comes down with it if it would exceed the new deposit. The buyer's `claimable` grows by half of `payout`, rounded up. The rest joins `pendingBurn`.
+**When the deposit pays a verdict.** `payout = min(liability, deposits[seller])`. The deposit falls by `payout`, and `pendingWithdrawal[seller]` comes down with it if it would exceed the new deposit. The buyer's `claimable` grows by half of `payout`, rounded up, which is `value + disputeCost` when the deposit holds enough. The rest joins `pendingBurn`.
+
+**When an answer repays the claim.** `refund = min(gasRefund, deposits[seller])` leaves the deposit the same way and goes straight to the buyer in the same transaction. If the token refuses the transfer, it is credited to `claimable` instead, and `ClaimGasRepaid` says `sent = false`. An answer never fails over it.
+
+**Why `validAfter` and not `validBefore`.** EIP-3009 settles a payment only while `validAfter < now < validBefore`. Before `validAfter`, the payment cannot have settled yet, so a claim then is refused. A window with no whole second inside it can never settle, so it is refused too. `validBefore` is not compared with the claim's time: the payment settled before it, and the claim comes after the settlement, often after `validBefore` has passed. Gateway signs `validAfter` about 600 s back and `validBefore` about a week ahead.
 
 Calls outside a claim:
 
@@ -55,55 +63,74 @@ Calls outside a claim:
 | `withdrawClaimable()` | The buyer | A credit exists (`NothingToWithdraw`) | Sends the buyer's whole credit |
 | `flushBurn()` | Anyone | `pendingBurn > 0` (`NothingToWithdraw`) | Sends `pendingBurn` to `0x000000000000000000000000000000000000dEaD` |
 
-Reads: `coverage(seller)` is `deposits - pendingWithdrawal`. `coverageFor(seller, value)` is true when `coverage - openLiability >= 2 * (value + DISPUTE_COST)`.
+Reads: `coverage(seller)` is `deposits - pendingWithdrawal`. `coverageFor(seller, value)` is true when `coverage - openLiability >= 2 * (value + MAX_DISPUTE_COST)`, the most a claim over `value` can cost at any gas price up to `MAX_GAS_PRICE`. `gasRefundOf(claimId)` is what an answer repays. `claims(claimId)` returns the same nine fields as before.
 
 ## The economics
 
-**A verdict repays the dispute.** A claim used about 268,000 gas, which costs more than a sub-cent price. A transaction per payment would not fit these prices, so the contract runs only when a delivery fails. `DISPUTE_COST` is the buyer's gas for going to the chain, fixed at deployment. It came from `claim`, `finalize` and `withdrawClaimable` at 25 gwei on the earlier deployment on 2026-11-05: 420,269 gas, 0.0105 USDC, so it is 10500 here.
+**The buyer never loses, whatever the seller does.** A claim used about 271,000 gas, which costs more than a sub-cent price. So the contract counts the buyer's gas, at the gas price the claim actually paid, and makes the seller carry it.
 
-On a 0.001 USDC payment, a verdict takes 0.023 USDC from the deposit: 0.0115 to the buyer and 0.0115 burned. On the live contract on 2026-11-05 at 20 gwei, Seller E's `claim` and `finalize` (23:14 to 23:15 UTC) used 367,117 gas. With the 53,249 gas of a `withdrawClaimable`, that is 420,366 gas, 0.0084 USDC. The buyer got back the 0.001 price and all of that gas, and ended 0.0021 USDC ahead. In the filmed run at 25 gwei (22:43 to 22:44 UTC), the same three calls used 437,490 gas, 0.0109 USDC, and the buyer ended 0.0004 USDC short of the price it paid. The deposits went from 0.1 to 0.077 USDC after one verdict and to 0.054 after two.
+- **Silent or lying seller.** The verdict credits the buyer `value + disputeCost`: the price, the claim's measured gas, and `FOLLOW_UP_GAS` for the verdict and the withdrawal. The seller pays the same again into the burn.
+- **Seller answers on chain.** The answer sends the buyer `gasRefund`, the claim's gas, in the same transaction. The buyer already has the key it paid for, so this is all it is owed. It needs no second transaction, whose gas would not be repaid.
 
-**Answering is cheaper than silence.** `answer` used 52,811 to 87,400 gas on 2026-11-05, at most 0.0022 USDC at 25 gwei, against 0.023 USDC for silence. Silence costs at least 0.021 USDC at any price, so answering stays cheaper up to about 240 gwei.
+I checked this in `test_Economics_BuyerNeverLosesAndNeverGainsFromAnAnswer`, with the buyer starting with no USDC so that its withdrawal costs the most. Buyer net is what came back, less the price (except after an answer, when the key came), less its own gas, in USDC:
 
-**The deposit is one pool per seller, and verdicts draw on it first come, first served.** Nothing is reserved at claim time. Each verdict takes its amount when it lands, and later verdicts get what is left. This keeps capital light: no funds are locked per payment. At a 0.001 USDC price, a 0.1 USDC deposit covers 4 open claims.
+| Gas price | SILENT | FRAUD (claim, prove) | Answered |
+|---:|---:|---:|---:|
+| 1 gwei | +0.000050 | +0.000058 | +0.000007 |
+| 25 gwei | +0.002103 | +0.001884 | +0.000166 |
+| 100 gwei | +0.008412 | +0.007533 | +0.000665 |
+| 1000 gwei | +0.084102 | +0.075348 | +0.006631 |
+
+`scripts/sealed-local-e2e.ts` checks the same from real receipts on anvil: the buyer ends at or above zero after silence and fraud, and between zero and 5 % of its claim gas after an answer.
+
+**An answer is no profit for the buyer.** The claim measures its own gas from its first line, after booking its largest liability, so the first writes of every slot are inside the measurement. `CLAIM_TX_OVERHEAD` (42,000) covers the rest: the 21,000 base, the calldata, the dispatch and the event. That rest was about 35,100 gas on anvil, so an answered buyer ends about 2.5 % of its claim gas ahead: the 6,900 gas of margin that covers calldata with fewer zero bytes. A claim made while the seller already has one open costs less (254,225 gas), and the refund follows it.
+
+**Gas above the cap is the buyer's.** Costs are counted at `min(tx.gasprice, MAX_GAS_PRICE)`, so a buyer that pays more than the cap carries the difference. The cap also bounds what one claim can cost a seller.
+
+**Answering is cheaper than silence.** At the same gas price, an answer costs the seller its own gas (at most 132,231 on anvil) and the buyer's claim gas, about 410,000 gas. Silence costs twice `value + disputeCost`, more than 1,015,000 gas. Answering stays cheaper while the seller's gas price is under about 5 times the claim's.
+
+**The deposit is one pool per seller, and verdicts draw on it first come, first served.** Nothing is reserved at claim time. Each verdict takes its amount when it lands, and later verdicts get what is left. This keeps capital light: no funds are locked per payment. With `MAX_GAS_PRICE` at 100 gwei, `coverageFor` asks 0.112 USDC per open claim at a 0.001 USDC price, so a 0.5 USDC deposit covers 4. At 25 gwei a claim actually books about 0.0274.
 
 **Half burns.** Without the burn, a seller could pay itself the deposit through a second address and lose nothing. With it, a seller that drains itself loses half of what it pulls, rounded down, plus gas. It can still empty the pool ahead of honest buyers, at that price. A blocked burn address cannot stop a verdict, because the burn waits in `pendingBurn` until anyone calls `flushBurn`.
 
-**Withdrawals wait.** `requestWithdraw` removes funds from coverage at once and starts `COOLDOWN`. Queued funds stay in `deposits`, and verdicts can take them until they leave. The constructor requires `cooldown >= maxExpiry + answerWindow`, so a seller that signs a promise and then asks to withdraw stays exposed past that claim's deadline. The proof hold keeps a fraud proof payable after an answer: each answer holds that claim's liability until `COOLDOWN - MAX_EXPIRY` after the seller's latest answer, 3600 s on this deployment.
+**Withdrawals wait.** `requestWithdraw` removes funds from coverage at once and starts `COOLDOWN`. Queued funds stay in `deposits`, and verdicts can take them until they leave. The constructor requires `cooldown >= maxExpiry + answerWindow`, so a seller that signs a promise and then asks to withdraw stays exposed past that claim's deadline. The proof hold keeps a fraud proof payable after an answer: each answer holds that claim's liability until `COOLDOWN - MAX_EXPIRY` after the seller's latest answer, 3600 s with the recommended values.
 
-Measured on the live contract on Arc testnet, 2026-11-05 22:21 to 23:16 UTC. Each fee is at the gas price that transaction paid, 20 to 25 gwei. Each row links one example, and [DEMO.md](../DEMO.md#contract-transactions) lists all 37 transactions.
+Measured on 2026-11-06. The ranges are anvil receipts of this source, from `scripts/sealed-local-e2e.ts` and calibration runs. The numbers in brackets and the 1 KiB proof are from `forge test`. Gas does not depend on the gas price.
 
-| Call | Gas | Fee in USDC | Example |
-|---|---:|---:|---|
-| `deposit` | 76,917 | 0.0019 | [`0xebf7b029…`](https://explorer.testnet.arc.io/tx/0xebf7b0293c574e6bd63bfed5b4ed45ecb51c97962d4d6e968da5ecbd43b6466f) |
-| `claim` | 268,376 to 268,460 | 0.0054 to 0.0067 | [`0x24182416…`](https://explorer.testnet.arc.io/tx/0x24182416082b271fe9a2a94897e4151e3a2b80bb0aeda1c991d2a3189c3e3fd6) |
-| `answer` | 52,811 to 87,400 | 0.0011 to 0.0022 | [`0x211a089a…`](https://explorer.testnet.arc.io/tx/0x211a089a2bd47d5a549accd135fa84ae36d6e49d20a9dbbb34a9d06cb590ec49) |
-| `finalize` | 81,581 to 115,781 | 0.0016 to 0.0029 | [`0xc60c0312…`](https://explorer.testnet.arc.io/tx/0xc60c0312308f03d84561f7f81671947c3095b255f6cc7a60531c178cabe8d127) |
-| `prove` on a 70 byte answer | 89,226 to 123,426 | 0.0018 to 0.0031 | [`0xe72c3f4c…`](https://explorer.testnet.arc.io/tx/0xe72c3f4cb07caf1c19757c1b1029749fc89f8c19e31004aa338547b30af3d46b) |
-| `flushBurn` | 57,278 | 0.0011 to 0.0014 | [`0xbbcf078a…`](https://explorer.testnet.arc.io/tx/0xbbcf078aa93e38ab4c01f183713c22a2686fc173b363b95d0e855d1ce594add4) |
-| `withdrawClaimable` | 53,249 | 0.0013 | [`0xdb2e65cb…`](https://explorer.testnet.arc.io/tx/0xdb2e65cb3ac1bae0ea03982d9ef797a402b77d9d55a05936e91d3a429aa59d77) |
+| Call | Gas | Fee at 25 gwei in USDC |
+|---|---:|---:|
+| `claim` | 271,013 to 271,049 (254,225 when the seller already has an open claim) | 0.0068 |
+| `answer`, with the refund transfer | 98,019 to 132,231 | 0.0025 to 0.0033 |
+| `finalize` | 115,862 to 115,874 (86,474 when the counters are already set) | 0.0022 to 0.0029 |
+| `prove` on a 70 to 100 byte answer | 107,552 to 123,440 | 0.0027 to 0.0031 |
+| `prove` on a 1 KiB answer | at most 148,451 | 0.0037 |
+| `withdrawClaimable` | 41,343 to 58,443 (the higher when the buyer held no USDC) | 0.0010 to 0.0015 |
+
+The earlier contract on Arc testnet used 268,376 to 268,460 gas per `claim` on 2026-11-05, close to the 271,000 here, which also checks the `validAfter` window and books the gas.
 
 ## Limits
 
 - **The deposit is shared, first come, first served.** Nothing is reserved at claim. `coverageFor` counts open claims when read, and it can change after that. A later verdict gets what is left, which can be nothing.
-- **A seller with no deposit gets no cover.** A seller that plans to drop answers will not deposit. A claim against an empty deposit still records, and `finalize` still marks SILENT, with nothing paid. vet402 reads coverage first and does not claim when it is short.
-- **`DISPUTE_COST` is fixed at deployment.** In the filmed run of 2026-11-05 at 25 gwei, Seller E's dispute (`claim`, `finalize` and `withdrawClaimable`) used 437,490 gas, 0.0109 USDC, which is more than the 0.0105 it covers. `finalize` used 81,581 to 115,781 gas in these runs, so a whole dispute is 403,278 to 437,490 gas, and above about 24 to 26 gwei the verdict no longer covers all of it. Arc mainnet gas is not measured.
-- **`DISPUTE_COST` is paid on a verdict only.** A seller that answers on chain owes nothing, so the buyer keeps the claim's gas: 0.0054 USDC at 20 gwei on 2026-11-05 23:11 UTC, for a key it paid 0.001 USDC to receive.
-- **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim. The seller then has to answer, or pay. A seller whose watcher is down for the 60 s window pays that buyer's verdict too. Set a longer `answerWindow` for real use.
-- **It never sees the payment.** `claim` checks signed intent, and settlement stays in Gateway. A seller must sign a promise only in a flow that settles before the box leaves, as `server/sellers.ts` does.
+- **A seller with no deposit gets no cover.** A seller that plans to drop answers will not deposit. A claim against an empty deposit still records, and `finalize` still marks SILENT, with nothing paid, and an answer repays nothing. vet402 reads coverage first and does not claim when it is short.
+- **Gas is repaid only up to `MAX_GAS_PRICE`.** A buyer that claims above it carries the part above. The verdict's share is counted at the claim's price too, so a buyer that sends `finalize`, `prove` or `withdrawClaimable` at a higher price than its claim carries that difference.
+- **`FOLLOW_UP_GAS` is sized for small answers.** 230,000 covers the worst `finalize` or a `prove` on up to 1 KiB, plus a withdrawal. A proof on a larger answer costs the buyer more than it gets back for that step.
+- **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, and now does it at no cost to itself, since an answer repays its gas. The seller pays its answer and that claim gas, about 0.010 USDC at 25 gwei, and each such claim needs a payment the seller already settled. A seller whose watcher is down for the 60 s window pays that buyer's verdict too. Set a longer `answerWindow` for real use.
+- **A blocked buyer waits for its refund.** If the token refuses the answer's transfer, the refund becomes a credit, and the buyer pays the gas of `withdrawClaimable` itself.
+- **Gas is converted as USDC.** `WEI_PER_USDC_UNIT` is 1e12 because Arc charges gas in USDC at 18 decimals and the deposit token has 6. I checked that on 2026-11-06: the live contract's native balance was exactly 1e12 times its ERC-20 balance. On a chain whose gas is another token, deploy with `maxGasPrice` 0, which repays no gas.
+- **It never sees the payment.** `claim` checks signed intent and the authorization's `validAfter` window, and settlement stays in Gateway. A seller must sign a promise only in a flow that settles before the box leaves, as `server/sellers.ts` does.
 - **A seller can commit to garbage from the start.** If `plaintextHash` is the hash of junk and the key opens that junk, the promise was kept and `prove` reverts. Judging the content belongs to a delivery check outside this contract.
 - **A box lost before it arrives leaves nothing to claim.** Without a signed promise there is no claim. vet402 covers that case with a second fetch on the same payment, for sellers that declare it.
-- **A late fraud proof pays from what is left.** `prove` has no deadline, and the proof hold ends. After a completed withdrawal, the proof still marks FRAUD and pays what remains.
+- **A late fraud proof pays from what is left.** `prove` has no deadline, and the proof hold ends. After a completed withdrawal, the proof still marks FRAUD and pays what remains. A seller that answered and is then proven to have lied has already repaid the claim gas, and the verdict pays the whole dispute cost again.
 - **Disputes publish the answer.** `answer` puts the key on chain, so anyone holding that ciphertext can read the answer. `prove` puts key and ciphertext on chain, so anyone can read it. Keys are per request, so other answers stay sealed.
 - **`prove` gas grows with the answer**, because it decrypts in a loop. It suits small answers.
 - **Signatures must come from EOAs.** Contract wallets are refused.
-- **Arc testnet only, with no outside audit.** Deposits are testnet money. The tests in `contracts/test` passed on 2026-11-05 at 23:20 UTC (219 tests in 16 suites on commit `2d6d920`).
+- **Not deployed yet, and no outside audit.** The tests in `contracts/test` passed on 2026-11-06 (236 tests in 19 suites, on branch `econ`).
 
 ## Use it with your own x402 seller
 
-You can deploy your own copy or deposit into the one above, since each seller has its own pool. The steps below hold for any seller. The code after them uses this repository's helpers on an Express route.
+You can deploy your own copy, or deposit into a shared one, since each seller has its own pool. The steps below hold for any seller. The code after them uses this repository's helpers on an Express route.
 
-1. **Deposit.** Approve the contract for USDC, then call `deposit(amount)`. USDC here is the 6 decimal ERC-20, and the contract has no native token entry. Size the deposit as `2 * (price + DISPUTE_COST)` times the open claims you want to back. The address that deposits must be the address that signs promises and receives the payment.
+1. **Deposit.** Approve the contract for USDC, then call `deposit(amount)`. USDC here is the 6 decimal ERC-20, and the contract has no native token entry. Size the deposit as `2 * (price + MAX_DISPUTE_COST)` times the open claims you want to back, since that is what `coverageFor` asks for. Each claim you answer on chain also repays its gas from the deposit. The address that deposits must be the address that signs promises and receives the payment.
 
 2. **Seal in your paid handler.** After you verify the payment and before you settle: make a fresh 32 byte key for this request, encrypt the answer with `sealResponse` from `src/lib/sealed.ts`, and sign a `Promise` bound to this buyer and payment nonce. Set `expiry` at most `MAX_EXPIRY` ahead. This repository uses 3000 s. If settlement fails, return the 402 and throw the box away.
 
@@ -111,7 +138,7 @@ You can deploy your own copy or deposit into the one above, since each seller ha
 
 3. **Serve the key separately.** Add a key route, and hand over the key only to the exact payment header that settled. Store the key and answer on disk, so a restart can still answer a claim.
 
-4. **Run a watcher.** Read `Claimed` events for your seller and call `answer(claimId, key)` before the deadline. Keep gas for it: an answer used 52,811 to 87,400 gas on 2026-11-05 between 22:35 and 23:16 UTC.
+4. **Run a watcher.** Read `Claimed` events for your seller and call `answer(claimId, key)` before the deadline. Keep gas for it: an answer, with its refund transfer, used 98,019 to 132,231 gas on anvil on 2026-11-06. Handing the key over its own route is cheaper still, since then nobody claims.
 
 5. **Tell the buyer's side.** Before paying, read `coverageFor`. After paying, check the seller's signature, the buyer, nonce, value, ciphertext hash and expiry. Ask for the key, open the box, and compare the hash. If the key does not come, send `claim` from the address that signed the payment, then read `KeyRevealed` until the deadline. `checkBox` and `createSealedPorts` in `server/sealedDelivery.ts` do this.
 
@@ -144,7 +171,7 @@ The price (`DEMO_PRICE`) and the answer (`answer`) are set inside `server/seller
 
 ## Constructor
 
-| # | Argument | Type | Value on the live deployment | Meaning |
+| # | Argument | Type | Recommended on Arc testnet | Meaning |
 |---:|---|---|---|---|
 | 1 | `maxExpiry` | `uint256` | 3600 | The furthest ahead, in seconds, that a promise can expire at claim time. Must be above 0 |
 | 2 | `answerWindow` | `uint256` | 60 | Seconds the seller has to answer after a claim. Must be above 0 |
@@ -153,21 +180,22 @@ The price (`DEMO_PRICE`) and the answer (`answer`) are set inside `server/seller
 | 5 | `paymentDomainName` | `string` | `GatewayWalletBatched` | EIP-712 name of the buyer's payment signature |
 | 6 | `paymentDomainVersion` | `string` | `1` | Its version |
 | 7 | `paymentVerifyingContract` | `address` | `0x0077777d7EBA4688BDeF3E311b846F25870A19B9` | The Gateway Wallet |
-| 8 | `disputeCost` | `uint256` | 10500 | The buyer's cost of going to the chain, in USDC units. Set it from the gas of your chain |
-| 9 | `paymentDomainSalt` | `bytes32` | `0x0000000000000000000000000000000000000000000000000000000000000000` | Zero for an unsalted payment domain: Gateway at version `1`, or a token's own EIP-3009 domain as plain x402 signs it. Gateway's batched domain at version `2` is salted with the USDC address, so pass that address padded to 32 bytes |
+| 8 | `followUpGas` | `uint256` | 230000 | Gas the buyer spends after a claim: the worst `finalize` or a `prove` on up to 1 KiB (148,451), plus `withdrawClaimable` (58,443), each a whole transaction, with room to spare. At most `type(uint64).max` |
+| 9 | `maxGasPrice` | `uint256` | 100000000000 (100 gwei) | The highest gas price, in wei, a claim's costs are counted at. Arc testnet charged 20 to 25 gwei on 2026-11-05 and 2026-11-06, so 100 gwei leaves 4 times headroom while `coverageFor` asks only 0.112 USDC per claim at a 0.001 USDC price. 1000 gwei would ask 1.1 USDC per claim. 0 repays no gas |
+| 10 | `paymentDomainSalt` | `bytes32` | `0x0000000000000000000000000000000000000000000000000000000000000000` | Zero for an unsalted payment domain: Gateway at version `1`, or a token's own EIP-3009 domain as plain x402 signs it. Gateway's batched domain at version `2` is salted with the USDC address, so pass that address padded to 32 bytes |
 
-The chain id in the payment domain is the deployment's own, so deploy on the chain the buyer pays on. The contract has no owner, administrator or upgrade path, and these values are immutable.
+`MAX_DISPUTE_COST` follows from them: `(CLAIM_GAS_CAP + followUpGas) * maxGasPrice`, in USDC units, 55,000 (0.055 USDC) with the values above. The constructor reverts with `InvalidDisputeCost` if `followUpGas` or `maxGasPrice` is out of range. The chain id in the payment domain is the deployment's own, so deploy on the chain the buyer pays on. The contract has no owner, administrator or upgrade path, and these values are immutable.
 
 ```bash
 forge create contracts/SealedDelivery.sol:SealedDelivery \
   --rpc-url https://rpc.testnet.arc.network \
   --private-key "$DEPLOYER_KEY" \
   --broadcast \
-  --constructor-args 3600 60 7200 0x3600000000000000000000000000000000000000 GatewayWalletBatched 1 0x0077777d7EBA4688BDeF3E311b846F25870A19B9 10500 \
+  --constructor-args 3600 60 7200 0x3600000000000000000000000000000000000000 GatewayWalletBatched 1 0x0077777d7EBA4688BDeF3E311b846F25870A19B9 230000 100000000000 \
     0x0000000000000000000000000000000000000000000000000000000000000000
 ```
 
-This repository's deployment went through Arc Studio. I checked the command above, with the same arguments, on a local anvil chain on 2026-11-05 at 23:29 UTC.
+After deploying, each seller deposits at least 0.5 USDC (`scripts/sealed-setup.ts` tops the demo sellers up to that), so that `coverageFor` stays true for a 0.001 USDC price with room for several claims.
 
 ## Tests
 
