@@ -10,7 +10,7 @@ Each table says which query reads a column. A column is indexed only when some q
 
 One column name means two things, and that is on purpose. `seller` holds the seller's **name** in `vet402_receipt` and `vet402_seller`, because the catalog names a seller and a receipt must show it. `seller` holds the **payTo address** in `vet402_verdict`, because Arc rules against the address that was paid, and a name is something any listing can copy. The address of a receipt or seller entity is in its own column, `pay_to`. So a ruling joins to a receipt on `vet402_verdict.pay_to = vet402_receipt.pay_to` (or `vet402_verdict.seller` on a ruling older than its `pay_to`), never on the two `seller` columns. Entities written before `pay_to` existed carry the name alone: at 03:15 UTC on 2026-11-06, 18 of the 123 receipts carried `pay_to`.
 
-Every list read sorts by `$key`, takes 100 rows a page and moves the offset by the rows plus the ones the schema skipped, up to 20 pages (`src/arkiv/pages.ts`). A query that matches more than 2,000 entities stops with an error instead of returning part of them.
+Every list read sorts by `$key`, takes 100 rows a page and moves the offset by the rows plus the ones the schema skipped, up to 20 pages (`src/arkiv/pages.ts`). A query that matches more than 2,000 entities stops with an error instead of returning part of them. The one exception is `isRuledAgainst` with `writers: 'any'`: it stops reading at 2,000 rows and answers from the rulings Arc confirms among them, so a flood of rows from other writers cannot stop payments to an honest seller (`packages/sealed-delivery/src/rulings.ts`).
 
 ## vet402_receipt
 
