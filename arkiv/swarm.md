@@ -17,7 +17,7 @@ Everything about Swarm below is new work at ETHGlobal Mumbai, in these commits o
 | `80a0d01` | Tests for all of the above |
 | `2143ad3` | The local end to end run also keeps and opens every box through Swarm |
 | `2d6d920` | Upload through your own Bee API and postage batch with `SWARM_API_URL` and `SWARM_POSTAGE_BATCH_ID`. Merged to `main` from the `swarmstamp` branch |
-| `arkiv3` branch | Each box from my own Bee node pinned there, with its postage date on the evidence entity and on the screen. The receipts page on Swarm under one fixed feed URL (`scripts/swarm-publish.ts`) |
+| `4051a5f` | Each box from my own Bee node pinned there, with its postage date on the evidence entity and on the screen. The receipts page on Swarm under one fixed feed URL (`scripts/swarm-publish.ts`) |
 
 ## What lives where
 
@@ -114,7 +114,7 @@ Which boxes went which way:
 | 2026-11-05 22:40 to 22:46 UTC, earlier contract `0xa1eff55d…` | The public gateway | The gateway's own batch, through `NULL_STAMP` |
 | 2026-11-05 23:11 to 23:16 UTC, earlier contract `0xa1eff55d…` | My Bee node | `b6455d93…` |
 | 2026-11-06 01:42 to 01:46 UTC and 01:59 to 02:04 UTC, live contract `0xE9C35ad2…` | My Bee node | `b6455d93…`, the only batch on the node |
-| "Try a dispute yourself" on the public deploy (`api/try-dispute`), from the `arkiv2` branch on | The public gateway | The gateway's own batch, through `NULL_STAMP` |
+| "Try a dispute yourself" on the public deploy (`api/try-dispute`) | The public gateway | The gateway's own batch, through `NULL_STAMP` |
 
 The public deploy on Vercel puts each claimed box on Swarm through the public gateway with the null stamp, and writes the evidence entity that points to it, with `ARKIV_WRITER_KEY` set on the deploy. A null stamp upload through the gateway answered on 2026-11-06 at 03:03 UTC with reference `c171583664857b5f0dc77e8f5160112169afb16c19022390a70e37368c02874b`, and the gateway returned the same 427 bytes.
 
