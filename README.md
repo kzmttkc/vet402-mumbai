@@ -206,7 +206,7 @@ Built at ETHGlobal Mumbai:
 
 ## Receipts on Arkiv
 
-vet402 keeps each receipt on Arkiv's Rabdi testnet, so a receipt stays readable when this app is down. The receipts page reads Arkiv directly from the browser, every page of it.
+vet402 keeps each receipt on Arkiv's Rabdi testnet, so a receipt stays readable when this app is down. The receipts page reads Arkiv directly from the browser, every page of it. Its "Check a seller" box lets anyone paste a payTo address and read Arc's rulings against it from Arkiv, the same check vet402 runs before it pays.
 
 Arkiv is also where a seller's standing lives. Each Silent or Fraud ruling from the contract becomes a readonly `vet402_verdict` entity. Before paying, vet402 reads Arkiv and pays a seller only when Arkiv answers, the seller's record is current, and no ruling from the last 7 days stands against it. Rulings are read by the address that would be paid: for a catalog listing the payTo it names, for my own Sellers A to F the address they are paid at. So after Arc's Fraud ruling on Seller F, **Try Seller F** answers "Seller F: Arc ruled against this seller in the last 7 days. Not paid." and pays nothing. The public agent (`api/try-job`) runs the same check, read only. Only an answer that kept the seller's promise extends the seller's record. Another x402 buyer can ask the same question with `isRuledAgainst(payTo, { writer })` from `packages/sealed-delivery`.
 

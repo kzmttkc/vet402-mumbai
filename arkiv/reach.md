@@ -39,6 +39,8 @@ On the `arkiv2` branch the rulings are read before the local agent pays a catalo
 
 Another buyer can use the rulings without vet402. On 2026-11-06 at 04:36 UTC I ran `isRuledAgainst(payTo, { writer: '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5' })` from `packages/sealed-delivery` in a separate script, as any x402 buyer would, with no key: `true` for each of the three sellers Arc ruled against (`0x2d861219…`, `0x1401bd7c…`, `0xb9a6f77d…`) and `false` for an address with no ruling. The 6 rulings it read were 4 Silent and 2 Fraud.
 
+Anyone can ask the same question in a browser. The receipts page has a "Check a seller" box: paste a payTo address and the page reads the rulings straight from Arkiv's public RPC, with no vet402 server. On 2026-11-06 at 05:45 UTC Seller F's address `0x1401bd7c…445d` read "Arc ruled against this seller on 2026-11-06 (Fraud)." with a link to the claim on Arc, and "vet402 does not pay this seller until 2026-11-13." The page is live at https://vet402-mumbai-live.vercel.app/receipts.html and on the Swarm feed below.
+
 Each dispute now lands on Arkiv as one transaction. The receipt of Seller A's dispute on 2026-11-06 at 04:25 UTC reads "Arkiv: 1 transaction, 3 entities" and "the evidence entity belongs to the buyer 0x24Ab…6ba7". At 04:26 UTC Arkiv held 25 evidence entities from the writer, 4 of them already owned by their buyers.
 
 ## After Mumbai
