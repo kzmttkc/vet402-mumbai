@@ -10,6 +10,8 @@ Each table says which query reads a column. A column is indexed only when some q
 
 One column name means two things, and that is on purpose. `seller` holds the seller's **name** in `vet402_receipt` and `vet402_seller`, because the catalog names a seller and a receipt must show it. `seller` holds the **payTo address** in `vet402_verdict`, because Arc rules against the address that was paid, and a name is something any listing can copy. The address of a receipt or seller entity is in its own column, `pay_to`. So a ruling joins to a receipt on `vet402_verdict.pay_to = vet402_receipt.pay_to` (or `vet402_verdict.seller` on a ruling older than its `pay_to`), never on the two `seller` columns. Entities written before `pay_to` existed carry the name alone: at 03:15 UTC on 2026-11-06, 18 of the 123 receipts carried `pay_to`.
 
+**v2, after judging.** v2 of the schema will split `seller` into `seller_name` (the name, on receipts and sellers) and `ruled_pay_to` (the address, on rulings), so one column holds one meaning and no ruling carries its address twice in `pay_to` and `seller`. It will also drop `job_id` and `status`, which no query reads. The judged entities keep v1 until they expire, so the reasons above stay true for them.
+
 Every list read sorts by `$key`, takes 100 rows a page and moves the offset by the rows plus the ones the schema skipped, up to 20 pages (`src/arkiv/pages.ts`). A query that matches more than 2,000 entities stops with an error instead of returning part of them. The one exception is `isRuledAgainst` with `writers: 'any'`: it stops reading at 2,000 rows and answers from the rulings Arc confirms among them, so a flood of rows from other writers cannot stop payments to an honest seller (`packages/sealed-delivery/src/rulings.ts`).
 
 ## vet402_receipt
@@ -66,6 +68,8 @@ Flags: `readonly` and `permissionlessExtension`, like a receipt. All 11 evidence
 Owner: the buyer on the claim, the hold that paid and filed it. vet402 creates the entity and hands it over in the same `executeBatch` transaction, so `$creator` is the writer and `$owner` is the buyer. Every read filters on `$creator`. The buyer can extend the entity or delete it, and the creation flags keep every column as vet402 wrote it.
 
 Lifetime: 30 days. A dispute's payment, seller and evidence entities are written together in one transaction, so all three land or none does.
+
+The entity's 30 days (`RECEIPT_DAYS` in `server/arkiv.ts`) end before the postage batch's 2026-12-13, so a box my own Bee node uploaded stays on Swarm for about a week after the entity that points to it. The entity carries `permissionlessExtension` (`receiptOptions` in `server/arkiv.ts`), so anybody, the buyer who owns it included, can keep it with `extendEntity`. The app extends only seller entities on its own, and step 1 of [reach.md](reach.md#into-vet402s-production-buyer) is me extending the entities the README and swarm.md link to.
 
 ## vet402_verdict
 

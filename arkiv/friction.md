@@ -34,4 +34,4 @@ I am the builder of vet402, and I used Arkiv (`@arkiv-network/sdk@1.0.1` on Rabd
 
 Carry the access key in a header instead of the RPC URL. It keeps the key out of every app's logs at once, with no change in the apps.
 
-Live run on the event network: `npx bun run scripts/arkiv-live.ts` passed every check on Rabdi on 2026-11-05.
+Live run on the event network: `npx bun run scripts/arkiv-live.ts` passed the checks it had on Rabdi on 2026-11-05, steps 1 to 9 (`50eb76c`, 16:24 UTC). Steps 10 and 11 came on 2026-11-06 in `c4b0dfe` (01:04 UTC) and step 10b in `330027a` (03:20 UTC).

@@ -296,6 +296,18 @@ The moment that needs a person is money reaching the agent. On the owner's app i
 
 The public page runs apart from this. Its agent pays from the fixed test wallet `TRY_JOB_HOLD_KEY` (`server/tryJobWire.ts`), and World ID approvals run on the owner's app.
 
+**What the server checks before anything is held.** Lines are `server/world.ts` and `server/__tests__/world.test.ts` at commit `1c1bf5c`. Every check runs on each hold and each budget, except that the first budget starts the session, so it has no saved session id to match. The request itself is signed with the RP key on the server (`signRequest`, line 101).
+
+| Check | `server/world.ts` | Test |
+|---|---|---|
+| World's verify answer and the IDKit result both name this environment, production in production | 388 to 389 | 784 |
+| Protocol 4.0 | 391 | 1233 |
+| This request's nonce | 390 | 373 |
+| Every proof carries this request's signal, `<hold id>:<amount>` for a hold | 368 to 371 | 287, 297 |
+| Each line of World's `results` passed, and every credential asked for is named as passed, the selfie check included | 395 to 400 | 1376, 1402 |
+| `session_id` equals the budget's saved session id in full | 402 to 404 | 269, 278 |
+| Each nullifier is read as a 256-bit integer and saved in one form, so a nullifier seen before is refused in any spelling | 187 to 196, 406 to 413 | 339, 350, 363 |
+
 There are two approvals. Both are World ID 4.0 session proofs. Every one asks for Proof of Human, and a hold above 0.5 USDC also asks for a selfie check in the same approval.
 
 1. **Budget.** Setting a budget creates a session. Its proof carries the signal `budget:<amount>:<budget id>`, so the amount saved is the amount I approved on my phone. The backend saves the session id and the proof's session nullifier.
@@ -306,19 +318,6 @@ Every hold approved under a budget counts toward it, spent or not. A 1 USDC budg
 In production (`WORLD_ENVIRONMENT=production`) nothing else adds to the hold. The plain hold route answers 403. The compare scene and the Seller C scene spend from the approved hold, and stop with "The hold doesn’t cover this. Hold more first." when it is too small. Gas sent to the hold wallet for contract calls is taken from the approved budget, and nothing is sent once the budget has no room. Staging keeps the filmed flow, where those two scenes add their own small extra hold.
 
 While a hold waits in production, the screen offers **Replay test**. It sends the previous hold's approval for the new hold, and the screen reads "Not approved: this approval is for another hold." Nothing is held. Every route that starts, approves or cancels a request needs a token the backend makes at start. It hands the token only to a request the browser marks as coming from the app's own page (`Sec-Fetch-Site: same-origin`). Any other POST a browser marks as sent from another site is refused, so no other page can start a demo or approve a job.
-
-**What the backend checks before anything is held**, in `server/world.ts`:
-
-| Check | Line |
-|---|---|
-| The request is signed with the RP key on the server (`signRequest`) | 101 |
-| Every proof carries this hold's signal, `<hold id>:<amount>` | 371 |
-| World's v4 verify answers for the same environment | 388 |
-| This request's nonce | 390 |
-| Protocol 4.0 | 391 |
-| Every credential asked for is named as passed in World's `results`, the selfie check included | 395 to 400 |
-| The same session as the budget, in full | 402 to 404 |
-| A new nullifier for each credential, never seen before | 406 to 413 |
 
 **The check grows with the amount.** World ID comes in at one moment: when money enters the agent's hold. vet402 asks for the least that answers the question at that amount.
 
