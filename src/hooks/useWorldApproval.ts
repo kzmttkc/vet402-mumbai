@@ -10,7 +10,10 @@ export interface WorldRequestView {
 
 interface WorldStatus {
   enabled: boolean
+  environment?: 'staging' | 'production'
   budgetSet?: boolean
+  /** What the budget can still approve, in USDC. */
+  budgetLeft?: string | null
   hasLastApproval?: boolean
   request?: WorldRequestView | null
 }
@@ -31,16 +34,40 @@ interface Started {
 const POLL_MS = 1000
 const STATUS_RETRY_MS = 3000
 const NOT_APPROVED = 'Not approved. Nothing was held or paid.'
+// The token only goes to a page the browser marks as the app's own, which needs localhost or HTTPS.
+const NO_SESSION = 'Open this page on localhost or over HTTPS to approve.'
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function send<T>(route: string, body: unknown = {}): Promise<T> {
+// The backend makes a new token at every start, and hands it only to this page.
+let token: Promise<string> | null = null
+
+function sessionToken(): Promise<string> {
+  token ??= fetch('/api/world/session')
+    .then((res) => (res.ok ? (res.json() as Promise<{ token?: unknown }>) : null))
+    .then((body) => {
+      if (typeof body?.token !== 'string') throw new Error(NO_SESSION)
+      return body.token
+    })
+    .catch((error: unknown) => {
+      token = null
+      throw error
+    })
+  return token
+}
+
+async function send<T>(route: string, body: unknown = {}, retried = false): Promise<T> {
   const res = await fetch(`/api/world/${route}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Vet402-Session': await sessionToken() },
     body: JSON.stringify(body),
   })
-  const parsed = (await res.json().catch(() => null)) as (T & { error?: string }) | null
+  const parsed = (await res.json().catch(() => null)) as (T & { error?: string; code?: string }) | null
+  // A restarted backend has a new token. Fetch it once and send again.
+  if (parsed?.code === 'SESSION' && !retried) {
+    token = null
+    return send<T>(route, body, true)
+  }
   if (!res.ok || !parsed) throw new Error(parsed?.error ?? NOT_APPROVED)
   return parsed
 }
@@ -53,7 +80,8 @@ async function openIdkitRequest(idkit: IdkitParams) {
     ? IDKit.proveSession(idkit.session_id, config).constraints(
         CredentialRequest('proof_of_human', { signal: idkit.signal }),
       )
-    : IDKit.createSession(config).constraints(CredentialRequest('proof_of_human'))
+    : // The budget's own proof carries its amount as the signal, so the backend saves only the amount approved.
+      IDKit.createSession(config).constraints(CredentialRequest('proof_of_human', { signal: idkit.signal }))
 }
 
 /** Passes IDKit's result to the backend and shows what the backend returns. The browser never decides. */
@@ -194,7 +222,9 @@ export function useWorldApproval(onDone: () => Promise<void>) {
   return {
     loaded: status !== null,
     enabled: status?.enabled ?? false,
+    production: status?.environment === 'production',
     budgetSet: status?.budgetSet ?? false,
+    budgetLeft: status?.budgetLeft ?? null,
     hasLastApproval: status?.hasLastApproval ?? false,
     request: status?.request ?? null,
     canCopy,

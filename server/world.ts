@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { hashSignal } from '@worldcoin/idkit-core/hashing'
 import { signRequest } from '@worldcoin/idkit-core/signing'
 import { formatUsdc } from '../src/onchain-money'
+import type { Address, Hex } from 'viem'
 import { HoldError } from './hold'
-import type { WorldRecord, WorldRequest, WorldRequestKind, WorldRequestState, WorldStore } from './worldStore'
+import type { WorldBudget, WorldRecord, WorldRequest, WorldRequestKind, WorldRequestState, WorldStore } from './worldStore'
 
 export const NOT_APPROVED = 'Not approved. Nothing was held or paid.'
 export const ANOTHER_HOLD = 'Not approved: this approval is for another hold.'
+export const OVER_BUDGET = 'Not approved: this is more than the budget has left.'
 export const WAITING = 'Waiting for approval in World ID.'
 export const BUDGET_SET = 'Budget set.'
 const SETUP_FAILED = 'The hold could not be set up. Please try again.'
@@ -102,7 +104,10 @@ export interface WorldRequestView {
 
 export interface WorldStatus {
   enabled: true
+  environment: WorldEnvironment
   budgetSet: boolean
+  /** What the budget can still approve, in USDC. Null without a budget. */
+  budgetLeft: string | null
   hasLastApproval: boolean
   request: WorldRequestView | null
 }
@@ -117,10 +122,20 @@ export interface IdkitParams {
 }
 
 interface IdkitResult {
+  protocol_version?: unknown
   environment?: unknown
   nonce?: unknown
   session_id?: unknown
-  responses?: Array<{ signal_hash?: unknown; session_nullifier?: unknown } | null>
+  responses?: Array<{ identifier?: unknown; signal_hash?: unknown; session_nullifier?: unknown } | null>
+}
+
+/** The only proof this app asks for. A session proof of World ID 4.0 for Proof of Human. */
+const PROTOCOL_VERSION = '4.0'
+const CREDENTIAL = 'proof_of_human'
+
+/** IDKit gives the session nullifier as [nullifier, action]. A bare string is taken as the nullifier itself. */
+function sessionNullifierOf(raw: unknown): bigint | null {
+  return toUint256(Array.isArray(raw) ? (raw as unknown[])[0] : raw)
 }
 
 /** World's values can arrive as hex or decimal. Returns null for anything that is not a 256-bit integer. */
@@ -131,8 +146,21 @@ function toUint256(value: unknown): bigint | null {
 }
 
 const amountOnScreen = (raw: string) => `${formatUsdc(BigInt(raw))} USDC`
-const signalFor = (request: Pick<WorldRequest, 'id' | 'amount'>) => `${request.id}:${formatUsdc(BigInt(request.amount))}`
+const holdSignal = (request: Pick<WorldRequest, 'id' | 'amount'>) => `${request.id}:${formatUsdc(BigInt(request.amount))}`
+/** The budget proof carries its amount, so the amount saved is the amount the person approved. */
+const budgetSignal = (request: Pick<WorldRequest, 'id' | 'amount'>) => `budget:${formatUsdc(BigInt(request.amount))}:${request.id}`
+const signalFor = (request: WorldRequest) => (request.kind === 'budget' ? budgetSignal(request) : holdSignal(request))
 const viewOf = ({ id, kind, state, message }: WorldRequest): WorldRequestView => ({ id, kind, state, message })
+
+/** Only a budget set with its own proof counts. One saved before that, with no id or nullifier, is treated as unset. */
+function budgetOf(record: WorldRecord): WorldBudget | null {
+  const budget = record.budget as Partial<WorldBudget> | null
+  if (!budget) return null
+  const fields = [budget.id, budget.amount, budget.sessionId, budget.used, budget.nullifier]
+  return fields.every((field) => typeof field === 'string' && field) ? (budget as WorldBudget) : null
+}
+
+const leftOf = (budget: WorldBudget) => BigInt(budget.amount) - BigInt(budget.used)
 
 interface Options {
   appId: string
@@ -186,7 +214,7 @@ export function createWorldService({
     timer.unref?.()
   }
 
-  function begin(record: WorldRecord, kind: WorldRequestKind, amount: bigint, jobId: string | null) {
+  function begin(record: WorldRecord, kind: WorldRequestKind, amount: bigint) {
     if (record.request?.state === 'creating') throw new WorldError(409, 'A hold is already being set up.')
 
     const signed = ports.sign()
@@ -194,7 +222,6 @@ export function createWorldService({
       id: `${kind}_${randomUUID()}`,
       kind,
       amount: amount.toString(),
-      jobId,
       nonce: signed.nonce,
       expiresAt: now() + ttlMs,
       state: 'waiting',
@@ -221,17 +248,24 @@ export function createWorldService({
 
   function startBudget(amount: bigint) {
     const record = current()
-    if (record.budget) throw new WorldError(409, NOT_APPROVED)
-    const { request, idkit } = begin(record, 'budget', amount, null)
-    return { request: viewOf(request), idkit }
+    const saved = budgetOf(record)
+    const { request, idkit } = begin(record, 'budget', amount)
+    // The first budget creates the session. A new budget is a proof of that same session, so only the person who set
+    // the first one can raise it. The old budget stays as it was until the new proof passes.
+    return {
+      request: viewOf(request),
+      idkit: { ...idkit, ...(saved ? { session_id: saved.sessionId } : {}), signal: budgetSignal(request) },
+    }
   }
 
   function startHold(amount: bigint) {
     const record = current()
-    if (!record.budget || amount > BigInt(record.budget.amount)) throw new WorldError(403, NOT_APPROVED)
-    const { sessionId } = record.budget
-    const { request, idkit } = begin(record, 'hold', amount, `job_${randomUUID()}`)
-    return { request: viewOf(request), idkit: { ...idkit, session_id: sessionId, signal: signalFor(request) } }
+    const budget = budgetOf(record)
+    if (!budget) throw new WorldError(403, NOT_APPROVED)
+    if (amount > leftOf(budget)) throw new WorldError(403, OVER_BUDGET)
+    // The hold is the agent's spending limit. Jobs are planned after it and several are paid from one hold.
+    const { request, idkit } = begin(record, 'hold', amount)
+    return { request: viewOf(request), idkit: { ...idkit, session_id: budget.sessionId, signal: holdSignal(request) } }
   }
 
   function live(id: string) {
@@ -250,74 +284,111 @@ export function createWorldService({
     }
   }
 
-  async function completeBudget(id: string, result: IdkitResult): Promise<WorldRequestView> {
-    const answer = await askWorld(result)
-    const { record, request } = live(id)
-    if (request.state !== 'waiting') return viewOf(request)
-    if (record.budget) return close(record, request, NOT_APPROVED, 'budget already saved')
-    if (!answer.success) return close(record, request, NOT_APPROVED, 'verify failed')
-    if (answer.environment !== environment) return close(record, request, NOT_APPROVED, 'verify environment')
-    if (result.environment !== environment) return close(record, request, NOT_APPROVED, 'result environment')
-    if (result.nonce !== request.nonce) return close(record, request, NOT_APPROVED, 'nonce')
-    if (typeof result.session_id !== 'string' || !result.session_id) {
-      return close(record, request, NOT_APPROVED, 'no session')
+  /**
+   * The checks both steps share. The signal comes before everything else, so a proof made for another request always
+   * gets its own sentence, even when its nonce and nullifier would fail too.
+   * `commit` runs in the same turn as the last read, with no await between, so two answers for one request cannot
+   * both pass on a record that is already out of date.
+   */
+  async function check<T>(
+    id: string,
+    result: IdkitResult,
+    sessionId: (record: WorldRecord) => string | null,
+    commit: (record: WorldRecord, request: WorldRequest, nullifier: string) => T,
+  ): Promise<{ ok: true; value: T } | { ok: false; view: WorldRequestView }> {
+    const first = live(id)
+    const proof = Array.isArray(result.responses) ? result.responses[0] : null
+    const wrongSignal = first.request.kind === 'hold' ? ANOTHER_HOLD : NOT_APPROVED
+
+    const signalHash = toUint256(proof?.signal_hash)
+    if (signalHash === null) return { ok: false, view: close(first.record, first.request, NOT_APPROVED, 'no signal') }
+    if (signalHash !== toUint256(hashSignal(signalFor(first.request)))) {
+      return { ok: false, view: close(first.record, first.request, wrongSignal, 'signal') }
     }
 
-    record.budget = { amount: request.amount, sessionId: result.session_id }
-    request.state = 'done'
-    request.message = BUDGET_SET
-    store.write(record)
-    return viewOf(request)
+    const answer = await askWorld(result)
+    const { record, request } = live(id)
+    const fail = (reason: string) => ({ ok: false as const, view: close(record, request, NOT_APPROVED, reason) })
+    if (request.state !== 'waiting') return { ok: false, view: viewOf(request) }
+    if (!answer.success) return fail('verify failed')
+    if (answer.environment !== environment) return fail('verify environment')
+    if (result.environment !== environment) return fail('result environment')
+    if (result.nonce !== request.nonce) return fail('nonce')
+    if (result.protocol_version !== PROTOCOL_VERSION) return fail('protocol version')
+    if (proof?.identifier !== CREDENTIAL) return fail('credential')
+    // World accepts a changed tail of the session id and echoes it back. Only the whole saved string counts.
+    const expected = sessionId(record)
+    if (typeof result.session_id !== 'string' || !result.session_id) return fail('no session')
+    if (expected !== null && result.session_id !== expected) return fail('session')
+    const nullifier = sessionNullifierOf(proof?.session_nullifier)
+    if (nullifier === null) return fail('no nullifier')
+    const key = nullifier.toString(16)
+    if (record.nullifiers.includes(key)) return fail('nullifier reused')
+    return { ok: true, value: commit(record, request, key) }
+  }
+
+  async function completeBudget(id: string, result: IdkitResult): Promise<WorldRequestView> {
+    // With no budget yet, createSession makes a new session and there is nothing to compare with.
+    // A new budget on top of one must prove the saved session.
+    const checked = await check(
+      id,
+      result,
+      (record) => budgetOf(record)?.sessionId ?? null,
+      (record, request, nullifier) => {
+        record.nullifiers.push(nullifier)
+        record.budget = { id: request.id, amount: request.amount, sessionId: result.session_id as string, used: '0', nullifier }
+        request.state = 'done'
+        request.message = BUDGET_SET
+        store.write(record)
+        return viewOf(request)
+      },
+    )
+    return checked.ok ? checked.value : checked.view
   }
 
   async function completeHold(id: string, result: IdkitResult): Promise<WorldRequestView> {
-    const first = live(id)
-    const proof = Array.isArray(result.responses) ? result.responses[0] : null
+    const checked = await check(
+      id,
+      result,
+      (record) => budgetOf(record)?.sessionId ?? '',
+      (record, request, nullifier) => {
+        const budget = budgetOf(record)
+        const amount = BigInt(request.amount)
+        // Gas may have been taken from the budget while the person was approving.
+        if (!budget) return { go: false as const, view: close(record, request, NOT_APPROVED, 'no budget') }
+        if (amount > leftOf(budget)) return { go: false as const, view: close(record, request, OVER_BUDGET, 'over budget') }
+        // One write: the nullifier is taken, the budget is charged and the request leaves "waiting" together,
+        // before any money moves. A crash after this leaves no hold and a spent nullifier, so nothing can be replayed.
+        record.nullifiers.push(nullifier)
+        budget.used = (BigInt(budget.used) + amount).toString()
+        record.lastApproval = result
+        request.state = 'creating'
+        request.message = 'Setting up the hold…'
+        store.write(record)
+        return { go: true as const, request, amount, budgetId: budget.id }
+      },
+    )
+    if (!checked.ok) return checked.view
+    if (!checked.value.go) return checked.value.view
+    const { request, amount, budgetId } = checked.value
 
-    // The signal comes before everything else, so a proof made for another hold always gets its own sentence,
-    // even when its nonce and nullifier would fail too.
-    const signalHash = toUint256(proof?.signal_hash)
-    if (signalHash === null) return close(first.record, first.request, NOT_APPROVED, 'no signal')
-    if (signalHash !== toUint256(hashSignal(signalFor(first.request)))) {
-      return close(first.record, first.request, ANOTHER_HOLD, 'signal')
-    }
-
-    const answer = await askWorld(result)
-    const { record, request } = live(id)
-    if (request.state !== 'waiting') return viewOf(request)
-    if (!answer.success) return close(record, request, NOT_APPROVED, 'verify failed')
-    if (answer.environment !== environment) return close(record, request, NOT_APPROVED, 'verify environment')
-    if (result.environment !== environment) return close(record, request, NOT_APPROVED, 'result environment')
-    if (result.nonce !== request.nonce) return close(record, request, NOT_APPROVED, 'nonce')
-    // World accepts a changed tail of the session id and echoes it back. Only the whole saved string counts.
-    if (!record.budget || result.session_id !== record.budget.sessionId) {
-      return close(record, request, NOT_APPROVED, 'session')
-    }
-    const raw = proof?.session_nullifier
-    const nullifier = toUint256(Array.isArray(raw) ? (raw as unknown[])[0] : undefined)
-    if (nullifier === null) return close(record, request, NOT_APPROVED, 'no nullifier')
-    const key = nullifier.toString(16)
-    if (record.nullifiers.includes(key)) return close(record, request, NOT_APPROVED, 'nullifier reused')
-
-    // One write: the nullifier is taken and the request leaves "waiting" together, before any money moves.
-    // A crash after this leaves no hold and a spent nullifier, so nothing can be replayed.
-    record.nullifiers.push(key)
-    record.lastApproval = result
-    request.state = 'creating'
-    request.message = 'Setting up the hold…'
-    store.write(record)
-
+    let released = false
     try {
-      await ports.createHold(BigInt(request.amount))
+      await ports.createHold(amount)
       request.state = 'done'
-      request.message = `Held ${amountOnScreen(request.amount)} for this job.`
+      request.message = `Held ${amountOnScreen(request.amount)} for your agent.`
     } catch (error) {
       console.error('world: hold failed:', error instanceof Error ? error.message : 'unknown')
       request.state = 'closed'
       request.message = error instanceof HoldError ? error.message : SETUP_FAILED
+      // A HoldError comes before the deposit, and any gas reserve sent for the withdrawal has been swept back to the
+      // buyer by then. Anything else may have left money in the hold, so it stays charged.
+      released = error instanceof HoldError
     }
     const latest = store.read()
     latest.request = request
+    const charged = budgetOf(latest)
+    if (released && charged?.id === budgetId) charged.used = (BigInt(charged.used) - amount).toString()
     store.write(latest)
     return viewOf(request)
   }
@@ -335,22 +406,68 @@ export function createWorldService({
     return close(record, request, NOT_APPROVED, 'cancelled')
   }
 
-  /** Demo only: sends the previous hold's proof for the new hold. */
+  /**
+   * The replay test: sends the previous hold's proof for the new hold. It never makes a hold, because that proof
+   * carries the previous hold's signal, and the screen reads "Not approved: this approval is for another hold."
+   */
   async function useLastApproval(id: string): Promise<WorldRequestView> {
     const { record, request } = live(id)
     if (request.state !== 'waiting' || request.kind !== 'hold' || record.lastApproval === null) return viewOf(request)
     return complete(id, record.lastApproval)
   }
 
+  /**
+   * Takes money out of the budget for something that is not a hold, such as gas sent to the hold wallet.
+   * It refuses without a budget or past what is left, so nothing reaches the hold wallet outside an approved budget.
+   */
+  function spend(amount: bigint): void {
+    const record = current()
+    const budget = budgetOf(record)
+    if (!budget || amount > leftOf(budget)) throw new WorldError(403, OVER_BUDGET)
+    budget.used = (BigInt(budget.used) + amount).toString()
+    store.write(record)
+  }
+
   function status(): WorldStatus {
     const record = current()
+    const budget = budgetOf(record)
     return {
       enabled: true,
-      budgetSet: record.budget !== null,
+      environment,
+      budgetSet: budget !== null,
+      budgetLeft: budget ? formatUsdc(leftOf(budget)) : null,
       hasLastApproval: record.lastApproval !== null,
       request: record.request ? viewOf(record.request) : null,
     }
   }
 
-  return { startBudget, startHold, complete, cancel, useLastApproval, status }
+  return { startBudget, startHold, complete, cancel, useLastApproval, spend, status }
+}
+
+export type WorldService = ReturnType<typeof createWorldService>
+
+/** The part of the contract client that sends gas to a wallet. */
+export interface GasClient {
+  gasCost(gas: bigint): Promise<bigint>
+  usdcBalance(who: Address): Promise<bigint>
+  transferUsdc(fromKey: Hex, to: Address, amount: bigint): Promise<void>
+  ensureGas(fromKey: Hex, to: Address, gas: bigint): Promise<bigint>
+}
+
+/**
+ * Production only. Gas for the hold wallet's contract calls is taken from the approved budget before it is sent,
+ * the same way ensureGas works, and nothing is sent when the budget has no room.
+ */
+export function gasFromBudget<C extends GasClient>(client: C, spend: (amount: bigint) => void): C {
+  return {
+    ...client,
+    async ensureGas(fromKey: Hex, to: Address, gas: bigint): Promise<bigint> {
+      const [cost, balance] = await Promise.all([client.gasCost(gas), client.usdcBalance(to)])
+      if (balance >= cost) return 0n
+      const missing = cost - balance
+      spend(missing)
+      await client.transferUsdc(fromKey, to, missing)
+      return missing
+    },
+  }
 }

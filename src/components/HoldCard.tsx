@@ -17,7 +17,7 @@ function holdLine(hold: Balances['hold'] | undefined): string {
     case 'setting-up':
       return 'Setting up the hold…'
     case 'active':
-      return `${fmt(hold.remaining)} USDC left on hold for this job.`
+      return `${fmt(hold.remaining)} USDC left on hold for your agent.`
     case 'used-up':
       return 'The hold is used up. Nothing more was paid.'
   }
@@ -91,7 +91,7 @@ export function HoldCard({ data, reload }: { data: Balances | null; reload: () =
             className="flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ink)] px-5 text-base font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40"
           >
             {busy && <Loader2 size={18} className="animate-spin" aria-hidden />}
-            {busy ? 'Setting up the hold…' : `Hold ${amount ?? text} USDC for this job`}
+            {busy ? 'Setting up the hold…' : `Hold ${amount ?? text} USDC for your agent`}
           </button>
         )}
 

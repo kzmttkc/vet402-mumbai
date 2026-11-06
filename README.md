@@ -166,11 +166,22 @@ More in [arkiv/](arkiv/schema.md).
 
 ## World ID
 
-The moment that needs a person is the hold. vet402 pays with my money and its keys sit on my server. The credential is Proof of Human, because the only question is whether a person, and not the agent, released the money. Nothing here needs to know who that person is.
+The moment that needs a person is money reaching the agent. vet402 pays with my money and its keys sit on my server. With World ID on, an approval in World App is the only way money reaches the hold wallet.
 
-One session is created per budget. Each hold then needs a session proof of that session, with the hold's id and amount as its signal. The backend signs each request and sends each result to World's verify endpoint before it creates a hold. It accepts a proof only if the session matches the stored one in full, the signal matches this hold, and the session nullifier has never been used. An approval made for another hold reads "Not approved: this approval is for another hold." Cancel request reads "Not approved. Nothing was held or paid."
+There are two approvals. Both are World ID 4.0 session proofs of Proof of Human.
 
-It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my Orb-verified World App on iOS, and the verified result reads environment production, protocol 4.0, proof_of_human. The demo video shows the production approval filmed at 23:25 UTC. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
+1. **Budget.** Setting a budget creates a session. Its proof carries the signal `budget:<amount>:<budget id>`, so the amount saved is the amount I approved on my phone. The backend saves the session id and the proof's session nullifier.
+2. **Hold.** Each hold needs a proof of that same session with the signal `<hold id>:<amount>`. The backend accepts it only if the session matches the saved one in full, the signal matches this hold, the session nullifier has never been used, and the hold fits in what the budget has left.
+
+Every hold approved under a budget counts toward it, spent or not. A 1 USDC budget allows a 0.6 USDC hold once and refuses a second one with "Not approved: this is more than the budget has left." A larger hold asks for a new budget, with its own approval. A new budget is a proof of the same session, so only the person who set the first budget can raise it. The backend signs every request and sends every result to World's verify endpoint before anything is saved or held. It also requires the environment, protocol 4.0, `proof_of_human` and this request's nonce. A hold is the agent's spending limit, so the screen reads "Held 1 USDC for your agent." The jobs the agent plans afterwards are paid from it.
+
+In production (`WORLD_ENVIRONMENT=production`) nothing else adds to the hold. The plain hold route answers 403. The compare scene and the Seller C scene spend from the approved hold, and stop with "The hold doesn’t cover this. Hold more first." when it is too small. Gas sent to the hold wallet for contract calls is taken from the approved budget, and nothing is sent once the budget has no room. Staging keeps the filmed flow, where those two scenes add their own small extra hold.
+
+While a hold waits in production, the screen offers **Replay test**. It sends the previous hold's approval for the new hold, and the screen reads "Not approved: this approval is for another hold." Nothing is held. Every route that starts, approves or cancels a request needs a token the backend makes at start. It hands the token only to a request the browser marks as coming from the app's own page (`Sec-Fetch-Site: same-origin`). Any other POST a browser marks as sent from another site is refused, so no other page can start a demo or approve a job.
+
+**Why Proof of Human is enough.** The question at a hold is whether the owner is there and released the money. It is not who the owner is, and it is not whether the owner is unique. The budget belongs to one owner, and the session ties every hold to the person who set it, so another person cannot approve a hold. Uniqueness and Selfie Check answer a Sybil question, and a single owner's budget has no Sybil to stop. Selfie Check also returned `credential_unavailable` on staging when I tried it on 2026-10-28.
+
+It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. The demo video shows the production approval filmed at 23:25 UTC. Those runs came before the budget had its own signal. The budget signal, the running total, the production limits on the demo scenes, the session token and the cross site check were added on 2026-11-06 and are covered by the backend tests. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
 ## After judging
 
