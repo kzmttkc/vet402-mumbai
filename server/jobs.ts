@@ -199,6 +199,8 @@ export interface Signals {
   lines: Map<string, string>
   /** The name and address pairs Arkiv was read for. */
   checked: Set<string>
+  /** The name and address pairs of sealing sellers whose deposit the contract said covers the price. */
+  covered: Set<string>
 }
 
 async function readOne(
@@ -214,6 +216,7 @@ async function readOne(
     sellerCheck ? sellerCheck(name, candidate.payTo) : Promise.resolve(null),
     coverage && candidate.sealedBy ? coverage(candidate).catch(() => null) : Promise.resolve(null),
   ])
+  if (covered === true) found.covered.add(pairOf(candidate))
   const before = found.signals.get(name)
   // A stop is never undone by a later read of the same name under another address.
   if (before?.delivery === 'expired') return
@@ -231,7 +234,7 @@ export async function readSignals(
   sellerCheck: SellerCheck | undefined,
   coverage: ((candidate: Candidate) => Promise<boolean | null>) | undefined,
 ): Promise<Signals> {
-  const found: Signals = { signals: new Map(), lines: new Map(), checked: new Set() }
+  const found: Signals = { signals: new Map(), lines: new Map(), checked: new Set(), covered: new Set() }
   if (!sellerCheck && !coverage) return found
   const pairs = new Map<string, Candidate>()
   for (const r of ranked) {
@@ -263,6 +266,8 @@ export interface Chosen {
   notices: string[]
   /** What the delivery check found for the picked seller. */
   delivery: string | null
+  /** True only when the pick seals and the contract said its deposit covers the price, for the address it lists. */
+  protectedOnArc: boolean
 }
 
 /**
@@ -298,7 +303,13 @@ export async function choosePlan(job: string, candidates: Candidate[], deps: Cho
     .slice(0, pickAt < 0 ? first.ranked.length : pickAt)
     .filter((r) => signals.get(r.candidate.sellerName)?.delivery === 'expired')
     .map((r) => skipNotice(r.candidate.sellerName, lines.get(r.candidate.sellerName) ?? NOT_PAID))
-  return { plan: outcome.plan, notices: [...new Set(notices)], delivery: lines.get(outcome.plan.sellerName) ?? null }
+  const pick = ranking.pick?.candidate
+  return {
+    plan: outcome.plan,
+    notices: [...new Set(notices)],
+    delivery: lines.get(outcome.plan.sellerName) ?? null,
+    protectedOnArc: !!pick?.sealedBy && found.covered.has(pairOf(pick)),
+  }
 }
 
 export function createJobService(

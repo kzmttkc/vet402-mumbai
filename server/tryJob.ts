@@ -4,6 +4,7 @@ import type { SellerCheck } from './arkiv'
 import type { Candidate } from './discovery'
 import { choosePlan, DEFAULT_NETWORK_NAME, describeAnswer, describeReceipt, JobError } from './jobs'
 import type { Chosen, JobErrorCode, PayOutcome, TransferInfo } from './jobs'
+import type { OwnPurchase } from './paymentCheckSeller'
 import type { Compared, LatestReceipt, Plan, PlannedRequest } from './planner'
 import type { TransferStatus } from './receiptStore'
 
@@ -42,6 +43,9 @@ export const TRY_JOB_MESSAGES: Record<TryJobCode, string> = {
   NOT_FOUND: 'That payment is not one of the agent’s.',
 }
 
+/** On the card, only for a pick that seals and whose deposit the contract says covers the price. */
+export const PROTECTED_LINE = "Protected on Arc: if the answer goes missing, the seller's deposit pays you back."
+
 export const TRY_JOB_STATUS: Record<TryJobCode, number> = {
   RESTING: 503,
   RATE: 429,
@@ -69,6 +73,8 @@ export interface TryJobPorts {
   recentPayments(): Promise<number[]>
   sellerCheck?: SellerCheck
   coverage?: (candidate: Candidate) => Promise<boolean | null>
+  /** vet402's own seller, ranked beside the catalog and bought from vet402 itself. Absent without its keys. */
+  ownSeller?: { candidate: Candidate; buy(cap: bigint): Promise<OwnPurchase> }
   log?: (message: string) => void
 }
 
@@ -92,6 +98,10 @@ export interface TryPlanView {
   compared: Compared[]
   notices?: string[]
   delivery?: string
+  /** PROTECTED_LINE, when the pick seals and its deposit covers the price. */
+  protection?: string
+  /** True when the pick is vet402's own seller, not a Discovery listing. */
+  own?: boolean
   /** False when the agent's test wallet cannot cover the price right now. */
   covered: boolean
 }
@@ -109,6 +119,8 @@ export interface PaidReply {
   transferId: string | null
   status: TransferStatus | null
   batchTx: string | null
+  /** The receipt's lines for a sealed answer. Technical ones start with "Detail: ". */
+  lines?: string[]
 }
 
 export type Reply<T> = { ok: true; value: T } | { ok: false; code: TryJobCode }
@@ -163,8 +175,15 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       .update(['v1', issuedAt, job, plan.kind, plan.sellerName, plan.request.method, plan.request.url, plan.amount.toString()].join('\n'))
       .digest('hex')
 
+  // vet402's own seller goes beside the catalog. Only it may carry its name, so no listing can pass as it.
+  const pool = async (): Promise<Candidate[]> => {
+    const listed = (await ports.candidates()).filter((c) => !c.own)
+    const own = ports.ownSeller?.candidate
+    return own ? [...listed.filter((c) => c.sellerName !== own.sellerName), own] : listed
+  }
+
   const choose = async (job: string): Promise<Chosen> =>
-    choosePlan(job, await ports.candidates(), {
+    choosePlan(job, await pool(), {
       latestReceipt: () => ports.latestReceipt(),
       sellerCheck: ports.sellerCheck,
       coverage: ports.coverage,
@@ -208,6 +227,8 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
           compared: picked.compared ?? [],
           ...(chosen.notices.length ? { notices: chosen.notices } : {}),
           ...(chosen.delivery ? { delivery: chosen.delivery } : {}),
+          ...(chosen.protectedOnArc ? { protection: PROTECTED_LINE } : {}),
+          ...(picked.own ? { own: true } : {}),
           covered,
         },
       },
@@ -262,6 +283,8 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       const expected = Buffer.from(sign(issuedAt, job, approved), 'hex')
       const given = Buffer.from(id[2] as string, 'hex')
       if (expected.length !== given.length || !timingSafeEqual(expected, given)) return { ok: false, code: 'EXPIRED' }
+      // Only vet402's own seller may sell what its plan names, and it is only planned when it is there.
+      if (approved.own && !ports.ownSeller) return { ok: false, code: 'EXPIRED' }
 
       if ((await ports.holdAvailable()) < approved.amount) return { ok: false, code: 'RESTING' }
 
@@ -270,9 +293,17 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       paidAt.push(now())
 
       let paid: PayOutcome
+      let lines: string[] = []
       try {
         // The approved amount is the most the agent may spend on this job.
-        paid = await ports.pay(approved.request, approved.amount)
+        if (approved.own && ports.ownSeller) {
+          // vet402's own seller is bought from vet402 itself. Its resource is never fetched.
+          const own = await ports.ownSeller.buy(approved.amount)
+          paid = own
+          lines = own.lines
+        } else {
+          paid = await ports.pay(approved.request, approved.amount)
+        }
       } catch (error) {
         log(`try-job payment failed: ${messageOf(error)}`)
         return { ok: false, code: 'PAY_FAILED' }
@@ -301,6 +332,7 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
           transferId: transfer?.id ?? null,
           status: transfer?.status ?? null,
           batchTx: transfer?.txHash ?? null,
+          ...(lines.length ? { lines } : {}),
         },
       }
     } catch (error) {

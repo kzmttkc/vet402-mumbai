@@ -23,6 +23,8 @@ export interface Compared {
   /** USDC, as a decimal string. */
   amount: string
   note: string
+  /** vet402's own seller, not a Discovery listing. The card marks it. */
+  own?: true
 }
 
 export interface Plan {
@@ -37,6 +39,8 @@ export interface Plan {
   why?: string
   /** The top listings it compared, the picked one first. */
   compared?: Compared[]
+  /** The pick is vet402's own seller, so the agent buys it from vet402 and not through the catalog. */
+  own?: true
 }
 
 export type PlanFailure = 'EMPTY_JOB' | 'NO_SELLER' | 'OVER_LIMIT' | 'NO_PAYMENTS' | 'NOT_SETTLED'
@@ -102,8 +106,10 @@ const BLOCK_SENTENCES: Record<Block, string> = {
 export const NO_SELLER_SENTENCE = 'I couldn’t find anyone who can do this job.'
 
 export interface Ranking {
-  /** How many listings the catalog had. */
+  /** How many listings the catalog had. vet402's own seller is not one of them. */
   total: number
+  /** True when vet402's own seller was ranked beside the catalog. */
+  withOwn?: true
   networkName: string
   limit: bigint
   signals?: ReadonlyMap<string, SellerSignal>
@@ -143,6 +149,7 @@ const SUMMARIES: Record<string, string> = {
 }
 const DEFAULT_SUMMARY = 'Takes care of this job for you.'
 const RECEIPT_SUMMARY = 'Checks whether your latest payment went through.'
+const OWN_SUMMARY = "Reads Circle's record of your agent's last payment and sends the answer sealed on Arc."
 
 // BM25's usual constants.
 const K1 = 1.2
@@ -357,7 +364,8 @@ export function rankJob(job: string, candidates: Candidate[], ctx: AgentContext)
 
   ranked.sort(byScore)
   return {
-    total: candidates.length,
+    total: candidates.filter((c) => !c.own).length,
+    ...(candidates.some((c) => c.own) ? { withOwn: true as const } : {}),
     networkName: ctx.networkName,
     limit: ctx.limit,
     ...(ctx.signals ? { signals: ctx.signals } : {}),
@@ -377,6 +385,7 @@ function comparedOf(ranking: Ranking): Compared[] {
     listing: listingLabel(r.candidate),
     amount: usdc(r.candidate.amount),
     note: r === ranking.pick ? 'Picked' : r.blocked ? BLOCK_NOTES[r.blocked] : 'Lower match',
+    ...(r.candidate.own ? { own: true as const } : {}),
   }))
 }
 
@@ -393,7 +402,8 @@ export function whyLine(ranking: Ranking, pick: Ranked, signal?: SellerSignal): 
   const delivered = signal?.delivery ? deliveryWords[signal.delivery] : null
   if (delivered) parts.push(delivered)
   if (signal?.covered === true) parts.push('its deposit covers it')
-  return `Picked from ${ranking.total} ${placeName(ranking.networkName)} listings: ${parts.join(', ')}`
+  const own = ranking.withOwn ? " and vet402's own seller" : ''
+  return `Picked from ${ranking.total} ${placeName(ranking.networkName)} listings${own}: ${parts.join(', ')}`
 }
 
 /** Turns a ranking into a plan, or a reason the agent will not pay, in plain words. */
@@ -461,11 +471,12 @@ export function decide(job: string, ranking: Ranking, latest: LatestReceipt | nu
     plan: {
       kind: 'lookup',
       sellerName: candidate.sellerName,
-      summary: SUMMARIES[candidate.category] ?? DEFAULT_SUMMARY,
+      summary: candidate.own ? OWN_SUMMARY : (SUMMARIES[candidate.category] ?? DEFAULT_SUMMARY),
       amount: candidate.amount,
       request: pick.request as PlannedRequest,
       why,
       compared,
+      ...(candidate.own ? { own: true as const } : {}),
     },
   }
 }

@@ -25,6 +25,11 @@ export interface Candidate {
    */
   sealedBy: string | null
   /**
+   * True only for vet402's own seller, which the agent adds beside the catalog. A Discovery
+   * listing never has it, so nothing in the catalog can pass as vet402's own.
+   */
+  own?: boolean
+  /**
    * Lowercase text used ONLY to match a job to a listing. It comes from the
    * listing's own words, so it is never shown to the user.
    */

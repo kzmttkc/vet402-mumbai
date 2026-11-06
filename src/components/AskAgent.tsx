@@ -1,9 +1,15 @@
 import { readable } from '@/lib/readable'
 import { useEffect, useRef, useState } from 'react'
-import { Check, ExternalLink, Loader2, Sparkles } from 'lucide-react'
-import { PlanWhy } from '@/components/PlanWhy'
+import { Check, ExternalLink, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
+import { OWN_SELLER_MARK, PlanWhy } from '@/components/PlanWhy'
 import { approvePlan, arcTxUrl, askAgent, receiptLine, settlementOf } from '@/lib/askAgent'
-import type { AgentPlan, Compared, Paid } from '@/lib/askAgent'
+import type { AgentPlan as Plan, Compared, Paid as PaidReply } from '@/lib/askAgent'
+import { splitLines } from '@/lib/receiptLines'
+
+/** The card as the server sends it. A pick that seals has the protection line, and vet402's own seller says so. */
+type AgentPlan = Plan & { protection?: string; own?: boolean }
+/** A sealed answer's receipt has its own lines. Technical ones start with "Detail: ". */
+type Paid = PaidReply & { lines?: string[] }
 
 const MAX_JOB_CHARS = 500
 const EXAMPLES = ['Did my last payment go through?', 'Get me a paid access receipt', "What's the weather in Mumbai?"]
@@ -26,6 +32,48 @@ type State =
   | { step: 'asking'; plan: AgentPlan }
   | { step: 'paying'; plan: AgentPlan }
   | { step: 'done'; paid: Paid }
+
+/** The question on the card. A pick that seals, with a deposit that covers it, has the protection line under it. */
+export function SpendQuestion({ plan }: { plan: Pick<AgentPlan, 'amount' | 'protection'> }) {
+  return (
+    <>
+      <p className="display text-xl font-semibold text-balance">
+        May I spend up to <span className="tabular-nums">{plan.amount} USDC</span> on this job?
+      </p>
+      {plan.protection && (
+        <p className="flex items-start gap-2 text-sm text-pretty">
+          <ShieldCheck size={18} className="mt-0.5 shrink-0 text-[var(--success)]" aria-hidden />
+          <span>{plan.protection}</span>
+        </p>
+      )}
+    </>
+  )
+}
+
+/** A sealed answer's receipt: the plain lines first, the technical ones under Details. */
+export function SealedLines({ lines }: { lines?: string[] }) {
+  const { plain, details } = splitLines(lines ?? [])
+  if (!plain.length && !details.length) return null
+  return (
+    <div>
+      {plain.map((line) => (
+        <p key={line} className="text-sm font-semibold text-pretty">
+          {line}
+        </p>
+      ))}
+      {details.length > 0 && (
+        <details className="mt-2 text-xs text-[var(--muted)]">
+          <summary className="cursor-pointer select-none font-semibold">Details</summary>
+          {details.map((line) => (
+            <p key={line} className="mt-2 break-words">
+              {line}
+            </p>
+          ))}
+        </details>
+      )}
+    </div>
+  )
+}
 
 /** "Ask the agent": it picks a seller from the Arc catalog, asks before it spends, and shows a plain receipt. */
 export function AskAgent() {
@@ -161,15 +209,16 @@ export function AskAgent() {
           <div className="space-y-3 rounded-xl bg-white p-4">
             <div>
               <p className="text-lg font-semibold">{state.plan.sellerName}</p>
+              {state.plan.own && (
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">{OWN_SELLER_MARK}</p>
+              )}
               <p className="mt-1 text-sm text-pretty text-[var(--muted)]">{state.plan.summary}</p>
               {state.plan.delivery && <p className="mt-1 text-sm text-pretty">{state.plan.delivery}</p>}
             </div>
             <PlanWhy why={state.plan.why} compared={state.plan.compared} />
           </div>
 
-          <p className="display text-xl font-semibold text-balance">
-            May I spend up to <span className="tabular-nums">{state.plan.amount} USDC</span> on this job?
-          </p>
+          <SpendQuestion plan={state.plan} />
 
           {!state.plan.covered && (
             <p className="text-sm text-[var(--danger)]" role="alert">
@@ -203,6 +252,7 @@ export function AskAgent() {
               <p className="text-sm text-[var(--muted)]">
                 {state.paid.sellerName} · {receiptLine(state.paid.paid, settled.done)}
               </p>
+              <SealedLines lines={state.paid.lines} />
               {settled.done && arcTxUrl(settled.batchTx) && (
                 <a className={link} href={arcTxUrl(settled.batchTx) as string} target="_blank" rel="noreferrer">
                   View on Arc <ExternalLink size={14} aria-hidden />

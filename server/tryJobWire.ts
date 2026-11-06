@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto'
 import { GatewayClient } from '@circle-fin/x402-batching/client'
+import { BatchFacilitatorClient } from '@circle-fin/x402-batching/server'
 import type { Address, Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { ARC_CAIP2 } from '../src/existing/arc-gateway'
+import { ARC_CAIP2, ARC_GATEWAY_API } from '../src/existing/arc-gateway'
 import { createArkivReadWire, createScrubber, createSellerCheck } from './arkiv'
 import type { SellerCheck } from './arkiv'
 import { createJobPorts } from './jobPorts'
 import type { TransferInfo } from './jobs'
 import { TRANSFER_STATUSES } from './receiptStore'
 import type { TransferStatus } from './receiptStore'
-import { createSealedDelivery, parseSealedAddress } from './sealedDelivery'
+import { createPaymentCheck } from './paymentCheckSeller'
+import type { PaymentCheck } from './paymentCheckSeller'
+import { createSealedDelivery, createSealedPorts, parseSealedAddress } from './sealedDelivery'
 import { createTryJob, parseJobDailyLimit } from './tryJob'
 import type { TryJob, TryJobPorts } from './tryJob'
 
@@ -51,6 +54,32 @@ const toInfo = (t: { id: string; status: string; txHash?: unknown }): TransferIn
 export const planSecret = (holdKey: Hex) => createHash('sha256').update('vet402 try-job plan ids v1\n').update(holdKey).digest()
 
 /**
+ * vet402 Payment Check, from the dispute try's seller and buyer keys: the seller already has a deposit
+ * on SealedDelivery, and the buyer pays for gas. Null when either is missing, or when any two of the
+ * three wallets are the same, and the agent then ranks the catalog alone. The keys are never logged.
+ */
+export function paymentCheckFromEnv(
+  env: Env,
+  { sealedAddress, holdKey, holdAvailable }: { sealedAddress: Address; holdKey: Hex; holdAvailable: () => Promise<bigint> },
+): PaymentCheck | null {
+  const sellerKey = env.TRY_SELLER_KEY
+  const buyerKey = env.TRY_BUYER_KEY
+  if (!isKey(sellerKey) || !isKey(buyerKey)) return null
+  // The hold is never a seller, and the seller never pays for its own gas from the hold.
+  const addresses = [holdKey, sellerKey, buyerKey].map((key) => privateKeyToAccount(key).address)
+  if (new Set(addresses).size !== addresses.length) return null
+  const client = createSealedDelivery({ address: sealedAddress })
+  return createPaymentCheck({
+    client,
+    sealed: createSealedPorts({ client, holdKey, buyerKey, rejected: new Set() }),
+    sealedAddress,
+    keys: { hold: holdKey, seller: sellerKey, buyer: buyerKey },
+    facilitator: new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin }),
+    holdAvailable,
+  })
+}
+
+/**
  * The public agent, from environment variables only. Null when the key is missing, or when it is the
  * same wallet as the dispute try, and the page then says the agent is resting. The key is read here
  * and passed on, never logged.
@@ -70,8 +99,10 @@ export function tryJobFromEnv(env: Env = process.env): TryJob | null {
   const sealed = sealedAddress ? createSealedDelivery({ address: sealedAddress }) : null
 
   const sellerCheck = readOnlySellerCheck(env)
+  const ownSeller = sealedAddress ? paymentCheckFromEnv(env, { sealedAddress, holdKey, holdAvailable: () => jobPorts.holdAvailable() }) : null
   const ports: TryJobPorts = {
     ...(sellerCheck ? { sellerCheck } : {}),
+    ...(ownSeller ? { ownSeller } : {}),
     candidates: () => jobPorts.candidates(),
     latestReceipt: () => jobPorts.latestReceipt(),
     holdAvailable: () => jobPorts.holdAvailable(),
