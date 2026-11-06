@@ -25,7 +25,8 @@ export const SEALED_DELIVERY_ABI = [
   ...CLAIMED_EVENTS.slice(1),
   ...parseAbi([
     'function USDC() view returns (address)',
-    'function DISPUTE_COST() view returns (uint256)',
+    'function FOLLOW_UP_GAS() view returns (uint256)',
+    'function MAX_GAS_PRICE() view returns (uint256)',
     'function MAX_EXPIRY() view returns (uint256)',
     'function ANSWER_WINDOW() view returns (uint256)',
     'function COOLDOWN() view returns (uint256)',

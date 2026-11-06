@@ -38,7 +38,8 @@ const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   paymentDomainName: ARC_GATEWAY_DOMAIN_NAME,
   paymentDomainVersion: ARC_GATEWAY_DOMAIN_VERSION,
   paymentVerifyingContract: ARC_GATEWAY_WALLET,
-  disputeCost: 10_500n,
+  followUpGas: 230_000n,
+  maxGasPrice: 100_000_000_000n,
   paymentDomainSalt: `0x${'0'.repeat(64)}`,
 }
 
@@ -115,7 +116,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
   const address = deployed.contractAddress as Address
   const client = createSealedDelivery({ address, net })
   await pub.waitForTransactionReceipt({
-    hash: await deployer.writeContract({ address: USDC, abi: parseAbi(['function mint(address,uint256)']), functionName: 'mint', args: [addressOf(keys.buyer), 1_000_000n] }),
+    hash: await deployer.writeContract({ address: USDC, abi: parseAbi(['function mint(address,uint256)']), functionName: 'mint', args: [addressOf(keys.buyer), 5_000_000n] }),
   })
   await runSetup(client, keys.buyer, [{ name: 'Seller A', key: keys.seller }], (line) => console.log(`      setup: ${line}`))
 
