@@ -527,6 +527,99 @@ describe('the demo with a contract', () => {
     expect(receipts.list()[0]?.outcome).toEqual(["The answer did not match the seller's promise. Its deposit paid 0.001 USDC back."])
   })
 
+  // The final contract repays the buyer's gas. Each ending says so on the receipt, in the amounts Arc reported.
+  test('answer ending: the claim gas the answer repaid is on the receipt, word for word', async () => {
+    const { demos, receipts } = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }) })
+    const finished = await run(demos, 'a')
+    expect(finished).toMatchObject({ state: 'done', action: null })
+    expect(receipts.list()[0]?.outcome).toEqual([
+      'Charged once. Key read from Arc.',
+      'Claim gas repaid by the seller: 0.005698 USDC.',
+      'Circle record: 1 transfer for this payment.',
+    ])
+  })
+
+  test('answer ending: a repayment whose transfer failed is named as a credit on Arc', async () => {
+    const { demos, receipts } = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: false }) })
+    await run(demos, 'a')
+    expect(receipts.list()[0]?.outcome).toEqual([
+      'Charged once. Key read from Arc.',
+      'Claim gas repaid by the seller as a credit on Arc: 0.005698 USDC.',
+      'Circle record: 1 transfer for this payment.',
+    ])
+  })
+
+  test('answer ending: no ClaimGasRepaid, or a read that keeps failing, adds no line and the run still ends', async () => {
+    let reads = 0
+    for (const claimGasRepaid of [() => Promise.resolve(null), () => (reads++, Promise.reject(new Error('rpc down')))]) {
+      const { demos, receipts } = setup({ claimGasRepaid })
+      expect((await run(demos, 'a')).state).toBe('done')
+      expect(receipts.list()[0]?.outcome).toEqual(['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
+    }
+    expect(reads).toBe(2)
+  })
+
+  test('silent ending (Seller E): the payout is named as the price and the gas of the dispute, word for word', async () => {
+    const { demos, receipts } = setup({
+      readKey: () => Promise.resolve(null),
+      chainTime: () => Promise.resolve(100n),
+      finalize: () => Promise.resolve(13268n),
+    })
+    const finished = await run(demos, 'e')
+    await demos.act(finished.id, 'finalize')
+    expect(receipts.list()[0]?.outcome).toEqual([
+      'The seller stayed silent. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.',
+    ])
+  })
+
+  test('silent ending (Seller D): the wrong key, then the price and the gas of the dispute, word for word', async () => {
+    const { demos, receipts } = setup({
+      readKey: () => Promise.resolve(null),
+      chainTime: () => Promise.resolve(100n),
+      wrongKeyRejected: () => true,
+      finalize: () => Promise.resolve(13268n),
+    })
+    const finished = await run(demos, 'd')
+    await demos.act(finished.id, 'finalize')
+    expect(receipts.list()[0]?.outcome).toEqual([
+      'Wrong key rejected by the contract.',
+      'The seller stayed silent. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.',
+    ])
+  })
+
+  test('fraud ending (Seller F): the claim gas its answer repaid, then the price and the gas of the dispute, word for word', async () => {
+    const lied = sealResponse('something else')
+    const swapped: SealedBox = {
+      ...box,
+      ciphertext: lied.ciphertext,
+      promise: { ...box.promise, keyHash: lied.keyHash, ciphertextHash: lied.ciphertextHash },
+    }
+    const { demos, receipts } = setup({
+      readBox: () => Promise.resolve({ kind: 'box', box: swapped }),
+      readKey: () => Promise.resolve({ key: lied.key, block: 8n }),
+      claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }),
+      prove: () => Promise.resolve(13268n),
+    })
+    const finished = await run(demos, 'f')
+    expect(receipts.list()[0]?.outcome).toEqual(['Claim gas repaid by the seller: 0.005698 USDC.'])
+    await demos.act(finished.id, 'prove')
+    expect(receipts.list()[0]?.outcome).toEqual([
+      'Claim gas repaid by the seller: 0.005698 USDC.',
+      "The answer did not match the seller's promise. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.",
+    ])
+  })
+
+  test('a payout of the price or less names no gas', async () => {
+    const { demos, receipts } = setup({
+      readKey: () => Promise.resolve(null),
+      chainTime: () => Promise.resolve(100n),
+      finalize: () => Promise.resolve(700n),
+    })
+    const finished = await run(demos, 'e')
+    await demos.act(finished.id, 'finalize')
+    expect(receipts.list()[0]?.outcome).toEqual(['The seller stayed silent. Its deposit paid 0.0007 USDC back.'])
+  })
+
   test('a button that does not apply is refused', async () => {
     const { demos } = setup()
     const finished = await run(demos, 'a')

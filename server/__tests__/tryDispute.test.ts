@@ -128,6 +128,16 @@ async function runTry(tries: ReturnType<typeof setup>['tries'], ip = '1.1.1.1') 
 const resultOf = (events: TryEvent[]) => events.find((e) => e.type === 'result')
 
 describe('try a dispute yourself', () => {
+  test('success on the final contract: the claim gas the answer repaid is among the receipt lines', async () => {
+    const { tries } = setup({ sealed: { claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }) } })
+    const result = resultOf((await runTry(tries)).events)
+    expect(result?.type === 'result' && result.ok ? result.lines : null).toEqual([
+      'Charged once. Key read from Arc.',
+      'Claim gas repaid by the seller: 0.005698 USDC.',
+      'Circle record: 1 transfer for this payment.',
+    ])
+  })
+
   test('success: every step streams, then the receipt lines, both transactions and the box', async () => {
     const { tries, log } = setup()
     const { code, events } = await runTry(tries)

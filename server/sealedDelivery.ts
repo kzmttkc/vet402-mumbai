@@ -276,6 +276,22 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
       return log?.args.key ? { key: log.args.key, block: log.blockNumber, transactionHash: log.transactionHash } : null
     },
 
+    /**
+     * What the answer repaid the buyer for its claim gas, read from the answer's ClaimGasRepaid. Null when there is
+     * none, which is also what a contract without that event gives.
+     */
+    async readClaimGasRepaid(claimId: Hex, fromBlock: bigint): Promise<{ amount: bigint; sent: boolean } | null> {
+      const logs = await publicClient.getContractEvents({
+        address,
+        abi: SEALED_ABI,
+        eventName: 'ClaimGasRepaid',
+        args: { claimId },
+        fromBlock,
+      })
+      const args = logs[0]?.args
+      return args?.amount !== undefined && args.sent !== undefined ? { amount: args.amount, sent: args.sent } : null
+    },
+
     /** Every claim on this contract in the block range. */
     async claimLogs(fromBlock: bigint, toBlock?: bigint) {
       const logs = await publicClient.getLogs({ address, events: CLAIMED_EVENTS, fromBlock, toBlock })
@@ -630,6 +646,8 @@ export interface SealedPorts {
   claim(box: SealedBox, payment: PreparedPayment): Promise<{ claimId: Hex; deadline: bigint; fromBlock: bigint; transactionHash?: Hex }>
   /** The transaction is there for a link to the explorer. Nothing decides on it. */
   readKey(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint; transactionHash?: Hex } | null>
+  /** What the answer repaid the buyer for its claim gas. Null when the answer repaid nothing. Optional, so a fake may leave it out. */
+  claimGasRepaid?(claimId: Hex, fromBlock: bigint): Promise<{ amount: bigint; sent: boolean } | null>
   chainTime(): Promise<bigint>
   /** True once this seller's wrong key was refused by the contract. */
   wrongKeyRejected(claimId: Hex): boolean
@@ -704,6 +722,7 @@ export function createSealedPorts({
     },
 
     readKey: (claimId, fromBlock) => client.readKeyRevealed(claimId, fromBlock),
+    claimGasRepaid: (claimId, fromBlock) => client.readClaimGasRepaid(claimId, fromBlock),
     chainTime: () => client.chainTime(),
     wrongKeyRejected: (claimId) => rejected.has(claimId),
 

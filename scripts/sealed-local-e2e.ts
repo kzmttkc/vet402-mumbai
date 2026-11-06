@@ -324,7 +324,6 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     console.log(`      A: ${stepsLine(a.run)}`)
     check('A key from the chain', 'state', a.run.state, 'done')
     check('A key from the chain', 'steps', names(a.run), ['hold', 'payment', 'waiting', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
-    check('A key from the chain', 'receipt', a.row?.outcome, ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
     check('A key from the chain', 'received once', a.row?.timesReceived, 1)
     check('A key from the chain', 'settled once', settleCalls.count - before, 1)
     check('A key from the chain', 'nothing to press', a.run.action, null)
@@ -332,6 +331,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     check('A key from the chain', 'the buyer added gas to the hold', holdTopUp > 0n, true)
     const aClaimId = a.row?.sealed?.claimId as Hex
     const aRefund = await client.gasRefundOf(aClaimId)
+    check('A key from the chain', 'receipt', a.row?.outcome, ['Charged once. Key read from Arc.', `Claim gas repaid by the seller: ${formatUsdc(aRefund)} USDC.`, 'Circle record: 1 transfer for this payment.'])
     check('A key from the chain', 'the deposit paid the claim gas and nothing else', await client.deposits(addressOf(keys.a)), SELLER_DEPOSIT - aRefund)
     const aRepaid = await pub.getContractEvents({ address, abi: SEALED_ABI, eventName: 'ClaimGasRepaid', args: { claimId: aClaimId }, fromBlock: 0n })
     check('A key from the chain', 'the answer sent the claim gas to the buyer', aRepaid.map((l) => [l.args.buyer, l.args.amount, l.args.sent]), [[hold, aRefund, true]])
@@ -357,7 +357,8 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const box = await runScene(demos, 'a')
     console.log(`      A box lost: ${stepsLine(box.run)}`)
     check('A box lost, then key', 'steps', names(box.run), ['hold', 'payment', 'waiting', 'connection dropped', 'fetching again', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered'])
-    check('A box lost, then key', 'receipt', box.row?.outcome, ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
+    const boxRefund = await client.gasRefundOf(box.row?.sealed?.claimId as Hex)
+    check('A box lost, then key', 'receipt', box.row?.outcome, ['Charged once. Key read from Arc.', `Claim gas repaid by the seller: ${formatUsdc(boxRefund)} USDC.`, 'Circle record: 1 transfer for this payment.'])
     check('A box lost, then key', 'settled once', settleCalls.count - beforeBox, 1)
 
     // Seller A with the switch off: the key comes on its own request and nothing touches the chain.
@@ -398,7 +399,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       const pressed = await demos.act(run.id, 'finalize')
       // The button already sent the burned half on, and the check below reads that.
       const after = receipts.list().find((r) => r.id === row?.id)
-      check(label, 'receipt', after?.outcome, [...first, `The seller stayed silent. Its deposit paid ${formatUsdc(owed)} USDC back.`])
+      check(label, 'receipt', after?.outcome, [...first, `The seller stayed silent. Its deposit paid ${formatUsdc(owed)} USDC back: the ${formatUsdc(DEMO_PRICE)} USDC price and ${formatUsdc(owed - DEMO_PRICE)} USDC for the gas of the dispute.`])
       check(label, 'the buyer is credited the price and its gas', (await client.claimable(hold)) - claimableBefore, owed)
       check(label, 'the same is burned', (await client.usdcBalance(DEAD)) - deadBefore, owed)
       check(label, 'the deposit pays twice that', depositBefore - (await client.deposits(addressOf(key))), 2n * owed)
@@ -430,7 +431,10 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const fFrom = await client.latestBlock()
     const proved = await demos.act(f.run.id, 'prove')
     const fRow = receipts.list().find((r) => r.id === f.row?.id)
-    check('F swapped answer', 'receipt', fRow?.outcome, [`The answer did not match the seller's promise. Its deposit paid ${formatUsdc(fOwed)} USDC back.`])
+    check('F swapped answer', 'receipt', fRow?.outcome, [
+      `Claim gas repaid by the seller: ${formatUsdc(fRefund)} USDC.`,
+      `The answer did not match the seller's promise. Its deposit paid ${formatUsdc(fOwed)} USDC back: the ${formatUsdc(DEMO_PRICE)} USDC price and ${formatUsdc(fOwed - DEMO_PRICE)} USDC for the gas of the dispute.`,
+    ])
     check('F swapped answer', 'FRAUD on the contract', await pub.readContract({ address, abi: SEALED_ABI, functionName: 'fraudCount', args: [addressOf(keys.f)] }), 1n)
     check('F swapped answer', 'the deposit pays the claim gas, then twice the credit', fDeposit - (await client.deposits(addressOf(keys.f))), fRefund + 2n * fOwed)
     check('F swapped answer', 'the buyer is credited the price and its gas', await client.claimable(hold), fOwed)

@@ -35,9 +35,22 @@ export type DemoAction = 'finalize' | 'prove' | 'withdraw'
 /** Only a sealed answer whose key opened it to the seller's promise gets this line. server/arkiv.ts relies on that. */
 export const KEY_FROM_CHAIN = 'Charged once. Key read from Arc.'
 const WRONG_KEY_REJECTED = 'Wrong key rejected by the contract.'
-const silentLine = (amount: string) => `The seller stayed silent. Its deposit paid ${amount} back.`
-const fraudLine = (amount: string) => `The answer did not match the seller's promise. Its deposit paid ${amount} back.`
 const usdcAmount = (amount: bigint) => `${formatUsdc(amount)} USDC`
+/**
+ * A verdict pays the buyer the price and the dispute's gas. Past the price, the rest is named as gas, and only then:
+ * a payout of the price or less is said as a bare amount.
+ */
+const paidBack = (paid: bigint, price: bigint) =>
+  paid > price
+    ? `Its deposit paid ${usdcAmount(paid)} back: the ${usdcAmount(price)} price and ${usdcAmount(paid - price)} for the gas of the dispute.`
+    : `Its deposit paid ${usdcAmount(paid)} back.`
+const silentLine = (paid: bigint, price: bigint) => `The seller stayed silent. ${paidBack(paid, price)}`
+const fraudLine = (paid: bigint, price: bigint) => `The answer did not match the seller's promise. ${paidBack(paid, price)}`
+/** From the answer's ClaimGasRepaid. A transfer that failed stays on Arc as the buyer's credit. */
+const claimGasLine = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
+  sent
+    ? `Claim gas repaid by the seller: ${usdcAmount(amount)}.`
+    : `Claim gas repaid by the seller as a credit on Arc: ${usdcAmount(amount)}.`
 
 export interface DemoStep {
   name: StepName
@@ -129,7 +142,7 @@ export function createDemoService(
   interface Run extends DemoRunView {
     startedAt: number
     /** What the buttons need. Never leaves this service. */
-    open?: { claimId: Hex; ciphertext: Hex; key?: Hex; rowId: string; lines: string[]; payTo: string; claimTx?: Hex }
+    open?: { claimId: Hex; ciphertext: Hex; key?: Hex; rowId: string; lines: string[]; payTo: string; price: bigint; claimTx?: Hex }
     acting?: boolean
   }
   const runs = new Map<string, Run>()
@@ -141,6 +154,7 @@ export function createDemoService(
   /** Who a ruling on this claim is about: the address that was paid, and the claim's transaction. */
   const ruledOn = (payment: PreparedPayment, claim: { transactionHash?: Hex }) => ({
     payTo: payment.accept.payTo,
+    price: payment.amount,
     ...(claim.transactionHash ? { claimTx: claim.transactionHash } : {}),
   })
 
@@ -248,6 +262,19 @@ export function createDemoService(
     }
   }
 
+  /** The answer's ClaimGasRepaid, read twice at most. A failed read gives no line rather than a guess. */
+  async function readClaimGasRepaid(sealed: SealedPorts, claim: { claimId: Hex; fromBlock: bigint }) {
+    if (!sealed.claimGasRepaid) return null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await sealed.claimGasRepaid(claim.claimId, claim.fromBlock)
+      } catch (error) {
+        console.error('claim gas read failed:', error instanceof Error ? error.message.split('\n')[0] : error)
+      }
+    }
+    return null
+  }
+
   /** A seller with a contract behind it: a sealed box, the key on a separate request, the chain if that fails. */
   async function sealedRun(run: Run, kind: 'a' | 'd' | 'e' | 'f', sealed: SealedPorts) {
     const seller = sellers[kind]
@@ -344,6 +371,9 @@ export function createDemoService(
     }
 
     mark(run, 'key on chain')
+    // The answer that put the key on Arc also repaid the claim's gas. The line is there only when Arc says so.
+    const repaid = await readClaimGasRepaid(sealed, claim)
+    const repaidLines = repaid && repaid.amount > 0n ? [claimGasLine(repaid)] : []
     const result = open(box, found.key)
     mark(run, 'opened')
     const record: SealedRecord = {
@@ -354,6 +384,7 @@ export function createDemoService(
     }
 
     if (!result?.matches) {
+      lines.push(...repaidLines)
       const rowId = addRow(seller, payment, {
         body: result?.text ?? '',
         received: 1,
@@ -371,7 +402,7 @@ export function createDemoService(
     const id = addRow(seller, payment, {
       body: result.text,
       received: 1,
-      outcome: [...lines, KEY_FROM_CHAIN],
+      outcome: [...lines, KEY_FROM_CHAIN, ...repaidLines],
       demo: kind,
       sealed: record,
     })
@@ -381,6 +412,7 @@ export function createDemoService(
       outcome: [
         ...lines,
         KEY_FROM_CHAIN,
+        ...repaidLines,
         confirmed ? 'Circle record: 1 transfer for this payment.' : 'Circle record: not confirmed yet.',
       ],
     })
@@ -519,7 +551,7 @@ export function createDemoService(
         } catch (error) {
           console.error('verdict write failed:', error instanceof Error ? error.message.split('\n')[0] : error)
         }
-        const line = paid > 0n ? (action === 'finalize' ? silentLine : fraudLine)(usdcAmount(paid)) : 'Nothing delivered. No second charge.'
+        const line = paid > 0n ? (action === 'finalize' ? silentLine : fraudLine)(paid, opened.price) : 'Nothing delivered. No second charge.'
         opened.lines.push(line)
         receipts.update(opened.rowId, { outcome: [...opened.lines] })
         run.action = paid > 0n ? 'withdraw' : null

@@ -14,6 +14,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
 import { ARC_GATEWAY_DOMAIN_NAME, ARC_GATEWAY_DOMAIN_VERSION, ARC_GATEWAY_WALLET, ARC_USDC } from '../src/existing/arc-gateway'
 import { MATCHES_PROMISE, openSealedAnswer } from '../src/lib/openSealed'
+import { formatUsdc } from '../src/onchain-money'
 import { preparePayment } from '../server/gatewayPay'
 import { createSealedDelivery } from '../server/sealedDelivery'
 import type { SealedNet } from '../server/sealedDelivery'
@@ -181,7 +182,8 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
   const result = events.find((e) => e.type === 'result')
   check('result ok', result?.type === 'result' && result.ok, true)
   if (result?.type !== 'result' || !result.ok) throw new Error(`The try did not finish: ${JSON.stringify(result)}`)
-  check('receipt lines', result.lines, ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'])
+  const repaid = await client.gasRefundOf(result.box.claimId as Hex)
+  check('receipt lines', result.lines, ['Charged once. Key read from Arc.', `Claim gas repaid by the seller: ${formatUsdc(repaid)} USDC.`, 'Circle record: 1 transfer for this payment.'])
   check('settled once', settled.size, 1)
 
   // The two links point at real transactions: the claim from the hold, the answer from the seller.
