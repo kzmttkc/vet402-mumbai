@@ -29,20 +29,39 @@ export const PAYMENT_CHECK_NAME = 'vet402 Payment Check'
 export const PAYMENT_CHECK_RESOURCE = 'https://vet402.invalid/sellers/payment-check'
 const DESCRIPTION = "Checks whether your agent's last payment went through, from Circle's record. Protected on Arc by SealedDelivery."
 
+// The receipt reads in plain words first. The lines that name the seal and the key go under Details.
 export const DELIVERED_SEALED = "Delivered sealed. Key checked against the seller's promise."
 export const DELIVERED_FROM_ARC = "Delivered sealed. The key came through Arc and matches the seller's promise."
 export const KEY_CHECKED = 'The key and the answer match the hashes the seller signed for this payment.'
-export const CLAIM_OPEN = "The key has not arrived yet. vet402 asked Arc to step in, and the seller's deposit pays you back if the key never comes."
+export const CLAIM_OPEN = "The answer has not arrived yet. vet402 asked Arc to step in, and the seller's deposit pays you back if it never comes."
 const NOT_SEALED = 'The answer arrived without a valid seal, so it stays closed.'
-const NO_KEY = 'The key has not arrived yet.'
+const NO_KEY = 'The answer has not arrived yet.'
+
+/** The receipt's first line, from the amount actually paid. */
+export const answerChecked = (paid: bigint) => `Answer received and checked. You paid ${formatUsdc(paid)} USDC once.`
 
 /** How long the agent reads the chain for the key after a claim. The function itself may run 60 s. */
 export const KEY_WAIT_MS = 30_000
 
+/** What tells one of vet402's own sealed sellers apart. The wallet, the contract and the price are shared. */
+export interface OwnSellerSpec {
+  name: string
+  /** Never fetched: the agent buys it on 127.0.0.1, at this URL's path. */
+  resource: string
+  /** The listing's path, e.g. "/payment-check". */
+  path: string
+  /** The listing's words, which the agent ranks the same way as a catalog listing. */
+  description: string
+  /** The card's sentence. Absent leaves the planner's own. */
+  summary?: string
+}
+
+const PAYMENT_CHECK: OwnSellerSpec = { name: PAYMENT_CHECK_NAME, resource: PAYMENT_CHECK_RESOURCE, path: '/payment-check', description: DESCRIPTION }
+
 /** The listing as Discovery would carry it, with the contract it seals under in accepts[].extra. */
-export function paymentCheckListing(payTo: Address, sealedAddress: Address): Parameters<typeof toCandidate>[0] {
+export function ownListing(spec: OwnSellerSpec, payTo: Address, sealedAddress: Address): Parameters<typeof toCandidate>[0] {
   return {
-    resource: PAYMENT_CHECK_RESOURCE,
+    resource: spec.resource,
     type: 'http',
     accepts: [
       {
@@ -53,16 +72,20 @@ export function paymentCheckListing(payTo: Address, sealedAddress: Address): Par
         extra: { name: CIRCLE_BATCHING_NAME, sealedDelivery: sealedAddress },
       },
     ],
-    metadata: { provider: { name: PAYMENT_CHECK_NAME, description: DESCRIPTION }, path: '/payment-check', method: 'GET' },
+    metadata: { provider: { name: spec.name, description: spec.description }, path: spec.path, method: 'GET' },
   }
 }
 
 /** The candidate, read the same way as a catalog listing, and marked as vet402's own. */
-export function paymentCheckCandidate(payTo: Address, sealedAddress: Address): Candidate {
-  const candidate = toCandidate(paymentCheckListing(payTo, sealedAddress), ARC_CAIP2)
-  if (!candidate) throw new Error('vet402 Payment Check listing is not payable')
+export function ownCandidate(spec: OwnSellerSpec, payTo: Address, sealedAddress: Address): Candidate {
+  const candidate = toCandidate(ownListing(spec, payTo, sealedAddress), ARC_CAIP2)
+  if (!candidate) throw new Error(`${spec.name} listing is not payable`)
   return { ...candidate, own: true }
 }
+
+export const paymentCheckListing = (payTo: Address, sealedAddress: Address) => ownListing(PAYMENT_CHECK, payTo, sealedAddress)
+
+export const paymentCheckCandidate = (payTo: Address, sealedAddress: Address): Candidate => ownCandidate(PAYMENT_CHECK, payTo, sealedAddress)
 
 const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`
 
@@ -97,13 +120,13 @@ export async function lastPaymentFromCircle(payer: string, fetchImpl: typeof fet
   return describeLastPayment(transfers as Row[], skipTo)
 }
 
-/** What the agent gets from vet402 Payment Check: the payment as usual, the answer as text, and the receipt's lines. */
+/** What the agent gets from one of vet402's own sellers: the payment as usual, the answer as text, and the receipt's lines. */
 export interface OwnPurchase extends PayOutcome {
   data: string
   lines: string[]
 }
 
-export interface PaymentCheckOptions {
+export interface OwnSellerOptions {
   /** Signs the seller's promises and runs its lookout. */
   client: Pick<SealedClient, 'signPromise' | 'latestBlock' | 'readClaimed' | 'tryAnswer' | 'chainTime' | 'answer' | 'ensureGas'>
   /** The agent's side of the contract: the box check, the key request and the claim. */
@@ -113,14 +136,24 @@ export interface PaymentCheckOptions {
   keys: { hold: Hex; seller: Hex; buyer: Hex }
   facilitator: SellerFacilitator
   holdAvailable: () => Promise<bigint>
-  /** The answer for a payer. Defaults to Circle's record. */
-  lastPayment?: (payer: string) => Promise<string>
   /** True hands the key over the connection. Tests pass false to take the chain. */
   handsOverKey?: () => boolean
   watchMs?: number
   pollMs?: number
   keyWaitMs?: number
   log?: (message: string) => void
+}
+
+/** The payment an own seller answers for. It is verified and not yet settled when the answer is written. */
+export interface OwnPayment {
+  from: string
+  /** Atomic USDC units, as a decimal string. */
+  value: string
+}
+
+export interface PaymentCheckOptions extends OwnSellerOptions {
+  /** The answer for a payer. Defaults to Circle's record. */
+  lastPayment?: (payer: string) => Promise<string>
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message.split('\n')[0] : String(error))
@@ -152,38 +185,41 @@ function transactionOf(header: string | null): string {
   }
 }
 
-export function createPaymentCheck(options: PaymentCheckOptions) {
+/**
+ * One of vet402's own sealed sellers. It writes `answer` for the payer, seals it under SealedDelivery from the
+ * seller's wallet, and the agent buys it once from the hold. Payment Check and Balance Check differ only in `spec` and `answer`.
+ */
+export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: OwnPayment, seller: Address) => Promise<string>, options: OwnSellerOptions) {
   const { client, sealed, keys } = options
   const log = options.log ?? ((message: string) => console.error(message))
   const seller = privateKeyToAccount(keys.seller).address
-  const candidate = paymentCheckCandidate(seller, options.sealedAddress)
-  const lastPayment = options.lastPayment ?? ((payer: string) => lastPaymentFromCircle(payer, fetch, seller))
+  const candidate = ownCandidate(spec, seller, options.sealedAddress)
   const sealer = createSealer(client, keys.seller)
+  const path = new URL(spec.resource).pathname
 
   /** The seller and its lookout, on 127.0.0.1, for one purchase. */
   async function openSeller() {
     const handler = createSeller({
-      name: PAYMENT_CHECK_NAME,
+      name: spec.name,
       payTo: seller,
       declaresRecovery: false,
       facilitator: options.facilitator,
       confirmCharged: () => Promise.resolve(false),
       dropAfterSettle: () => false,
       sealing: {
-        // The seller writes its own answer from Circle's record, then seals it. A failed read leaves the buyer uncharged.
-        seal: async (_answer, payment) =>
-          sealer(JSON.stringify({ seller: PAYMENT_CHECK_NAME, answer: await lastPayment(payment.from) }), payment),
+        // The seller writes its own answer from Circle, then seals it. A failed read leaves the buyer uncharged.
+        seal: async (_answer, payment) => sealer(JSON.stringify({ seller: spec.name, answer: await answer(payment, seller) }), payment),
         handsOverKey: options.handsOverKey ?? (() => true),
       },
     })
     const app = express()
     const route = (fn: (req: express.Request, res: express.Response) => Promise<void>) => (req: express.Request, res: express.Response) =>
       void fn(req, res).catch((error: unknown) => {
-        log(`payment check seller failed: ${messageOf(error)}`)
+        log(`${spec.name} seller failed: ${messageOf(error)}`)
         if (!res.headersSent) res.status(502).end()
       })
-    app.get('/sellers/payment-check', route(handler))
-    app.get('/sellers/payment-check/key', route(handler.key))
+    app.get(path, route(handler))
+    app.get(`${path}/key`, route(handler.key))
     const server = await new Promise<Server>((resolve, reject) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s))
       s.once('error', reject)
@@ -194,7 +230,7 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
     const stop = watcher.start(options.watchMs ?? 1000)
     const { port } = server.address() as AddressInfo
     return {
-      url: `http://127.0.0.1:${port}/sellers/payment-check`,
+      url: `http://127.0.0.1:${port}${path}`,
       async close() {
         stop()
         server.closeAllConnections()
@@ -224,7 +260,7 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
     const host = await openSeller()
     try {
       const challenge = await preparePayment({ holdKey: keys.hold, holdAvailable: options.holdAvailable }, { url: host.url, method: 'GET' }, cap)
-      if (challenge.kind !== 'priced') throw new Error('vet402 Payment Check answered without a price')
+      if (challenge.kind !== 'priced') throw new Error(`${spec.name} answered without a price`)
       const { payment } = challenge
       const paid = await payment.send()
       if (!paid.ok) throw new Error(`Payment failed with status ${paid.status}`)
@@ -239,16 +275,18 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
       // The key on its own request. When that works, nothing touches the chain.
       const offered = await sealed.requestKey(host.url, payment)
       const opened = offered ? openBox(box, offered) : null
-      if (opened?.matches) return { ...base, data: answerOf(opened.text), body: opened.text, lines: [DELIVERED_SEALED, detail(KEY_CHECKED)] }
+      if (opened?.matches) {
+        return { ...base, data: answerOf(opened.text), body: opened.text, lines: [answerChecked(payment.amount), detail(DELIVERED_SEALED), detail(KEY_CHECKED)] }
+      }
 
       if (!(await sealed.coverageFor(seller, payment.amount).catch(() => false))) return { ...base, data: NO_KEY, body: '', lines: [] }
       let claim: Awaited<ReturnType<SealedPorts['claim']>>
       try {
         // The seller answers a claim from its own wallet, so it gets what that costs first.
-        await client.ensureGas(keys.buyer, seller, ANSWER_GAS).catch((error: unknown) => log(`payment check seller gas failed: ${messageOf(error)}`))
+        await client.ensureGas(keys.buyer, seller, ANSWER_GAS).catch((error: unknown) => log(`${spec.name} seller gas failed: ${messageOf(error)}`))
         claim = await sealed.claim(box, payment)
       } catch (error) {
-        log(`payment check claim failed: ${messageOf(error)}`)
+        log(`${spec.name} claim failed: ${messageOf(error)}`)
         return { ...base, data: NO_KEY, body: '', lines: [] }
       }
       const key = await waitForKey(claim)
@@ -258,7 +296,7 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
           ...base,
           data: answerOf(fromChain.text),
           body: fromChain.text,
-          lines: [DELIVERED_FROM_ARC, detail(`Claim ${claim.claimId} answered on SealedDelivery. ${KEY_CHECKED}`)],
+          lines: [answerChecked(payment.amount), detail(DELIVERED_FROM_ARC), detail(`Claim ${claim.claimId} answered on SealedDelivery. ${KEY_CHECKED}`)],
         }
       }
       return { ...base, data: CLAIM_OPEN, body: '', lines: [detail(`Claim ${claim.claimId} is open on SealedDelivery ${options.sealedAddress}.`)] }
@@ -267,7 +305,18 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
     }
   }
 
-  return { candidate, buy }
+  return { candidate, ...(spec.summary ? { summary: spec.summary } : {}), buy }
 }
 
-export type PaymentCheck = ReturnType<typeof createPaymentCheck>
+export type OwnSealedSeller = ReturnType<typeof createOwnSealedSeller>
+
+export function createPaymentCheck(options: PaymentCheckOptions): OwnSealedSeller {
+  const { lastPayment } = options
+  return createOwnSealedSeller(
+    PAYMENT_CHECK,
+    (payment, seller) => (lastPayment ? lastPayment(payment.from) : lastPaymentFromCircle(payment.from, fetch, seller)),
+    options,
+  )
+}
+
+export type PaymentCheck = OwnSealedSeller

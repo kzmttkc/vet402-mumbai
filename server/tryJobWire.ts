@@ -10,8 +10,9 @@ import { createJobPorts } from './jobPorts'
 import type { TransferInfo } from './jobs'
 import { TRANSFER_STATUSES } from './receiptStore'
 import type { TransferStatus } from './receiptStore'
+import { createBalanceCheck } from './balanceCheckSeller'
 import { createPaymentCheck } from './paymentCheckSeller'
-import type { PaymentCheck } from './paymentCheckSeller'
+import type { OwnSealedSeller, OwnSellerOptions, PaymentCheck } from './paymentCheckSeller'
 import { createSealedDelivery, createSealedPorts, parseSealedAddress } from './sealedDelivery'
 import { createTryJob, parseJobDailyLimit } from './tryJob'
 import type { TryJob, TryJobPorts } from './tryJob'
@@ -53,15 +54,14 @@ const toInfo = (t: { id: string; status: string; txHash?: unknown }): TransferIn
 /** The key that signs plan ids. Taken from the wallet key, so there is no second secret to manage. */
 export const planSecret = (holdKey: Hex) => createHash('sha256').update('vet402 try-job plan ids v1\n').update(holdKey).digest()
 
+type OwnSellerEnv = { sealedAddress: Address; holdKey: Hex; holdAvailable: () => Promise<bigint> }
+
 /**
- * vet402 Payment Check, from the dispute try's seller and buyer keys: the seller already has a deposit
+ * What vet402's own sellers share, from the dispute try's seller and buyer keys: the seller already has a deposit
  * on SealedDelivery, and the buyer pays for gas. Null when either is missing, or when any two of the
  * three wallets are the same, and the agent then ranks the catalog alone. The keys are never logged.
  */
-export function paymentCheckFromEnv(
-  env: Env,
-  { sealedAddress, holdKey, holdAvailable }: { sealedAddress: Address; holdKey: Hex; holdAvailable: () => Promise<bigint> },
-): PaymentCheck | null {
+function ownSellerOptions(env: Env, { sealedAddress, holdKey, holdAvailable }: OwnSellerEnv): OwnSellerOptions | null {
   const sellerKey = env.TRY_SELLER_KEY
   const buyerKey = env.TRY_BUYER_KEY
   if (!isKey(sellerKey) || !isKey(buyerKey)) return null
@@ -69,14 +69,26 @@ export function paymentCheckFromEnv(
   const addresses = [holdKey, sellerKey, buyerKey].map((key) => privateKeyToAccount(key).address)
   if (new Set(addresses).size !== addresses.length) return null
   const client = createSealedDelivery({ address: sealedAddress })
-  return createPaymentCheck({
+  return {
     client,
     sealed: createSealedPorts({ client, holdKey, buyerKey, rejected: new Set() }),
     sealedAddress,
     keys: { hold: holdKey, seller: sellerKey, buyer: buyerKey },
     facilitator: new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin }),
     holdAvailable,
-  })
+  }
+}
+
+/** vet402 Payment Check, or null under the same conditions as ownSellerOptions. */
+export function paymentCheckFromEnv(env: Env, wiring: OwnSellerEnv): PaymentCheck | null {
+  const options = ownSellerOptions(env, wiring)
+  return options ? createPaymentCheck(options) : null
+}
+
+/** vet402 Balance Check, from the same wallets and contract as Payment Check, or null under the same conditions. */
+export function balanceCheckFromEnv(env: Env, wiring: OwnSellerEnv): OwnSealedSeller | null {
+  const options = ownSellerOptions(env, wiring)
+  return options ? createBalanceCheck(options) : null
 }
 
 /**
@@ -99,10 +111,11 @@ export function tryJobFromEnv(env: Env = process.env): TryJob | null {
   const sealed = sealedAddress ? createSealedDelivery({ address: sealedAddress }) : null
 
   const sellerCheck = readOnlySellerCheck(env)
-  const ownSeller = sealedAddress ? paymentCheckFromEnv(env, { sealedAddress, holdKey, holdAvailable: () => jobPorts.holdAvailable() }) : null
+  const wiring = sealedAddress ? { sealedAddress, holdKey, holdAvailable: () => jobPorts.holdAvailable() } : null
+  const ownSellers = wiring ? [paymentCheckFromEnv(env, wiring), balanceCheckFromEnv(env, wiring)].filter((o) => o !== null) : []
   const ports: TryJobPorts = {
     ...(sellerCheck ? { sellerCheck } : {}),
-    ...(ownSeller ? { ownSeller } : {}),
+    ...(ownSellers.length ? { ownSellers } : {}),
     candidates: () => jobPorts.candidates(),
     latestReceipt: () => jobPorts.latestReceipt(),
     holdAvailable: () => jobPorts.holdAvailable(),

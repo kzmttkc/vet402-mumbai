@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SealedLines, SpendQuestion } from '../../src/components/AskAgent'
 import { OWN_SELLER_MARK, PlanWhy } from '../../src/components/PlanWhy'
-import { DELIVERED_SEALED, KEY_CHECKED, PAYMENT_CHECK_NAME } from '../paymentCheckSeller'
-import { PROTECTED_LINE } from '../tryJob'
+import { answerChecked, DELIVERED_SEALED, KEY_CHECKED, PAYMENT_CHECK_NAME } from '../paymentCheckSeller'
+import { DEMO_PRICE } from '../sellers'
+import { limitLine, PROTECTED_LINE, TRY_JOB_LIMIT } from '../tryJob'
 
 // What "Ask the agent" shows for vet402 Payment Check: the mark on the card, the protection line, and the sealed receipt.
 
@@ -16,6 +17,25 @@ describe('the screen for vet402 Payment Check', () => {
     const plain = renderToStaticMarkup(<SpendQuestion plan={{ amount: '0.0001' }} />)
     expect(plain).toContain('0.0001 USDC')
     expect(plain).not.toContain('Protected on Arc')
+  })
+
+  test('the limit line sits under the question, before the protection line', () => {
+    const line = limitLine(TRY_JOB_LIMIT)
+    const html = renderToStaticMarkup(<SpendQuestion plan={{ amount: '0.001', protection: PROTECTED_LINE, limitLine: line }} />)
+    expect(html).toContain('Each job can spend at most 0.01 USDC.')
+    expect(html.indexOf('on this job?')).toBeLessThan(html.indexOf('Each job can spend'))
+    expect(html.indexOf('Each job can spend')).toBeLessThan(html.indexOf('Protected on Arc'))
+    expect(renderToStaticMarkup(<SpendQuestion plan={{ amount: '0.001' }} />)).not.toContain('Each job can spend')
+  })
+
+  test('the receipt says the answer was checked and what was paid, and the seal and the key are under Details', () => {
+    const html = renderToStaticMarkup(
+      <SealedLines lines={[answerChecked(DEMO_PRICE), `Detail: ${DELIVERED_SEALED}`, `Detail: ${KEY_CHECKED}`]} />,
+    )
+    const [body, details] = html.split('<details')
+    expect(body).toContain('Answer received and checked. You paid 0.001 USDC once.')
+    expect(body).not.toMatch(/key|seal/i)
+    expect(details).toContain('Delivered sealed. Key checked against the seller&#x27;s promise.')
   })
 
   test('the compared list marks vet402 own seller, and only it', () => {

@@ -288,8 +288,11 @@ export function listingLabel(candidate: Candidate): string {
     .slice(0, 32)
 }
 
+/** Scores closer than this are the same score apart from rounding, so the cheaper listing goes first, whatever else is in the pool. */
+const SCORE_TIE = 1e-9
+
 const byScore = (a: Ranked, b: Ranked) =>
-  b.score - a.score ||
+  (Math.abs(b.score - a.score) > SCORE_TIE ? b.score - a.score : 0) ||
   (a.candidate.amount < b.candidate.amount ? -1 : a.candidate.amount > b.candidate.amount ? 1 : 0) ||
   a.candidate.resource.localeCompare(b.candidate.resource)
 
