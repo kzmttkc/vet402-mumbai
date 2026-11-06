@@ -1,6 +1,6 @@
 # Reach
 
-- **The vet402 app in this repo** reads Arc's rulings on Arkiv before every payment, and the public agent runs the same check. vet402's production buyer, ERC-8004 agent 9907, takes the same check next (steps below).
+- **The vet402 app in this repo** reads Arc's rulings on Arkiv before every payment, and the public agent runs the same check. vet402's production buyer, ERC-8004 agent 9907, runs the same check since 2026-11-06 16:22 UTC: commit [47ed7c7](https://github.com/kzmttkc/vet402/commit/47ed7c7c2b6503c8f10f12f99d04a5567e615d9d) in kzmttkc/vet402 reads vet402's Arc-confirmed rulings before every payment and skips a ruled payTo before it signs. A dry run with no transfer at 15:00 UTC stopped Seller F's address 3 times out of 3 and let an address with no ruling through 3 times out of 3.
 - **Two third-party sellers from Circle's Discovery catalog**, Quicknode and BotPay, have vet402's payments to them on Arkiv: 4 and 1.
 - **88 payment entities and 6 rulings** were on Arkiv on 2026-11-06 at 10:56 UTC, counted page by page in [the table below](#counted-from-arkiv).
 
@@ -73,7 +73,7 @@ Each dispute now lands on Arkiv as one transaction. The receipt of Seller A's di
 The writer keeps running on Rabdi. These are the steps, each with the check that shows it is done.
 
 1. **Keep the judged receipts readable.** The first receipts expire around 2026-12-05. Before then I extend the entities that README.md and swarm.md link to, with `extendEntity`. Done when the README's receipt query shows the later `expiresAt`.
-2. **Read the rulings before every production payment.** vet402's production buyer, which paid through Gateway on Arc mainnet on 2026-09-28, calls `isRuledAgainst(accept.payTo, { writer })` from `packages/sealed-delivery` before it signs, and skips a seller that reads true. Done when a test payment to Seller F's address `0x1401bd7c7fab3fe8a429672fc1c5371456c8445d` stops before any signature, and one to an address with no ruling goes through.
+2. **Read the rulings before every production payment. Done on 2026-11-06.** Commit [47ed7c7](https://github.com/kzmttkc/vet402/commit/47ed7c7c2b6503c8f10f12f99d04a5567e615d9d) (16:22 UTC, on vet402's production deploy at 16:30 UTC) puts `checkArkivRuling` in `src/lib/observatory/l1-runner.ts` before the budget and the signature. It skips a payTo that vet402's writer recorded as Silent or Fraud in the last 7 days and that SealedDelivery's own events confirm on Arc, and pays as before when Arkiv or Arc cannot be read. A dry run with no transfer at 15:00 UTC stopped Seller F's address 3 times out of 3 and let an address with no ruling through 3 times out of 3.
 3. **Write every production payment with its payTo.** The production buyer writes its payment, settlement, seller and ruling entities through `server/arkiv.ts`, so each carries `pay_to`. Done when the paged count above, run over the production writer's address, shows `pay_to` on every payment entity created after the switch.
 4. **Move to an Arkiv mainnet** when `@arkiv-network/sdk` ships a mainnet chain next to `rabdi`. The chain is named in three places: `server/arkiv.ts`, `src/arkiv/readArkiv.ts` and `scripts/arkiv-live.ts`. Done when `scripts/arkiv-live.ts` passes every step against the new chain, and README.md names the new writer address and RPC URL. Rabdi receipts stay where they are until they expire.
 
