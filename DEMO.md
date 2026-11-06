@@ -210,22 +210,11 @@ These changes came after the production runs above, and the backend tests cover 
 
 The hold asks one thing: is the owner there and releasing the money. It does not ask who the owner is or whether the owner is unique. A budget belongs to a single owner, and the session ties each hold to the person who set it. A Sybil score adds nothing to one owner's budget.
 
-### Time to first success
+### Time to first success, friction and the one improvement
 
-About 25 minutes, from handing over the instruction to "Budget set." on staging, 2026-11-05 16:05 to 16:29 UTC.
+The full debrief, with the step, what came back and the date of each item, is in [docs/world-feedback.md](docs/world-feedback.md).
 
-### Friction
-
-- The Simulator's Cancel does not reach the app, so I put Cancel request in the app.
-- Pasting the request URL opens the confirmation screen without a press on Continue. One extra press closes it, and the request is used up.
-- The Continue button on the confirmation screen is cut off at the bottom.
-- The app's tab has to stay in front during the approval. In a background tab the screen does not move on (seen on 2026-11-04).
-- A hold past what the budget has left fails on purpose and reads "Not approved: this is more than the budget has left." Every approved hold counts toward the budget. That is this app's rule, and a tester should expect it.
-
-### Missing capability or documentation
-
-Selfie Check returned `credential_unavailable` on staging for both request and createSession (2026-10-28 UTC). Only `proof_of_human` passes there. The Simulator's screen reads "Unique device" while the returned identifier is `proof_of_human`.
-
-### The one improvement with the greatest impact
-
-Send the Simulator's Cancel back to the app.
+- **Time to first success:** about 25 minutes, from handing over the instruction to "Budget set." on staging, 2026-11-05 16:05 to 16:29 UTC.
+- **Friction:** the Simulator's Cancel does not reach the app, so the app has its own Cancel request. Pasting the request URL opens the confirmation screen without a press on Continue, and one more press closes it and uses up the request. Signing in to the Developer Portal with World App opened an empty "Anonymous user" team, and "Verification" in its menu is the World App listing, not World ID.
+- **Missing capability or documentation:** Selfie Check returned `credential_unavailable` on staging (2026-10-28 UTC), and the IDKit README shows no signal on a session proof.
+- **The one improvement with the greatest impact:** send the Simulator's Cancel back to the app.
