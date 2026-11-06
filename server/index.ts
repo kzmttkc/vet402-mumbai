@@ -100,6 +100,8 @@ const arkivSink = arkiv
       log: arkivLog,
       scrub: arkivScrub,
       payToOf,
+      // The hold files every claim, so the record of each box passes to it, as on the public try.
+      evidenceOwner: privateKeyToAccount(keys.hold).address,
     })
   : null
 const receiptStore = arkivSink?.store ?? localReceipts
