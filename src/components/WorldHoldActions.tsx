@@ -12,6 +12,16 @@ const ghostButton =
 
 const COPIED_MS = 1500
 
+/** A hold above the line also asks for a selfie check. The backend decides. This only says so before the QR code. */
+export function asksForSelfie(amount: string | null, above: string | null): boolean {
+  if (!amount || above === null) return false
+  try {
+    return parseUsdc(amount) > parseUsdc(above)
+  } catch {
+    return false
+  }
+}
+
 /** A hold the budget cannot cover asks for a new budget first, with its own approval. */
 function fitsBudget(amount: string | null, left: string | null): boolean {
   if (!amount || left === null) return false
@@ -40,6 +50,8 @@ export function WorldHoldActions({
   // Every sentence about a request comes from the backend. A closed request reads as a refusal.
   const refused = request?.state === 'closed'
   const holdNext = world.budgetSet && fitsBudget(amount, world.budgetLeft)
+  // While waiting, the request itself says whether it asked for a selfie check. Before that, the amount does.
+  const selfie = waiting ? request?.kind === 'hold' && request.selfie === true : holdNext && asksForSelfie(amount, world.selfieAbove)
 
   async function copy() {
     await world.copy()
@@ -56,6 +68,12 @@ export function WorldHoldActions({
           aria-live="polite"
         >
           {request.message}
+        </p>
+      )}
+
+      {selfie && world.selfieAbove !== null && (
+        <p className="text-sm text-pretty text-[var(--muted)]">
+          This hold is above {world.selfieAbove} USDC, so World App will also ask for a selfie check.
         </p>
       )}
 
