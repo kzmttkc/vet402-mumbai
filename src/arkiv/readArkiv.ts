@@ -1,41 +1,78 @@
 import { createPublicClient } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
-import { eq } from '@arkiv-network/sdk/query'
+import { asc, eq } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
 import type { RawRead } from './receiptsFeed'
-import { EvidenceSchema, ReceiptSchema, SellerSchema } from './schema'
+import { PAGE_SIZE, readAllPages } from './pages'
+import { EvidenceSchema, ReceiptSchema, SellerSchema, VerdictSchema } from './schema'
 
-/** Reads the public endpoint with the writer filter. No key is involved. */
+const RECEIPT_FIELDS = {
+  $key: true,
+  $expiresAt: true,
+  kind: true,
+  seller: true,
+  amount_micro: true,
+  gateway_transfer_id: true,
+  response_hash: true,
+  response_bytes: true,
+  times_received: true,
+  batch_tx: true,
+  payment_key: true,
+  pay_to: true,
+} as const
+
+/**
+ * Reads the public endpoint with the writer filter. No key is involved. Payments and settlements are
+ * separate queries on the indexed `kind`, and each one is read to its last page.
+ */
 export function createArkivReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0 })) {
   const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
 
-  return async function read(): Promise<RawRead> {
-    const [receipts, sellers, timing] = await Promise.all([
+  const receipts = (kind: 'payment' | 'settlement') =>
+    readAllPages((offset) =>
       client
-        .select({
-          $key: true,
-          $expiresAt: true,
-          kind: true,
-          seller: true,
-          amount_micro: true,
-          gateway_transfer_id: true,
-          response_hash: true,
-          response_bytes: true,
-          times_received: true,
-          batch_tx: true,
-          payment_key: true,
-        })
+        .select(RECEIPT_FIELDS)
         .from(ReceiptSchema)
+        .where(eq('kind', kind))
         .ownedBy(writer)
-        .limit(100)
+        .orderBy(asc('$key'))
+        .limit(PAGE_SIZE)
+        .offset(offset)
         .fetch(),
-      client.select({ $key: true, $expiresAt: true, seller: true }).from(SellerSchema).ownedBy(writer).limit(100).fetch(),
+    )
+
+  return async function read(): Promise<RawRead> {
+    const [payments, settlements, sellers, verdicts, timing] = await Promise.all([
+      receipts('payment'),
+      receipts('settlement'),
+      readAllPages((offset) =>
+        client
+          .select({ $key: true, $expiresAt: true, seller: true, pay_to: true })
+          .from(SellerSchema)
+          .where(eq('kind', 'seller'))
+          .ownedBy(writer)
+          .orderBy(asc('$key'))
+          .limit(PAGE_SIZE)
+          .offset(offset)
+          .fetch(),
+      ),
+      readAllPages((offset) =>
+        client
+          .select({ $key: true, $createdAt: true, seller: true, verdict: true })
+          .from(VerdictSchema)
+          .where(eq('kind', 'verdict'))
+          .ownedBy(writer)
+          .orderBy(asc('$key'))
+          .limit(PAGE_SIZE)
+          .offset(offset)
+          .fetch(),
+      ),
       client.getBlockTiming(),
     ])
 
     return {
-      receipts: receipts.entities.map((row) => ({
+      receipts: [...payments, ...settlements].map((row) => ({
         key: row.$key,
         expiresAt: row.$expiresAt ?? 0n,
         kind: row.kind.value,
@@ -47,8 +84,18 @@ export function createArkivReader(writer: Hex, transport: Transport = http(undef
         timesReceived: row.times_received.value,
         batchTx: row.batch_tx?.value ?? null,
         paymentKey: row.payment_key?.value ?? null,
+        payTo: row.pay_to?.value ?? null,
       })),
-      sellers: sellers.entities.map((row) => ({ seller: row.seller.value, expiresAt: row.$expiresAt ?? 0n })),
+      sellers: sellers.map((row) => ({
+        seller: row.seller.value,
+        payTo: row.pay_to?.value ?? null,
+        expiresAt: row.$expiresAt ?? 0n,
+      })),
+      verdicts: verdicts.map((row) => ({
+        seller: row.seller.value,
+        verdict: row.verdict.value,
+        createdAt: row.$createdAt ?? 0n,
+      })),
       timing,
     }
   }

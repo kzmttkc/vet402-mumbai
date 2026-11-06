@@ -1,18 +1,29 @@
 import { createHash } from 'node:crypto'
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
-import { eq } from '@arkiv-network/sdk/query'
+import { asc, eq } from '@arkiv-network/sdk/query'
 import { u64 } from '@arkiv-network/sdk/schema'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { EvidenceSchema, ReceiptSchema, sellerColumn, SellerSchema } from '../src/arkiv/schema'
+import { PAGE_SIZE, readAllPages } from '../src/arkiv/pages'
+import {
+  addressColumn,
+  EvidenceSchema,
+  ReceiptSchema,
+  sellerColumn,
+  SellerSchema,
+  VerdictSchema,
+} from '../src/arkiv/schema'
 import type { ReceiptRow, ReceiptStore } from './receiptStore'
+import { KEY_FROM_CHAIN } from './demo'
 import { SELLER_C_NAME } from './sellers'
 
 export const RECEIPT_DAYS = 30
 export const SELLER_SECONDS = 604800
 export const COUNT_AFTER_SECONDS = 60n
+/** A ruling from Arc stops every purchase from that seller for this long, counted from the block it was written in. */
+export const VERDICT_SECONDS = 604800n
 
 const READ_TIMEOUT_MS = 5000
 const MAX_ATTEMPTS = 5
@@ -20,12 +31,14 @@ const SWEEP_ROWS = 20
 const BLOCK_SECONDS = 2
 
 export const NOT_PAID = 'No recent delivery from this seller. Not paid.'
+export const RULED_AGAINST = 'Arc ruled against this seller in the last 7 days. Not paid.'
+export const UNREADABLE = 'Arkiv could not be read, so the delivery check did not run. Not paid.'
 
+/** 'expired' is the one answer that stops the purchase, whichever line says why. A failed read stops it too. */
 export type DeliveryCheck =
   | { kind: 'live'; line: 'Delivered recently.' }
   | { kind: 'first'; line: 'First purchase from this seller.' }
-  | { kind: 'expired'; line: typeof NOT_PAID }
-  | { kind: 'busy'; line: 'Arkiv is busy. Buying without the delivery check.' }
+  | { kind: 'expired'; line: typeof NOT_PAID | typeof RULED_AGAINST | typeof UNREADABLE }
 
 export interface ReceiptValues {
   kind: 'payment' | 'settlement'
@@ -39,12 +52,48 @@ export interface ReceiptValues {
   status: 'accepted' | 'settled'
   batch_tx?: string
   payment_key?: string
+  pay_to?: string
 }
 
 export interface SellerValues {
   kind: 'seller'
   seller: string
+  pay_to?: string
 }
+
+export type VerdictKind = 'silent' | 'fraud'
+
+export interface VerdictValues {
+  kind: 'verdict'
+  claim_id: string
+  /** The payTo address, lowercase. */
+  seller: string
+  verdict: VerdictKind
+  claim_tx?: string
+  contract: string
+  chain_id: bigint
+}
+
+/** Arc's ruling on one claim: Silent after finalize, Fraud after prove. */
+export interface VerdictRecord {
+  claimId: Hex
+  /** The address the seller was paid at. */
+  payTo: string
+  verdict: VerdictKind
+  /** The claim's transaction on Arc, when the chain reported it. */
+  claimTx?: Hex
+  contract: string
+  chainId: number
+}
+
+/** How a seller is found on Arkiv: by its payTo address when vet402 knows it, by name otherwise. */
+export interface SellerId {
+  name: string
+  payTo: string | null
+}
+
+/** The payTo address vet402 knows for a seller name, or null. Only vet402's own configuration answers it. */
+export type PayToOf = (sellerName: string) => string | null
 
 export interface EvidenceValues {
   kind: 'evidence'
@@ -62,6 +111,8 @@ export interface SellerRead {
   sellerLive: boolean
   /** The block each payment entity was created in. */
   paymentBlocks: bigint[]
+  /** The block each of Arc's rulings against this payTo address was written in. Empty without an address. */
+  verdictBlocks: bigint[]
   currentBlock: bigint
   blockSeconds: number
 }
@@ -71,11 +122,14 @@ export interface ArkivWire {
   createReceipt(values: ReceiptValues, options: EntityOptions): Promise<{ entityKey: Hex }>
   createSeller(values: SellerValues, options: EntityOptions): Promise<{ entityKey: Hex }>
   createEvidence(values: EvidenceValues, options: EntityOptions): Promise<{ entityKey: Hex }>
+  createVerdict(values: VerdictValues, options: EntityOptions): Promise<{ entityKey: Hex }>
+  /** Sets a new expiry. A duration counts from now, it is not added to what is left. */
   extendEntity(params: { entityKey: Hex; expiration: EntityOptions['expiration'] }): Promise<{ expiresAt: bigint }>
   findPaymentKey(transferId: string): Promise<Hex | null>
-  findSellerKey(seller: string): Promise<Hex | null>
+  findSellerKey(seller: SellerId): Promise<Hex | null>
   findEvidenceKey(claimId: string): Promise<Hex | null>
-  readSeller(seller: string): Promise<SellerRead>
+  findVerdictKey(claimId: string): Promise<Hex | null>
+  readSeller(seller: SellerId): Promise<SellerRead>
 }
 
 /** Only the short message, with every secret removed. An RPC error's full message carries the URL. */
@@ -106,6 +160,29 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
   // No nonceManager, on purpose: one queue sends one write at a time.
   const writes = createWalletClient({ chain, transport: transport ?? http(), account })
 
+  // A known payTo address is the only key used, so a catalog seller cannot borrow another seller's record by its name.
+  function sellerEntity(seller: SellerId) {
+    const query = reads.select({ $key: true }).from(SellerSchema).where(eq('kind', 'seller'))
+    return (seller.payTo ? query.where(eq('pay_to', addressColumn(seller.payTo))) : query.where(eq('seller', sellerColumn(seller.name))))
+      .ownedBy(writer)
+      .limit(1)
+      .fetch()
+  }
+
+  const readVerdicts = (payTo: string) =>
+    readAllPages((offset) =>
+      reads
+        .select({ $key: true, $createdAt: true })
+        .from(VerdictSchema)
+        .where(eq('kind', 'verdict'))
+        .where(eq('seller', addressColumn(payTo)))
+        .ownedBy(writer)
+        .orderBy(asc('$key'))
+        .limit(PAGE_SIZE)
+        .offset(offset)
+        .fetch(),
+    )
+
   return {
     writer,
     wire: {
@@ -122,6 +199,8 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
         ),
       createSeller: (values, options) => writes.createEntity(SellerSchema, values, options),
       createEvidence: (values, options) => writes.createEntity(EvidenceSchema, values, options),
+      createVerdict: (values, options) =>
+        writes.createEntity(VerdictSchema, { ...values, chain_id: u64(values.chain_id) }, options),
       extendEntity: (params) => writes.extendEntity(params),
 
       async findPaymentKey(transferId) {
@@ -148,42 +227,39 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
         return entities[0]?.$key ?? null
       },
 
-      async findSellerKey(seller) {
+      async findVerdictKey(claimId) {
         const { entities } = await reads
           .select({ $key: true })
-          .from(SellerSchema)
-          .where(eq('kind', 'seller'))
-          .where(eq('seller', sellerColumn(seller)))
+          .from(VerdictSchema)
+          .where(eq('kind', 'verdict'))
+          .where(eq('claim_id', claimId))
           .ownedBy(writer)
           .limit(1)
           .fetch()
         return entities[0]?.$key ?? null
       },
 
+      findSellerKey: async (seller) => (await sellerEntity(seller)).entities[0]?.$key ?? null,
+
       async readSeller(seller) {
-        const name = sellerColumn(seller)
-        const [live, payments, timing] = await Promise.all([
-          reads
-            .select({ $key: true })
-            .from(SellerSchema)
-            .where(eq('kind', 'seller'))
-            .where(eq('seller', name))
-            .ownedBy(writer)
-            .limit(1)
-            .fetch(),
-          reads
-            .select({ $key: true, $createdAt: true })
-            .from(ReceiptSchema)
-            .where(eq('kind', 'payment'))
-            .where(eq('seller', name))
-            .ownedBy(writer)
-            .limit(100)
-            .fetch(),
+        const [live, payments, verdicts, timing] = await Promise.all([
+          sellerEntity(seller),
+          readAllPages((offset) => {
+            const query = reads.select({ $key: true, $createdAt: true }).from(ReceiptSchema).where(eq('kind', 'payment'))
+            return (seller.payTo ? query.where(eq('pay_to', addressColumn(seller.payTo))) : query.where(eq('seller', sellerColumn(seller.name))))
+              .ownedBy(writer)
+              .orderBy(asc('$key'))
+              .limit(PAGE_SIZE)
+              .offset(offset)
+              .fetch()
+          }),
+          seller.payTo ? readVerdicts(seller.payTo) : Promise.resolve([]),
           reads.getBlockTiming(),
         ])
         return {
           sellerLive: live.entities.length > 0,
-          paymentBlocks: payments.entities.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
+          paymentBlocks: payments.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
+          verdictBlocks: verdicts.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
           currentBlock: timing.currentBlock,
           blockSeconds: timing.blockDuration,
         }
@@ -194,11 +270,12 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
 
 /** What the screen may do about this seller, given what Arkiv holds for it. */
 export function decideDelivery(read: SellerRead): DeliveryCheck {
+  // A ruling comes first: a seller Arc ruled against is not paid, however recently it delivered.
+  const age = (block: bigint) => (read.currentBlock - block) * BigInt(read.blockSeconds)
+  if (read.verdictBlocks.some((block) => age(block) < VERDICT_SECONDS)) return { kind: 'expired', line: RULED_AGAINST }
   if (read.sellerLive) return { kind: 'live', line: 'Delivered recently.' }
   // A payment under a minute old is not counted, because its seller entity may not be readable yet.
-  const counted = read.paymentBlocks.filter(
-    (block) => (read.currentBlock - block) * BigInt(read.blockSeconds) > COUNT_AFTER_SECONDS,
-  )
+  const counted = read.paymentBlocks.filter((block) => age(block) > COUNT_AFTER_SECONDS)
   if (counted.length === 0) return { kind: 'first', line: 'First purchase from this seller.' }
   return { kind: 'expired', line: NOT_PAID }
 }
@@ -209,13 +286,15 @@ export function createSellerCheck(
   wire: Pick<ArkivWire, 'readSeller'>,
   log: (message: string) => void,
   scrub: (error: unknown) => string,
+  payToOf: PayToOf = () => null,
 ): SellerCheck {
   return async (seller) => {
     try {
-      return decideDelivery(await wire.readSeller(seller))
+      return decideDelivery(await wire.readSeller({ name: seller, payTo: payToOf(seller) }))
     } catch (error) {
+      // Fail closed: without the record, nothing is paid.
       log(`Arkiv seller read failed: ${scrub(error)}`)
-      return { kind: 'busy', line: 'Arkiv is busy. Buying without the delivery check.' }
+      return { kind: 'expired', line: UNREADABLE }
     }
   }
 }
@@ -233,7 +312,7 @@ const noResponseHash = (transferId: string) =>
 const responseHashFor = (row: ReceiptRow, transferId: string) =>
   row.timesReceived > 0 ? row.responseHash : noResponseHash(transferId)
 
-function receiptColumns(row: ReceiptRow, transferId: string) {
+function receiptColumns(row: ReceiptRow, transferId: string, payTo: string | null) {
   return {
     job_id: row.id,
     seller: sellerColumn(row.sellerName),
@@ -242,8 +321,17 @@ function receiptColumns(row: ReceiptRow, transferId: string) {
     response_hash: responseHashFor(row, transferId),
     response_bytes: BigInt(row.responseBytes),
     times_received: BigInt(row.timesReceived),
+    ...(payTo ? { pay_to: addressColumn(payTo) } : {}),
   }
 }
+
+/**
+ * Whether this row may extend the seller's record. The answer has to have come back, and a sealed
+ * answer has to have opened to the seller's promise. A sealed row only carries KEY_FROM_CHAIN when it
+ * did, so an answer swapped after sealing never keeps its seller alive.
+ */
+export const keptPromise = (row: ReceiptRow): boolean =>
+  row.timesReceived > 0 && (!row.sealed || (row.outcome ?? []).includes(KEY_FROM_CHAIN))
 
 const receiptOptions = (): EntityOptions => ({
   expiration: ExpirationTime.fromDays(RECEIPT_DAYS),
@@ -257,6 +345,8 @@ interface SinkOptions {
   sellerTtlSeconds: number
   log: (message: string) => void
   scrub: (error: unknown) => string
+  /** Lets payment and seller entities carry the seller's payTo address. Without it they carry the name alone. */
+  payToOf?: PayToOf
   now?: () => number
 }
 
@@ -264,11 +354,13 @@ interface SinkOptions {
  * Puts Arkiv behind the local store. The local row is saved first and the Arkiv write follows in
  * one queue, so no write can hold up the screen or the payment, and a failed one only logs.
  */
-export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now = Date.now }: SinkOptions) {
+export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, payToOf = () => null, now = Date.now }: SinkOptions) {
   const startedAt = now()
   const sellerKeys = new Map<string, Hex>()
   const failures = new Map<string, number>()
   const queued = new Set<string>()
+  /** Rulings not yet on Arkiv, by claim id, with the number of failed tries. */
+  const verdicts = new Map<string, { record: VerdictRecord; failures: number; queued: boolean }>()
   let tail: Promise<void> = Promise.resolve()
 
   const ttlFor = (seller: string) => (seller === SELLER_C_NAME ? sellerTtlSeconds : SELLER_SECONDS)
@@ -281,7 +373,7 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
       found ??
       (
         await wire.createReceipt(
-          { kind: 'payment', ...receiptColumns(row, transferId), status: 'accepted' },
+          { kind: 'payment', ...receiptColumns(row, transferId, payToOf(row.sellerName)), status: 'accepted' },
           receiptOptions(),
         )
       ).entityKey
@@ -289,25 +381,31 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     return entityKey
   }
 
-  // Only a real delivery gets here. The seller entity is extended, never patched.
+  // Only a delivery that kept its promise gets here. The seller entity is extended, never patched.
+  // The expiry is set to now plus the lifetime on each delivery. Arkiv refuses an extension that would end earlier.
   async function ensureSeller(row: ReceiptRow): Promise<void> {
-    const seller = sellerColumn(row.sellerName)
+    const payTo = payToOf(row.sellerName)
+    const id: SellerId = { name: row.sellerName, payTo }
+    const cacheKey = payTo ? addressColumn(payTo) : sellerColumn(row.sellerName)
     const expiration = ExpirationTime.fromSeconds(ttlFor(row.sellerName))
-    const known = sellerKeys.get(seller) ?? (await wire.findSellerKey(seller))
+    const known = sellerKeys.get(cacheKey) ?? (await wire.findSellerKey(id))
     if (known) {
       try {
         await wire.extendEntity({ entityKey: known, expiration })
-        sellerKeys.set(seller, known)
+        sellerKeys.set(cacheKey, known)
         store.update(row.id, { arkivSellerDone: true })
         return
       } catch (error) {
-        sellerKeys.delete(seller)
+        sellerKeys.delete(cacheKey)
         // Still readable means the extension itself failed. Gone means it expired, so it starts over.
-        if (await wire.findSellerKey(seller)) throw error
+        if (await wire.findSellerKey(id)) throw error
       }
     }
-    const { entityKey } = await wire.createSeller({ kind: 'seller', seller }, { expiration, flags: { readonly: true } })
-    sellerKeys.set(seller, entityKey)
+    const { entityKey } = await wire.createSeller(
+      { kind: 'seller', seller: sellerColumn(row.sellerName), ...(payTo ? { pay_to: addressColumn(payTo) } : {}) },
+      { expiration, flags: { readonly: true } },
+    )
+    sellerKeys.set(cacheKey, entityKey)
     store.update(row.id, { arkivSellerDone: true })
   }
 
@@ -315,7 +413,7 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     const { entityKey } = await wire.createReceipt(
       {
         kind: 'settlement',
-        ...receiptColumns(row, transferId),
+        ...receiptColumns(row, transferId, payToOf(row.sellerName)),
         status: 'settled',
         ...(row.batchTx ? { batch_tx: row.batchTx } : {}),
         payment_key: paymentKey,
@@ -347,7 +445,7 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     if (!row?.transferId || row.status === 'failed') return
     try {
       const paymentKey = await ensurePayment(row, row.transferId)
-      if (row.timesReceived > 0 && !row.arkivSellerDone) await ensureSeller(row)
+      if (keptPromise(row) && !row.arkivSellerDone) await ensureSeller(row)
       if (row.status === 'completed' && !row.arkivSettlementKey) await ensureSettlement(row, row.transferId, paymentKey)
       await ensureEvidence(row, row.transferId)
       failures.delete(id)
@@ -366,11 +464,47 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
     })
   }
 
+  // A new entity per ruling, from the same queue. A retry looks first, so a ruling is never written twice.
+  async function verdictStep(claimId: string): Promise<void> {
+    const pending = verdicts.get(claimId)
+    if (!pending) return
+    pending.queued = false
+    const { record } = pending
+    try {
+      const found = pending.failures > 0 ? await wire.findVerdictKey(record.claimId) : null
+      if (!found) {
+        await wire.createVerdict(
+          {
+            kind: 'verdict',
+            claim_id: record.claimId,
+            seller: addressColumn(record.payTo),
+            verdict: record.verdict,
+            ...(record.claimTx ? { claim_tx: record.claimTx } : {}),
+            contract: addressColumn(record.contract),
+            chain_id: BigInt(record.chainId),
+          },
+          receiptOptions(),
+        )
+      }
+      verdicts.delete(claimId)
+    } catch (error) {
+      pending.failures++
+      log(`Arkiv verdict write failed: ${scrub(error)}`)
+    }
+  }
+
+  function queueVerdict(claimId: string): void {
+    const pending = verdicts.get(claimId)
+    if (!pending || pending.queued) return
+    pending.queued = true
+    tail = tail.then(() => verdictStep(claimId))
+  }
+
   const hasWork = (row: ReceiptRow) =>
     !!row.transferId &&
     row.status !== 'failed' &&
     (!row.arkivPaymentKey ||
-      (row.timesReceived > 0 && !row.arkivSellerDone) ||
+      (keptPromise(row) && !row.arkivSellerDone) ||
       (row.status === 'completed' && !row.arkivSettlementKey) ||
       (!!row.evidence && !row.arkivEvidenceKey))
 
@@ -387,12 +521,19 @@ export function createArkivSink({ wire, store, sellerTtlSeconds, log, scrub, now
       },
     } satisfies ReceiptStore,
 
+    /** Writes Arc's ruling on one claim to Arkiv. Never throws, and never holds up the caller. */
+    recordVerdict(record: VerdictRecord): void {
+      if (!verdicts.has(record.claimId)) verdicts.set(record.claimId, { record, failures: 0, queued: false })
+      queueVerdict(record.claimId)
+    },
+
     /** Retries what is unfinished. Rows from before this run are left alone unless they already have a payment entity. */
     sweep(): void {
       for (const row of store.list().slice(0, SWEEP_ROWS)) {
         const ownRun = Date.parse(row.at) >= startedAt || !!row.arkivPaymentKey
         if (ownRun && hasWork(row) && (failures.get(row.id) ?? 0) < MAX_ATTEMPTS) observe(row.id)
       }
+      for (const [claimId, pending] of verdicts) if (pending.failures < MAX_ATTEMPTS) queueVerdict(claimId)
     },
 
     /** Resolves when every queued write has been tried. */
