@@ -1,12 +1,15 @@
 {
   "rewrites": [
     {
-      "source": "/((?!assets/|api/try-dispute).*)",
+      "source": "/((?!assets/|api/try-dispute|api/try-job).*)",
       "destination": "/index.html"
     }
   ],
   "functions": {
     "api/try-dispute.ts": {
+      "maxDuration": 60
+    },
+    "api/try-job.ts": {
       "maxDuration": 60
     }
   }

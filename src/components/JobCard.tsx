@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Check, Loader2, Sparkles } from 'lucide-react'
+import { PlanWhy } from '@/components/PlanWhy'
 import { useJob } from '@/hooks/useJob'
 import { useWriter } from '@/hooks/useWriter'
+import { DEMO_CONTROLS } from '@/lib/demoMode'
 
 const MAX_JOB_CHARS = 500
 
@@ -50,7 +52,7 @@ export function JobCard({ reload }: { reload: () => Promise<void> }) {
             {state.step === 'planning' && <Loader2 size={18} className="animate-spin" aria-hidden />}
             {state.step === 'planning' ? 'Finding someone for the job…' : 'Ask the agent'}
           </button>
-          {writer && (
+          {writer && DEMO_CONTROLS && (
             <div>
               <button
                 type="button"
@@ -78,6 +80,9 @@ export function JobCard({ reload }: { reload: () => Promise<void> }) {
             <p className="text-lg font-semibold">{state.plan.sellerName}</p>
             <p className="mt-1 text-sm text-pretty text-[var(--muted)]">{state.plan.summary}</p>
             {state.plan.delivery && <p className="mt-1 text-sm text-pretty">{state.plan.delivery}</p>}
+            <div className="mt-3">
+              <PlanWhy why={state.plan.why} compared={state.plan.compared} />
+            </div>
           </div>
 
           <p className="display text-xl font-semibold text-balance">

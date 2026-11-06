@@ -17,6 +17,13 @@ export interface Candidate {
   path: string
   /** Request body schema from the listing, when it has one. */
   bodySchema: BodySchema | null
+  /** The seller's payee on this network, from the payment option the agent would use. */
+  payTo: string | null
+  /**
+   * The SealedDelivery contract the listing says it answers under, when it says so. Only a seller
+   * that seals can be checked for deposit cover, so this is null for every ordinary listing.
+   */
+  sealedBy: string | null
   /**
    * Lowercase text used ONLY to match a job to a listing. It comes from the
    * listing's own words, so it is never shown to the user.
@@ -33,7 +40,8 @@ interface RawAccept {
   scheme?: string
   network?: string
   amount?: string
-  extra?: { name?: string }
+  payTo?: string
+  extra?: { name?: string; sealedDelivery?: unknown }
 }
 
 interface RawListing {
@@ -57,6 +65,8 @@ interface DiscoveryPage {
 }
 
 export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
@@ -104,6 +114,11 @@ export function toCandidate(item: RawListing, network: string): Candidate | null
     sellerName,
     category: provider?.category ?? '',
     amount: BigInt(accept.amount),
+    payTo: typeof accept.payTo === 'string' && ADDRESS.test(accept.payTo) ? accept.payTo : null,
+    sealedBy:
+      typeof accept.extra?.sealedDelivery === 'string' && ADDRESS.test(accept.extra.sealedDelivery)
+        ? accept.extra.sealedDelivery
+        : null,
     path: item.metadata?.path ?? '',
     bodySchema,
     matchText,

@@ -14,6 +14,9 @@ const NETWORK = 'eip155:5042002'
 
 const TX = `0x${'ab'.repeat(32)}`
 
+// The agent's payments settle on Arc Testnet, and one job may cost up to 0.01 USDC.
+const CTX = { networkName: 'Arc Testnet', limit: 10_000n }
+
 interface ListingOptions {
   resource?: string
   method?: string
@@ -134,7 +137,7 @@ describe('Planning a payment check', () => {
   ]
 
   test('prefers the relay and plans exactly one receipt lookup for the latest batch transaction', () => {
-    const outcome = planJob('Did my payment go through?', candidates, { batchTx: TX })
+    const outcome = planJob('Did my payment go through?', candidates, CTX, { batchTx: TX })
     if (!outcome.ok) throw new Error('expected a plan')
 
     expect(outcome.plan.kind).toBe('receipt-check')
@@ -147,23 +150,23 @@ describe('Planning a payment check', () => {
   })
 
   test('asks for the relay price', () => {
-    const outcome = planJob('did the payment go through', candidates, { batchTx: TX })
+    const outcome = planJob('did the payment go through', candidates, CTX, { batchTx: TX })
     expect(outcome.ok && outcome.plan.amount).toBe(100n)
   })
 
   test('says so when there is no payment yet', () => {
-    expect(planJob('did my payment go through', candidates, null)).toEqual({ ok: false, reason: 'NO_PAYMENTS' })
+    expect(planJob('did my payment go through', candidates, CTX, null)).toMatchObject({ ok: false, reason: 'NO_PAYMENTS' })
   })
 
   test('says so when the latest payment is not batched yet', () => {
-    expect(planJob('did my payment go through', candidates, { batchTx: null })).toEqual({
+    expect(planJob('did my payment go through', candidates, CTX, { batchTx: null })).toMatchObject({
       ok: false,
       reason: 'NOT_SETTLED',
     })
   })
 
   test('never puts a malformed transaction hash in a request', () => {
-    expect(planJob('did my payment go through', candidates, { batchTx: '0x1234' })).toEqual({
+    expect(planJob('did my payment go through', candidates, CTX, { batchTx: '0x1234' })).toMatchObject({
       ok: false,
       reason: 'NOT_SETTLED',
     })
@@ -180,12 +183,12 @@ describe('Planning a general job', () => {
   )
 
   test('picks the seller whose listing fits and, on a tie, the cheaper one', () => {
-    const outcome = planJob('crypto prices please', [market, weather, cheaperMarket], null)
+    const outcome = planJob('crypto prices please', [market, weather, cheaperMarket], CTX, null)
     expect(outcome.ok && outcome.plan.sellerName).toBe('Cheap Market')
   })
 
   test('says so when nobody fits', () => {
-    expect(planJob('book me a flight', [market, weather], null)).toEqual({ ok: false, reason: 'NO_SELLER' })
+    expect(planJob('book me a flight', [market, weather], CTX, null)).toMatchObject({ ok: false, reason: 'NO_SELLER' })
   })
 
   test('skips listings that need fields it cannot fill', () => {
@@ -197,7 +200,7 @@ describe('Planning a general job', () => {
         body: { required: ['apiKey'], properties: { apiKey: {} } },
       }),
     )
-    expect(planJob('weather today', [needsKey], null)).toEqual({ ok: false, reason: 'NO_SELLER' })
+    expect(planJob('weather today', [needsKey], CTX, null)).toMatchObject({ ok: false, reason: 'NO_SELLER' })
   })
 
   test('puts the job into a text field when the listing has one', () => {
@@ -209,16 +212,16 @@ describe('Planning a general job', () => {
         body: { required: ['query'], properties: { query: {} } },
       }),
     )
-    const outcome = planJob('weather today', [search], null)
+    const outcome = planJob('weather today', [search], CTX, null)
     expect(outcome.ok && outcome.plan.request.body).toEqual({ query: 'weather today' })
   })
 
   test('does not use the payment relay for other jobs', () => {
-    expect(planJob('weather today', [candidate(relayListing())], null)).toEqual({ ok: false, reason: 'NO_SELLER' })
+    expect(planJob('weather today', [candidate(relayListing())], CTX, null)).toMatchObject({ ok: false, reason: 'NO_SELLER' })
   })
 
   test('shows our own sentence and the seller name, never the listing text', () => {
-    const outcome = planJob('crypto prices please', [market], null)
+    const outcome = planJob('crypto prices please', [market], CTX, null)
     if (!outcome.ok) throw new Error('expected a plan')
     const shown = `${outcome.plan.sellerName} ${outcome.plan.summary}`
 
@@ -228,13 +231,13 @@ describe('Planning a general job', () => {
   })
 
   test('the payment check sentence never names a network', () => {
-    const outcome = planJob('did my payment go through', [candidate(relayListing())], { batchTx: TX })
+    const outcome = planJob('did my payment go through', [candidate(relayListing())], CTX, { batchTx: TX })
     if (!outcome.ok) throw new Error('expected a plan')
     expect(`${outcome.plan.sellerName} ${outcome.plan.summary}`).not.toMatch(/arc|testnet|eip155|base|polygon/i)
   })
 
   test('ignores an empty job', () => {
-    expect(planJob('   ', [market], null)).toEqual({ ok: false, reason: 'EMPTY_JOB' })
+    expect(planJob('   ', [market], CTX, null)).toEqual({ ok: false, reason: 'EMPTY_JOB' })
   })
 })
 
@@ -251,7 +254,7 @@ describe('Resource safety', () => {
 
   test('a listing pointing at an unsafe address is never chosen', () => {
     const bad = candidate(listing({ resource: 'https://169.254.169.254/latest', tags: ['weather'] }))
-    expect(planJob('weather today', [bad], null)).toEqual({ ok: false, reason: 'NO_SELLER' })
+    expect(planJob('weather today', [bad], CTX, null)).toMatchObject({ ok: false, reason: 'NO_SELLER' })
   })
 })
 
@@ -283,11 +286,12 @@ describe('The job flow', () => {
     return { ports, paid, receiptReads: () => receiptReads }
   }
 
-  test('the approval card carries only the seller, one sentence, and the amount', async () => {
+  test('the approval card carries the seller, one sentence, the amount, and why', async () => {
     const jobs = createJobService(setup().ports, memoryStore())
     const view = await jobs.plan('did my payment go through')
 
-    expect(Object.keys(view).sort()).toEqual(['amount', 'covered', 'id', 'sellerName', 'summary'])
+    expect(Object.keys(view).sort()).toEqual(['amount', 'compared', 'covered', 'id', 'sellerName', 'summary', 'why'])
+    expect(view.why).toBe("Picked from 2 Arc listings: best match for 'payment', 0.0001 USDC")
     expect(view.sellerName).toBe('Relay Co')
     expect(view.amount).toBe('0.0001')
     expect(view.covered).toBe(true)

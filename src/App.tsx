@@ -1,4 +1,5 @@
 import { FILM_MODE } from '@/lib/filmMode'
+import { DEMO_CONTROLS } from '@/lib/demoMode'
 import { useCallback } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { HoldCard } from '@/components/HoldCard'
@@ -37,15 +38,17 @@ export default function App() {
 
         <HoldCard data={data} reload={reload} />
         <JobCard reload={refreshAll} />
-        <DemoCard
-          run={demo.run}
-          error={demo.error}
-          running={demo.running}
-          start={demo.start}
-          sealed={demo.sealed}
-          act={demo.act}
-          acting={demo.acting}
-        />
+        {DEMO_CONTROLS && (
+          <DemoCard
+            run={demo.run}
+            error={demo.error}
+            running={demo.running}
+            start={demo.start}
+            sealed={demo.sealed}
+            act={demo.act}
+            acting={demo.acting}
+          />
+        )}
         </div>
         <div className="lg:-mt-4">
         <ReceiptList receipts={FILM_MODE ? receipts.slice(0, 1) : receipts} onRetryAsNew={() => void demo.start('compare')} busy={demo.running} />

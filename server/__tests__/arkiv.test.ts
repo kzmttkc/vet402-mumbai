@@ -462,6 +462,8 @@ describe('The approval card with the delivery check', () => {
     category: 'FINANCIAL_ANALYSIS',
     amount,
     path: '/data',
+    payTo: null,
+    sealedBy: null,
     bodySchema: null,
     matchText,
   })
@@ -562,7 +564,13 @@ describe('The approval card with the delivery check', () => {
   })
 
   test('the cheapest plan skips the relay and anything unsafe', () => {
-    const relay = { ...candidate('Relay', 1n), path: '/arc-testnet' }
+    // A JSON-RPC node is known by the request it asks for, not by its path.
+    const relay: Candidate = {
+      ...candidate('Relay', 1n),
+      method: 'POST',
+      path: '/arc-testnet',
+      bodySchema: { required: ['jsonrpc', 'method'], properties: ['jsonrpc', 'method', 'params', 'id'] },
+    }
     const unsafe = { ...candidate('Local', 2n), resource: 'http://127.0.0.1/data' }
     const outcome = planCheapest('job', [relay, unsafe, candidate('Fine', 3n)])
     expect(outcome.ok && outcome.plan.sellerName).toBe('Fine')
