@@ -204,7 +204,7 @@ What ran in production on 2026-11-05 with the real World App on iOS: "Budget set
 - The routes that start, approve or cancel a request need a token that only the app's own page receives. Any POST a browser marks as sent from another site is refused.
 - A hold now reads "Held 1 USDC for your agent." The hold is the agent's spending limit, and the jobs it plans afterwards are paid from it.
 
-These changes are covered by the backend tests. They have not run with World App yet.
+These changes came after the production runs above, and the backend tests cover them.
 
 ### Why Proof of Human and not uniqueness or Selfie Check
 
