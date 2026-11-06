@@ -477,8 +477,13 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
           console.error('answer memo not sent, answering without it:', messageOf(error))
         }
         if (hash) {
-          await mined(hash)
-          return links ? cleanLinks(links) : null
+          try {
+            await mined(hash)
+            return links ? cleanLinks(links) : null
+          } catch (error) {
+            // The key must still reach the chain. A memo transaction that failed on chain falls back to a plain answer.
+            console.error('answer memo failed on chain, answering without it:', messageOf(error))
+          }
         }
       }
       await send(sellerKey, 'answer', [claimId, key])
