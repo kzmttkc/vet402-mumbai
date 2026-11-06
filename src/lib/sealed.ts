@@ -39,7 +39,7 @@ function applyKeystream(data: Uint8Array, key: Hex): Uint8Array {
   for (let start = 0; start < data.length; start += BLOCK_BYTES) {
     const stream = keystreamBlock(key, start / BLOCK_BYTES)
     const end = Math.min(start + BLOCK_BYTES, data.length)
-    for (let i = start; i < end; i++) out[i] = data[i]! ^ stream[i - start]!
+    for (let i = start; i < end; i++) out[i] = data[i] ^ stream[i - start]
   }
   return out
 }

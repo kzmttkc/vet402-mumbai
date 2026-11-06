@@ -3,9 +3,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, ExternalLink, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
 import { LimitRow, PurchaseList } from '@/components/AgentControls'
 import { OWN_SELLER_MARK, PlanWhy } from '@/components/PlanWhy'
-import { addPurchase, loadLimit, loadPurchases, saveLimit } from '@/lib/agentHistory'
+import { addPurchase, LIMIT_CHOICES, loadLimit, loadPurchases, saveLimit } from '@/lib/agentHistory'
 import type { LimitChoice, Purchase } from '@/lib/agentHistory'
-import { approvePlan, arcTxUrl, askAgent, receiptLine, settlementOf } from '@/lib/askAgent'
+import { answerLine, approvePlan, arcTxUrl, askAgent, receiptLine, SETTLING_LINE, settlementOf } from '@/lib/askAgent'
 import type { AgentPlan as Plan, Compared, Paid as PaidReply } from '@/lib/askAgent'
 import { splitLines } from '@/lib/receiptLines'
 
@@ -15,7 +15,11 @@ type AgentPlan = Plan & { protection?: string; own?: boolean; limitLine?: string
 type Paid = PaidReply & { lines?: string[] }
 
 const MAX_JOB_CHARS = 500
-const EXAMPLES = ['Did my last payment go through?', 'Get me a paid access receipt', "What's the weather in Mumbai?"]
+/** Each one reaches a seller on Arc: Payment Check, BotPay, and Balance Check. The second costs 0.01 USDC, so it shows the limit at work. */
+const EXAMPLES = ['Did my last payment go through?', 'Get me a paid access receipt', 'How much money does my agent have left?'] as const
+/** The example that costs more than the lowest limit, named exactly as its button reads. */
+const STOP_EXAMPLE = EXAMPLES[1]
+const STOP_LIMIT = LIMIT_CHOICES[0]
 /** How often, and for how long, the card asks whether the payment has settled. */
 const SETTLE_POLL_MS = 5_000
 const SETTLE_WATCH_MS = 3 * 60_000
@@ -165,9 +169,12 @@ export function AskAgent() {
   }, [transferId, settled.done])
 
   return (
-    <div className="mb-4 rounded-2xl bg-[var(--surface-muted)] p-4">
+    <div id="ask-agent" className="mb-4 scroll-mt-4 rounded-2xl bg-[var(--surface-muted)] p-4">
       {/* The limit can change only between jobs, so a card always matches the limit it was planned with. */}
       <LimitRow value={limit} onChange={chooseLimit} disabled={state.step === 'planning' || state.step === 'asking' || state.step === 'paying'} />
+      <p className="-mt-1 mb-3 px-1 text-xs text-pretty text-[var(--muted)]">
+        Set {STOP_LIMIT} and tap “{STOP_EXAMPLE}” to see the agent stop.
+      </p>
       <div className="flex items-center gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[var(--ink)]">
           <Sparkles size={20} aria-hidden />
@@ -286,8 +293,9 @@ export function AskAgent() {
             <div className="min-w-0 space-y-1">
               <p className="break-words text-base font-semibold text-pretty">{readable(state.paid.text)}</p>
               <p className="text-sm text-[var(--muted)]">
-                {state.paid.sellerName} · {receiptLine(state.paid.paid, settled.done)}
+                {state.paid.sellerName} · {settled.done ? receiptLine(state.paid.paid, true) : answerLine(state.paid.paid)}
               </p>
+              {!settled.done && Number(state.paid.paid) > 0 && <p className="text-xs text-pretty text-[var(--muted)]">{SETTLING_LINE}</p>}
               <SealedLines lines={state.paid.lines} />
               {settled.done && arcTxUrl(settled.batchTx) && (
                 <a className={link} href={arcTxUrl(settled.batchTx) as string} target="_blank" rel="noreferrer">

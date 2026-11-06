@@ -216,7 +216,10 @@ export function createRulingsReader(
     const { $attributes } = await client.getEntity(key)
     const value = (name: string) => {
       const found = ($attributes as Record<string, { value?: unknown } | undefined> | undefined)?.[name]?.value
-      return found === undefined || found === null ? null : String(found)
+      // Arkiv attributes are strings or numbers. Anything else has no address or chain in it.
+      if (typeof found === 'string') return found
+      if (typeof found === 'number' || typeof found === 'bigint' || typeof found === 'boolean') return String(found)
+      return null
     }
     return rulingOnArc(payTo, { ...ruling, contract: value('contract'), chainId: value('chain_id') }, options)
   }
@@ -288,7 +291,7 @@ export function createRulingsReader(
         ...(by ? { writer: by } : {}),
       })
     }
-    if (kept.length === 0 && failed) throw failed
+    if (kept.length === 0 && failed) throw failed instanceof Error ? failed : new Error('The Arc read for a ruling failed')
     return { rulings: kept, timing, own }
   }
 

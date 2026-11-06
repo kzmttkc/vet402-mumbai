@@ -86,6 +86,15 @@ export async function settlementOf(transferId: string, fetchImpl: typeof fetch =
   return call<Settlement>({ method: 'GET' }, `${JOB_URL}?transfer=${encodeURIComponent(transferId)}`, fetchImpl)
 }
 
+/** The line once the answer is in, before Circle's batch lands on Arc. The settlement has its own small line under it. */
+export function answerLine(paid: string): string {
+  if (Number(paid) === 0) return 'Nothing was charged.'
+  return `Paid ${paid} USDC. Answer received.`
+}
+
+/** The small line under the receipt while the payment waits for its batch. It turns into the link to Arc when it lands. */
+export const SETTLING_LINE = 'Settles in Circle’s Gateway batch on Arc. The link shows up here when it lands.'
+
 /** The receipt line, in plain words. No hashes. The link to Arc sits under it once the payment has settled. */
 export function receiptLine(paid: string, settled: boolean): string {
   if (Number(paid) === 0) return 'Nothing was charged.'

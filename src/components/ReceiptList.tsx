@@ -16,9 +16,20 @@ interface Props {
   busy: boolean
 }
 
+/** How many settled rows point at each batch on Arc. A link shared by more than one row names the batch. */
+export function batchCounts(receipts: readonly Receipt[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const r of receipts) {
+    const url = r.status === 'completed' ? arcTxUrl(r.batchTx) : null
+    if (url) counts.set(url, (counts.get(url) ?? 0) + 1)
+  }
+  return counts
+}
+
 export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
   const writer = useWriter()
   if (receipts.length === 0) return null
+  const shared = batchCounts(receipts)
 
   return (
     <div className="mt-4">
@@ -56,7 +67,7 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 font-semibold text-[var(--ink)] underline underline-offset-2"
                     >
-                      View on Arc <ExternalLink size={12} aria-hidden />
+                      {(shared.get(onArc) ?? 0) > 1 ? 'View the batch on Arc' : 'View on Arc'} <ExternalLink size={12} aria-hidden />
                     </a>
                   )}
                 </p>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Receipt as ReceiptIcon } from 'lucide-react'
 import { receiptStatusLine } from '@/lib/receiptStatus'
 import { CheckSeller } from './CheckSeller'
+import type { SellerSample } from './CheckSeller'
 import { createArkivReader, createRulingsReader } from './readArkiv'
 import { BUSY_LINE, createReceiptsFeed, READ_EVERY_MS } from './receiptsFeed'
 import type { FeedRow, FeedState } from './receiptsFeed'
@@ -41,6 +42,18 @@ async function findWriter(): Promise<Hex | null> {
 
 const short = (value: string, keep = 10) => (value.length > keep ? `${value.slice(0, keep)}…` : value)
 
+/** The seller the sample button fills in. Arc ruled against it, so the check has something to show. */
+export const SAMPLE_SELLER = 'Seller F'
+
+/** The sample seller's payTo, from the newest receipt on Arkiv that names it. Never typed by hand. */
+export function sampleSeller(rows: readonly FeedRow[], name = SAMPLE_SELLER): SellerSample | null {
+  const row = rows.find((r) => r.seller === name && typeof r.payTo === 'string' && /^0x[0-9a-fA-F]{40}$/.test(r.payTo))
+  return row?.payTo ? { name, payTo: row.payTo } : null
+}
+
+/** The page's own path, so the link back works on any host. */
+const HOME = '/'
+
 export function ReceiptsPage() {
   const [state, setState] = useState<FeedState>(() => ({ rows: savedRows.load(), busy: false }))
   const [writer, setWriter] = useState<Hex | null>(null)
@@ -72,9 +85,21 @@ export function ReceiptsPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-10">
-      <CheckSeller read={readRulings} />
+      <header className="mb-4 px-1">
+        <a
+          href={HOME}
+          className="inline-flex min-h-11 items-center text-sm font-semibold text-[var(--ink)] underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]"
+        >
+          ← Back to vet402
+        </a>
+        <h1 className="display mt-1 text-2xl font-semibold">Receipts on Arkiv</h1>
+        <p className="mt-1 text-sm text-pretty text-[var(--muted)]">
+          Payments vet402 made, kept on Arkiv where anyone can read them. Check a seller here before your agent pays it.
+        </p>
+      </header>
+      <CheckSeller read={readRulings} sample={sampleSeller(state.rows)} />
       <section className="rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_8px_32px_rgba(18,45,69,0.06)] backdrop-blur-xl">
-        <h1 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Receipts</h1>
+        <h2 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Receipts</h2>
 
         {state.busy && (
           <p className="mt-3 px-1 text-sm text-[var(--muted)]" role="status">
@@ -95,6 +120,10 @@ export function ReceiptsPage() {
     </main>
   )
 }
+
+/** What "Got back" and "Received" count, for a row where either is 0. */
+export const COUNTS_NOTE =
+  'Got back and Received count only what came over the connection when vet402 paid. An answer that Arc delivered later lives on Arc.'
 
 function Row({ row }: { row: FeedRow }) {
   return (
@@ -130,6 +159,9 @@ function Row({ row }: { row: FeedRow }) {
               {short(row.transferId, 13)}
             </dd>
           </dl>
+          {(row.responseBytes === 0 || row.timesReceived === 0) && (
+            <p className="mt-2 text-xs text-pretty text-[var(--muted)]">{COUNTS_NOTE}</p>
+          )}
         </div>
       </div>
     </li>
