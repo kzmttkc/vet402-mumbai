@@ -390,12 +390,14 @@ export function createWorldService({
     if (result.nonce !== request.nonce) return fail('nonce')
     if (result.protocol_version !== PROTOCOL_VERSION) return fail('protocol version')
     // World answers success when at least one proof passed. Any proof World turned down refuses the whole request,
-    // and the selfie check must be one World passed, by name.
+    // and every credential the request asked for must be one World passed, by name.
     const results = Array.isArray(answer.results) ? answer.results : []
-    if (wanted.includes('selfie') && !results.some((line) => line?.identifier === 'selfie' && line.success === true)) {
+    const passed = (identifier: string) => results.some((line) => line?.identifier === identifier && line.success === true)
+    if (wanted.includes('selfie') && !passed('selfie')) {
       return { ok: false, view: close(record, request, SELFIE_NEEDED, 'selfie not verified') }
     }
     if (results.some((line) => line?.success !== true)) return fail('a proof failed at World')
+    if (!wanted.every(passed)) return fail('a credential is missing from World\'s results')
     // World accepts a changed tail of the session id and echoes it back. Only the whole saved string counts.
     const expected = sessionId(record)
     if (typeof result.session_id !== 'string' || !result.session_id) return fail('no session')

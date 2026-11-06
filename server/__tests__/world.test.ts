@@ -1389,6 +1389,16 @@ describe('the selfie check grows with the amount', () => {
     }
   })
 
+  test('a Proof of Human hold needs World to name Proof of Human as passed', async () => {
+    for (const answer of [{ success: true, environment: 'staging' }, { success: true, environment: 'staging', results: [] }]) {
+      const { world, hold, verifyAnswer } = await withBudget()
+      verifyAnswer.current = () => Promise.resolve(answer)
+      const started = world.startHold(usdc(0.1))
+      expect((await world.complete(started.request.id, proofFor(started, '67'))).message).toBe(NOT_APPROVED)
+      expect(hold.deposits).toEqual([])
+    }
+  })
+
   test('a Proof of Human World turned down refuses the hold, even next to a passing selfie check', async () => {
     const { world, hold, verifyAnswer } = await withBudget()
     verifyAnswer.current = () =>
