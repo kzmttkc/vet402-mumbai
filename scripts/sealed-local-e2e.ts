@@ -148,7 +148,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       abi: sealedArtifact.abi,
       bytecode: sealedArtifact.bytecode.object,
       args: constructorArgs(sealedArtifact.abi),
-    } as never),
+    }),
   })
   const address = deployed.contractAddress as Address
   const client = createSealedDelivery({ address, net })
@@ -304,8 +304,8 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       if (!log) throw new Error(`No ${eventName} on the chain`)
       return log.transactionHash
     }
-    // A contract with flushBurn holds the burned half back until someone sends it on.
-    const holdsBurnBack = sealedArtifact.abi.some((item) => (item as { name?: string }).name === 'flushBurn')
+    // The burned half waits in pendingBurn until anyone calls flushBurn. The buyer never sends it on.
+    const pendingBurn = () => pub.readContract({ address, abi: parseAbi(['function pendingBurn() view returns (uint256)']), functionName: 'pendingBurn' })
     const runScene = async (service: typeof demos, kind: 'a' | 'd' | 'e' | 'f'): Promise<{ run: DemoRunView; row: ReceiptRow | undefined; store: ReceiptRow[] }> => {
       const started = service.start(kind)
       await service.settled(started.id)
@@ -385,7 +385,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
 
     const silentScene = async (label: string, kind: 'd' | 'e', key: Hex, first: string[]) => {
       const depositBefore = await client.deposits(addressOf(key))
-      const deadBefore = await client.usdcBalance(DEAD)
+      const pendingBefore = await pendingBurn()
       const claimableBefore = await client.claimable(hold)
       const { run, row } = await runScene(demos, kind)
       console.log(`      ${label}: ${stepsLine(run)}`)
@@ -393,11 +393,10 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       check(label, 'receipt before the button', row?.outcome, first)
       // A silent claim has no sealed record on the receipt. Its claim is the seller's latest on the chain.
       const sellerClaims = await client.readClaimed(addressOf(key), 0n, await client.latestBlock())
-      const claimId = sellerClaims[sellerClaims.length - 1]?.claimId as Hex
+      const claimId = sellerClaims[sellerClaims.length - 1]?.claimId
       const owed = (await client.liabilityOf(claimId)) / 2n
       const fromBlock = await client.latestBlock()
       const pressed = await demos.act(run.id, 'finalize')
-      // The button already sent the burned half on, and the check below reads that.
       const after = receipts.list().find((r) => r.id === row?.id)
       check(label, 'receipt', after?.outcome, [
         ...first,
@@ -405,7 +404,12 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
         `Detail: The seller stayed silent. Its deposit paid ${formatUsdc(owed)} USDC back: the ${formatUsdc(DEMO_PRICE)} USDC price and ${formatUsdc(owed - DEMO_PRICE)} USDC for the gas of the dispute.`,
       ])
       check(label, 'the buyer is credited the price and its gas', (await client.claimable(hold)) - claimableBefore, owed)
-      check(label, 'the same is burned', (await client.usdcBalance(DEAD)) - deadBefore, owed)
+      check(label, 'the same waits to be burned', (await pendingBurn()) - pendingBefore, owed)
+      // Anyone sends it on. Here the deployer does, so the buyer's gas is untouched.
+      const waiting = await pendingBurn()
+      const deadBefore = await client.usdcBalance(DEAD)
+      await client.flushBurn(keys.deployer)
+      check(label, 'flushBurn burns all of it', [(await client.usdcBalance(DEAD)) - deadBefore, await pendingBurn()], [waiting, 0n])
       check(label, 'the deposit pays twice that', depositBefore - (await client.deposits(addressOf(key))), 2n * owed)
       check(label, 'next button', pressed.action, 'withdraw')
       const holdBefore = await client.usdcBalance(hold)
@@ -416,7 +420,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       check(label, 'no more buttons', withdrawn.action, null)
       const costs = await Promise.all((await Promise.all([claimTxOf(claimId), eventTx('Silent', fromBlock, claimId), eventTx('ClaimableWithdrawn', fromBlock)])).map(costOf))
       const net = owed * WEI_PER_UNIT - DEMO_PRICE * WEI_PER_UNIT - costs.reduce((sum: bigint, c) => sum + c.wei, 0n)
-      console.log(`      ${label}: claim ${costs[0]!.gas}, finalize ${costs[1]!.gas}, withdraw ${costs[2]!.gas} gas, buyer net ${net} wei`)
+      console.log(`      ${label}: claim ${costs[0].gas}, finalize ${costs[1].gas}, withdraw ${costs[2].gas} gas, buyer net ${net} wei`)
       check(label, 'the buyer gets the price and all three transactions back', net >= 0n, true)
     }
 
@@ -449,7 +453,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     check('F swapped answer', 'nothing left to take', await client.claimable(hold), 0n)
     const fCosts = await Promise.all((await Promise.all([claimTxOf(fClaimId), eventTx('Fraud', fFrom, fClaimId), eventTx('ClaimableWithdrawn', fFrom)])).map(costOf))
     const fNet = (fRefund + fOwed - DEMO_PRICE) * WEI_PER_UNIT - fCosts.reduce((sum: bigint, c) => sum + c.wei, 0n)
-    console.log(`      F: claim ${fCosts[0]!.gas}, prove ${fCosts[1]!.gas}, withdraw ${fCosts[2]!.gas} gas, buyer net ${fNet} wei`)
+    console.log(`      F: claim ${fCosts[0].gas}, prove ${fCosts[1].gas}, withdraw ${fCosts[2].gas} gas, buyer net ${fNet} wei`)
     check('F swapped answer', 'the buyer gets the price and all three transactions back', fNet >= 0n, true)
 
     // A button pressed twice does nothing the second time.
@@ -474,7 +478,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const listed = openableAnswers(file, evidence)
     check('published screen', 'every exported answer is listed from the evidence entities', listed.length, file.answers.length)
     const opened = await Promise.all(
-      listed.map(async (answer) => ({ answer, result: await openFromRecord(answer, address, { readEvidence, downloadBox: localSwarm.download }, { rpcUrl }) })),
+      listed.map(async (answer) => ({ answer, result: await openFromRecord(answer, address, { readEvidence, downloadBox: (ref) => localSwarm.download(ref) }, { rpcUrl }) })),
     )
     const aOpen = opened.filter((o) => o.answer.sellerName === 'Seller A')
     const fOpen = opened.filter((o) => o.answer.sellerName === 'Seller F')
@@ -485,7 +489,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     check('swarm', 'every sealed answer has its box on Swarm', opened.map((o) => o.result.read), listed.map(() => [FROM_ARKIV, FROM_SWARM, FROM_ARC]))
 
     // With Swarm down there is no copy to open instead.
-    const swarmDown = await openFromRecord(listed[0]!, address, { readEvidence, downloadBox: () => Promise.reject(new Error('down')) }, { rpcUrl })
+    const swarmDown = await openFromRecord(listed[0], address, { readEvidence, downloadBox: () => Promise.reject(new Error('down')) }, { rpcUrl })
     check('swarm', 'a box Swarm cannot return does not open', [swarmDown.ok, swarmDown.line], [false, BOX_NOT_FOUND])
     const silent = rows.filter((r) => r.sellerName === 'Seller E' && r.evidence)
     check('swarm', 'a claim with no key still has its box on Swarm', silent.length > 0, true)

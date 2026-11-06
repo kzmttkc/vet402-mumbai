@@ -80,7 +80,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }, cleanups
   const deployer = createWalletClient({ account: privateKeyToAccount(keys.deployer), chain, transport: http(rpcUrl), pollingInterval: 200 })
   const deploy = async (name: [string, string], args: unknown[]) => {
     const a = artifact(...name)
-    const receipt = await pub.waitForTransactionReceipt({ hash: await deployer.deployContract({ abi: a.abi, bytecode: a.bytecode.object, args } as never) })
+    const receipt = await pub.waitForTransactionReceipt({ hash: await deployer.deployContract({ abi: a.abi, bytecode: a.bytecode.object, args }) })
     return receipt.contractAddress as Address
   }
 

@@ -40,17 +40,20 @@ run_step() {
   if [ "${HAVE_TIMEOUT}" -eq 1 ] && { [ "${step_exit}" -eq 124 ] || { [ "${step_exit}" -eq 137 ] && [ "${step_elapsed}" -ge "${STEP_TIMEOUT_SECONDS}" ]; }; }; then
     echo "check: ${step_name} timed out after ${STEP_TIMEOUT_SECONDS}s." >&2
     echo "check: the sandbox is likely busy with another heavy process (forge build, bun install, dev server restart)." >&2
-    echo "check: wait for background work to finish, then re-run: bun run check" >&2
+    echo "check: wait for background work to finish, then re-run: bash scripts/check.sh" >&2
     fail=1
   elif [ "${step_exit}" -eq 137 ]; then
-    echo "check: ${step_name} was killed (exit 137) after ${step_elapsed}s — likely out of memory. Stop other heavy processes and re-run: bun run check" >&2
+    echo "check: ${step_name} was killed (exit 137) after ${step_elapsed}s — likely out of memory. Stop other heavy processes and re-run: bash scripts/check.sh" >&2
     fail=1
   elif [ "${step_exit}" -ne 0 ]; then
     fail=1
   fi
 }
 
-run_step lint bun run lint
-run_step typecheck bun run typecheck
+# Bun may only be reachable through npx, pinned to the version the lockfile was made with.
+if command -v bun > /dev/null 2>&1; then BUN=(bun); else BUN=(npx --yes bun@1.3.14); fi
+
+run_step lint "${BUN[@]}" run lint
+run_step typecheck "${BUN[@]}" run typecheck
 
 exit "${fail}"

@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   if (account.address.toLowerCase() === VET402_WRITER.toLowerCase()) throw new Error('ARKIV_OTHER_KEY is the production writer. Use a second key.')
   const chain = rabdi({ accessKey })
   const reads = createPublicClient({ chain, transport: http(undefined, { retryCount: 0 }) })
-  const address = addressColumn(payTo!)
+  const address = addressColumn(payTo)
 
   const rulingsBy = (writer: Hex) =>
     readAllPages((offset) =>

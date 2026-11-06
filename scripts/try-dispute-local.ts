@@ -112,7 +112,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
 
   const deployer = createWalletClient({ account: privateKeyToAccount(keys.deployer), chain, transport: http(rpcUrl), pollingInterval: 200 })
   const deployed = await pub.waitForTransactionReceipt({
-    hash: await deployer.deployContract({ abi: sealedArtifact.abi, bytecode: sealedArtifact.bytecode.object, args: constructorArgs(sealedArtifact.abi) } as never),
+    hash: await deployer.deployContract({ abi: sealedArtifact.abi, bytecode: sealedArtifact.bytecode.object, args: constructorArgs(sealedArtifact.abi) }),
   })
   const address = deployed.contractAddress as Address
   const client = createSealedDelivery({ address, net })
