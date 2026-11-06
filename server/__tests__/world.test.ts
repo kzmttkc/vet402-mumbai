@@ -7,6 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import express from 'express'
 import { hashSignal } from '@worldcoin/idkit-core/hashing'
+import { COMPARISON_EXTRA_HOLD, createDemoService, fromApprovedHold } from '../demo'
+import type { DemoPorts } from '../demo'
 import { createHoldService, HoldError } from '../hold'
 import type { HoldPorts } from '../hold'
 import { createHoldStore } from '../holdStore'
@@ -15,14 +17,18 @@ import {
   BUDGET_SET,
   createWorldPorts,
   createWorldService,
+  gasFromBudget,
   NOT_APPROVED,
+  OVER_BUDGET,
   readWorldConfig,
   WAITING,
   WorldError,
 } from '../world'
 import type { IdkitParams, VerifyAnswer, WorldEnvironment } from '../world'
-import { mountWorld } from '../worldRoutes'
+import { mountWorld, refuseCrossSite, SESSION_HEADER } from '../worldRoutes'
 import { createWorldStore } from '../worldStore'
+import { SELLER_C_EXTRA_HOLD } from '../demo'
+import { memoryStore } from './helpers'
 
 // Every test works inside its own temporary folder. World is always a stand-in here: nothing goes to developer.world.org.
 let dir: string
@@ -38,6 +44,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+const TOKEN = 'test-session-token'
 const SESSION = `session_${'ab'.repeat(32)}${'cd'.repeat(32)}`
 const usdc = (value: number) => BigInt(Math.round(value * 1_000_000))
 
@@ -100,8 +107,27 @@ function setup(options: { ttlMs?: number; environment?: WorldEnvironment } = {})
 
 type Started = { request: { id: string }; idkit: IdkitParams }
 
-function sessionResult(started: Started, sessionId = SESSION) {
-  return { protocol_version: '4.0', nonce: started.idkit.rp_context.nonce, environment: 'staging', session_id: sessionId, responses: [] }
+// Budget proofs get nullifiers from 9001 up, so they never meet the small ones the hold tests pick.
+let budgetNullifier = 9000
+
+/** What IDKit returns for createSession with the budget's signal: one proof with a signal hash and a session nullifier. */
+function sessionResult(started: Started, sessionId = SESSION, nullifier = String(++budgetNullifier)) {
+  return {
+    protocol_version: '4.0',
+    nonce: started.idkit.rp_context.nonce,
+    environment: 'staging',
+    session_id: sessionId,
+    responses: [
+      {
+        identifier: 'proof_of_human',
+        signal_hash: hashSignal(started.idkit.signal as string),
+        proof: ['1', '2', '3', '4', '5'],
+        session_nullifier: [nullifier, '888'],
+        issuer_schema_id: 1,
+        expires_at_min: 1,
+      },
+    ],
+  }
 }
 
 function proofFor(started: Started, nullifier: string, change: Record<string, unknown> = {}) {
@@ -350,7 +376,7 @@ describe('refusals: no hold is created', () => {
     expect(() => empty.world.startHold(usdc(1))).toThrow(NOT_APPROVED)
 
     const { world } = await withBudget({}, usdc(5))
-    expect(() => world.startHold(usdc(5.01))).toThrow(NOT_APPROVED)
+    expect(() => world.startHold(usdc(5.01))).toThrow(OVER_BUDGET)
     expect(world.startHold(usdc(5)).request.id).toStartWith('hold_')
   })
 
@@ -377,21 +403,41 @@ describe('the path that goes through', () => {
     const { world, verifyCalls, store } = setup()
     const started = world.startBudget(usdc(10))
     expect(started.idkit.session_id).toBeUndefined()
-    expect(started.idkit.signal).toBeUndefined()
+    expect(started.idkit.signal).toBe(`budget:10:${started.request.id}`)
 
-    const result = sessionResult(started)
+    const result = sessionResult(started, SESSION, '0x5eed')
     const view = await world.complete(started.request.id, result)
 
     expect(view).toMatchObject({ state: 'done', message: BUDGET_SET })
     expect(verifyCalls).toEqual([result])
-    expect(store.read().budget).toEqual({ amount: usdc(10).toString(), sessionId: SESSION })
-    expect(world.status().budgetSet).toBe(true)
+    expect(store.read().budget).toEqual({
+      id: started.request.id,
+      amount: usdc(10).toString(),
+      sessionId: SESSION,
+      used: '0',
+      nullifier: '5eed',
+    })
+    expect(world.status()).toMatchObject({ budgetSet: true, budgetLeft: '10' })
   })
 
-  test('a saved session id is never replaced', async () => {
+  test('a saved budget is replaced only when a new budget proof passes', async () => {
     const { world, store } = await withBudget()
-    expect(() => world.startBudget(usdc(20))).toThrow(NOT_APPROVED)
-    expect(store.read().budget?.sessionId).toBe(SESSION)
+    const before = store.read().budget
+
+    const refused = world.startBudget(usdc(20))
+    world.cancel(refused.request.id)
+    expect(store.read().budget).toEqual(before)
+
+    // A new budget is a proof of the saved session: another person's session is refused.
+    const other = `session_${'12'.repeat(64)}`
+    const stranger = world.startBudget(usdc(20))
+    expect(stranger.idkit.session_id).toBe(SESSION)
+    expect((await world.complete(stranger.request.id, sessionResult(stranger, other))).message).toBe(NOT_APPROVED)
+    expect(store.read().budget).toEqual(before)
+
+    const next = world.startBudget(usdc(20))
+    expect((await world.complete(next.request.id, sessionResult(next))).message).toBe(BUDGET_SET)
+    expect(store.read().budget).toMatchObject({ id: next.request.id, amount: usdc(20).toString(), sessionId: SESSION, used: '0' })
   })
 
   test('sending a finished budget request again changes nothing', async () => {
@@ -410,15 +456,16 @@ describe('the path that goes through', () => {
 
     expect(hold.deposits).toEqual([])
     expect(store.read().request).toMatchObject({ kind: 'hold', amount: usdc(1.5).toString(), state: 'waiting' })
-    expect(store.read().request?.jobId).toStartWith('job_')
+    expect(store.read().request).not.toHaveProperty('jobId')
     expect(started.idkit.session_id).toBe(SESSION)
     expect(started.idkit.signal).toBe(`${started.request.id}:1.5`)
 
     const view = await world.complete(started.request.id, proofFor(started, '99'))
 
-    expect(view).toMatchObject({ state: 'done', message: 'Held 1.5 USDC for this job.' })
+    expect(view).toMatchObject({ state: 'done', message: 'Held 1.5 USDC for your agent.' })
     expect(hold.deposits).toEqual([usdc(1.5)])
-    expect(store.read().nullifiers).toEqual([(99).toString(16)])
+    expect(store.read().nullifiers.at(-1)).toBe((99).toString(16))
+    expect(store.read().nullifiers).toHaveLength(2)
   })
 
   test('the same person approves a second hold with a new nullifier', async () => {
@@ -429,7 +476,7 @@ describe('the path that goes through', () => {
     const second = world.startHold(usdc(2))
     const view = await world.complete(second.request.id, proofFor(second, '2'))
 
-    expect(view.message).toBe('Held 2 USDC for this job.')
+    expect(view.message).toBe('Held 2 USDC for your agent.')
     // The first hold's leftover stays, so the second deposit is only the difference.
     expect(hold.deposits).toEqual([usdc(1), usdc(1)])
   })
@@ -442,7 +489,9 @@ describe('the path that goes through', () => {
     const view = await world.complete(started.request.id, proofFor(started, '7'))
 
     expect(view).toMatchObject({ state: 'closed', message: 'The hold could not be set up. Please try again.' })
-    expect(store.read().nullifiers).toEqual(['7'])
+    expect(store.read().nullifiers.at(-1)).toBe('7')
+    // The deposit may have reached the chain, so the budget stays charged.
+    expect(store.read().budget?.used).toBe(usdc(1).toString())
   })
 
   test('a balance too low shows the existing sentence', async () => {
@@ -502,7 +551,7 @@ describe('what the browser gets', () => {
     await world.complete(started.request.id, proofFor(started, '0xfeedface'))
 
     const shown = JSON.stringify(world.status())
-    for (const value of [SESSION, 'feedface', started.idkit.rp_context.nonce, started.idkit.rp_context.signature, 'job_']) {
+    for (const value of [SESSION, 'feedface', started.idkit.rp_context.nonce, started.idkit.rp_context.signature]) {
       expect(shown).not.toContain(value)
     }
   })
@@ -571,6 +620,7 @@ describe('the join with the rest of the app', () => {
     const worldOn = mountWorld(app, {
       env,
       dataDir: dir,
+      token: TOKEN,
       createHold: (amount) => holds.start(amount),
       fetchImpl: (() => Promise.resolve(new Response(JSON.stringify(verifyBody)))) as unknown as typeof fetch,
     })
@@ -583,9 +633,13 @@ describe('the join with the rest of the app', () => {
     })
     servers.push(server)
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    const post = (route: string, body: unknown = {}) =>
-      fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    return { hold, worldOn, base, post }
+    const post = (route: string, body: unknown = {}, token: string | null = TOKEN) =>
+      fetch(`${base}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token === null ? {} : { [SESSION_HEADER]: token }) },
+        body: JSON.stringify(body),
+      })
+    return { hold, holds, worldOn, base, post }
   }
 
   const fullEnv = () => ({
@@ -597,7 +651,7 @@ describe('the join with the rest of the app', () => {
   test('without the variables the hold stays as it is today and nothing is written', async () => {
     const { hold, worldOn, base, post } = await listen({})
 
-    expect(worldOn).toBe(false)
+    expect(worldOn).toBeNull()
     expect(await (await fetch(`${base}/world/status`)).json()).toEqual({ enabled: false })
     expect((await post('/world/budget', { amount: '1' })).status).toBe(404)
     expect((await post('/hold', { amount: '1' })).status).toBe(200)
@@ -635,7 +689,7 @@ describe('the join with the rest of the app', () => {
     const started = (await (await post('/world/hold', { amount: '2' })).json()) as Started
     expect(await (await fetch(`${base}/world/status`)).json()).toMatchObject({ budgetSet: true, request: { message: WAITING } })
     const held = await post(`/world/requests/${started.request.id}/complete`, { result: proofFor(started, '5') })
-    expect(await held.json()).toMatchObject({ state: 'done', message: 'Held 2 USDC for this job.' })
+    expect(await held.json()).toMatchObject({ state: 'done', message: 'Held 2 USDC for your agent.' })
     expect(hold.deposits).toEqual([usdc(2)])
 
     const next = (await (await post('/world/hold', { amount: '1' })).json()) as Started
@@ -683,7 +737,7 @@ describe('production: the real World App', () => {
 
     const started = world.startHold(usdc(2))
     const view = await world.complete(started.request.id, proofFor(started, '42', production))
-    expect(view).toMatchObject({ state: 'done', message: 'Held 2 USDC for this job.' })
+    expect(view).toMatchObject({ state: 'done', message: 'Held 2 USDC for your agent.' })
     expect(hold.deposits).toEqual([usdc(2)])
   })
 
@@ -739,14 +793,14 @@ describe('production: the real World App', () => {
     const started = async (extra: Record<string, string>) => {
       const app = express()
       app.use(express.json())
-      mountWorld(app, { env: { ...env, ...extra }, dataDir: mkdtempSync(path.join(dir, 'env-')), createHold: () => Promise.resolve() })
+      mountWorld(app, { env: { ...env, ...extra }, dataDir: mkdtempSync(path.join(dir, 'env-')), token: TOKEN, createHold: () => Promise.resolve() })
       const server = await new Promise<Server>((resolve) => {
         const s = app.listen(0, '127.0.0.1', () => resolve(s))
       })
       try {
         const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/world/budget`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', [SESSION_HEADER]: TOKEN },
           body: JSON.stringify({ amount: '1' }),
         })
         return (await res.json()) as Started
@@ -790,5 +844,441 @@ describe('production keeps its own record', () => {
     expect(existsSync(path.join(dir, 'world-production.json'))).toBe(true)
     expect(readFileSync(path.join(dir, 'world.json'), 'utf8')).toBe(before)
     expect(staging.status().budgetSet).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------
+// Production: every way the hold could grow, tried one by one. Each must go through an approval or be closed.
+
+async function productionBudget(amount = usdc(1)) {
+  const ctx = setup({ environment: 'production' })
+  const started = ctx.world.startBudget(amount)
+  const view = await ctx.world.complete(started.request.id, { ...sessionResult(started), environment: 'production' })
+  expect(view.message).toBe(BUDGET_SET)
+  ctx.verifyCalls.length = 0
+  return ctx
+}
+
+async function approveHold(world: ReturnType<typeof setup>['world'], amount: bigint, nullifier: string) {
+  const started = world.startHold(amount)
+  return world.complete(started.request.id, proofFor(started, nullifier, { environment: 'production' }))
+}
+
+function fakeGasClient(balance = 0n, cost = usdc(0.01)) {
+  const transfers: bigint[] = []
+  const client = {
+    gasCost: () => Promise.resolve(cost),
+    usdcBalance: () => Promise.resolve(balance),
+    transferUsdc: (_from: `0x${string}`, _to: `0x${string}`, amount: bigint) => {
+      transfers.push(amount)
+      return Promise.resolve()
+    },
+    ensureGas: () => Promise.reject(new Error('the plain ensureGas must not run in production')),
+  }
+  return { client, transfers }
+}
+
+const KEY = `0x${'11'.repeat(32)}` as const
+const WALLET = `0x${'22'.repeat(20)}` as const
+
+describe('production: no way grows the hold without an approval', () => {
+  const servers: Server[] = []
+  afterEach(() => {
+    for (const server of servers.splice(0)) server.close()
+  })
+
+  async function listenProduction() {
+    const hold = fakeHoldPorts()
+    const holds = createHoldService(hold.ports, createHoldStore(dir))
+    const app = express()
+    app.use(express.json())
+    mountWorld(app, {
+      env: { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: `0x${randomBytes(32).toString('hex')}`, WORLD_ENVIRONMENT: 'production' },
+      dataDir: dir,
+      token: TOKEN,
+      createHold: (amount) => holds.start(amount),
+      fetchImpl: (() => Promise.resolve(new Response(JSON.stringify({ success: true, environment: 'production' })))) as unknown as typeof fetch,
+    })
+    app.post('/hold', (_req, res) => void holds.start(usdc(1)).then(() => res.json({ ok: true })))
+    const server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s))
+    })
+    servers.push(server)
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const post = (route: string, body: unknown = {}) =>
+      fetch(`${base}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', [SESSION_HEADER]: TOKEN },
+        body: JSON.stringify(body),
+      })
+    return { hold, post }
+  }
+
+  test('path 1, the plain hold route: refused, nothing deposited', async () => {
+    const { hold, post } = await listenProduction()
+    expect((await post('/hold', { amount: '1' })).status).toBe(403)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('path 2, a World hold with no budget: refused before any QR code', async () => {
+    const { hold, post } = await listenProduction()
+    const res = await post('/world/hold', { amount: '1' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: NOT_APPROVED })
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('path 3, a World hold past the budget: refused before any QR code', async () => {
+    const { hold, post } = await listenProduction()
+    const budget = (await (await post('/world/budget', { amount: '1' })).json()) as Started
+    const done = await post(`/world/requests/${budget.request.id}/complete`, {
+      result: { ...sessionResult(budget), environment: 'production' },
+    })
+    expect(await done.json()).toMatchObject({ message: BUDGET_SET })
+    const res = await post('/world/hold', { amount: '1.01' })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: OVER_BUDGET })
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('path 4, the replay test: the last approval is refused for the new hold and nothing is held', async () => {
+    const { world, hold } = await productionBudget()
+    expect((await approveHold(world, usdc(0.5), '1')).state).toBe('done')
+    const next = world.startHold(usdc(0.3))
+    expect(await world.useLastApproval(next.request.id)).toMatchObject({ state: 'closed', message: ANOTHER_HOLD })
+    expect(hold.deposits).toEqual([usdc(0.5)])
+    expect(world.status().budgetLeft).toBe('0.5')
+  })
+
+  test('path 5, the compare scene: it spends from the approved hold and adds nothing to it', async () => {
+    const grown: bigint[] = []
+    let prepared = 0
+    const ports: DemoPorts = {
+      holdAvailable: () => Promise.resolve(COMPARISON_EXTRA_HOLD - 1n),
+      growHold: (amount) => {
+        grown.push(amount)
+        return Promise.resolve()
+      },
+      prepare: () => {
+        prepared += 1
+        return Promise.reject(new Error('no seller in this test'))
+      },
+      confirmOnePayment: () => Promise.resolve(false),
+      countPayments: () => Promise.resolve(0),
+    }
+    const demos = createDemoService(
+      { ...ports, growHold: fromApprovedHold(ports) },
+      { a: { name: 'A', url: 'http://a', address: '0xa' }, b: { name: 'B', url: 'http://b', address: '0xb' } },
+      memoryStore(),
+    )
+    const run = demos.start('compare')
+    await demos.settled(run.id)
+    expect(demos.get(run.id)).toMatchObject({ state: 'failed', error: 'The hold doesn’t cover this. Hold more first.' })
+    expect(grown).toEqual([])
+    expect(prepared).toBe(0)
+  })
+
+  test('path 6, the Seller C scene: the extra hold is never added, the approved hold must cover it', async () => {
+    // fromApprovedHold is handed only a reader of the hold, so it has no way to deposit.
+    const reads: bigint[] = []
+    const reader = (available: bigint) => ({
+      holdAvailable: () => {
+        reads.push(available)
+        return Promise.resolve(available)
+      },
+    })
+    await expect(fromApprovedHold(reader(0n))(SELLER_C_EXTRA_HOLD)).rejects.toThrow('The hold doesn’t cover this. Hold more first.')
+    await expect(fromApprovedHold(reader(SELLER_C_EXTRA_HOLD))(SELLER_C_EXTRA_HOLD)).resolves.toBeUndefined()
+    expect(reads).toEqual([0n, SELLER_C_EXTRA_HOLD])
+  })
+
+  test('path 7, gas for the hold wallet: refused with no budget, nothing sent', async () => {
+    const { world } = setup({ environment: 'production' })
+    const { client, transfers } = fakeGasClient()
+    await expect(gasFromBudget(client, world.spend).ensureGas(KEY, WALLET, 1n)).rejects.toThrow(OVER_BUDGET)
+    expect(transfers).toEqual([])
+  })
+
+  test('path 7, gas for the hold wallet: taken from the approved budget, and refused past it', async () => {
+    const { world, store } = await productionBudget(usdc(1))
+    const { client, transfers } = fakeGasClient(usdc(0.002), usdc(0.01))
+    expect(await gasFromBudget(client, world.spend).ensureGas(KEY, WALLET, 1n)).toBe(usdc(0.008))
+    expect(transfers).toEqual([usdc(0.008)])
+    expect(store.read().budget?.used).toBe(usdc(0.008).toString())
+
+    // A wallet that already has the gas gets nothing and is charged nothing.
+    const full = fakeGasClient(usdc(0.01), usdc(0.01))
+    expect(await gasFromBudget(full.client, world.spend).ensureGas(KEY, WALLET, 1n)).toBe(0n)
+    expect(full.transfers).toEqual([])
+
+    expect((await approveHold(world, usdc(0.99), '2')).state).toBe('done')
+    const late = fakeGasClient(0n, usdc(0.01))
+    await expect(gasFromBudget(late.client, world.spend).ensureGas(KEY, WALLET, 1n)).rejects.toThrow(OVER_BUDGET)
+    expect(late.transfers).toEqual([])
+  })
+
+  test('path 8, gas taken while a hold waits for approval: the hold is checked again before money moves', async () => {
+    const { world, hold } = await productionBudget(usdc(1))
+    const started = world.startHold(usdc(1))
+    world.spend(usdc(0.01))
+    const view = await world.complete(started.request.id, proofFor(started, '3', { environment: 'production' }))
+    expect(view).toMatchObject({ state: 'closed', message: OVER_BUDGET })
+    expect(hold.deposits).toEqual([])
+  })
+})
+
+describe('the budget is a real budget', () => {
+  test('with a 1 USDC budget, a second 0.6 USDC hold is refused', async () => {
+    const { world, hold } = await productionBudget(usdc(1))
+    expect(await approveHold(world, usdc(0.6), '1')).toMatchObject({ state: 'done', message: 'Held 0.6 USDC for your agent.' })
+    expect(world.status().budgetLeft).toBe('0.4')
+    expect(() => world.startHold(usdc(0.6))).toThrow(OVER_BUDGET)
+    expect(hold.deposits).toEqual([usdc(0.6)])
+    // What is left can still be approved.
+    expect((await approveHold(world, usdc(0.4), '2')).state).toBe('done')
+    expect(world.status().budgetLeft).toBe('0')
+  })
+
+  test('a hold the hold service refuses before any deposit gives its room back', async () => {
+    const ctx = setup()
+    const failing = createWorldService({
+      appId: 'app_x',
+      rpId: 'rp_x',
+      store: ctx.store,
+      ports: {
+        sign: () => ({ sig: 's', nonce: `0x${randomBytes(4).toString('hex')}`, createdAt: 1, expiresAt: 121 }),
+        verify: () => Promise.resolve({ success: true, environment: 'staging' }),
+        createHold: () => Promise.reject(new HoldError('NOT_ENOUGH_BALANCE', 'Your balance is too low for this hold.')),
+      },
+    })
+    const budget = failing.startBudget(usdc(1))
+    await failing.complete(budget.request.id, sessionResult(budget))
+    const started = failing.startHold(usdc(1))
+    expect((await failing.complete(started.request.id, proofFor(started, '3'))).message).toBe('Your balance is too low for this hold.')
+    expect(failing.status().budgetLeft).toBe('1')
+  })
+
+  test('a budget saved before budgets had their own proof counts as unset', async () => {
+    const { world, store } = setup()
+    store.write({ budget: { amount: usdc(5).toString(), sessionId: SESSION } as never, request: null, nullifiers: [], lastApproval: null })
+    expect(world.status()).toMatchObject({ budgetSet: false, budgetLeft: null })
+    expect(() => world.startHold(usdc(1))).toThrow(NOT_APPROVED)
+    const fresh = world.startBudget(usdc(1))
+    expect((await world.complete(fresh.request.id, sessionResult(fresh))).message).toBe(BUDGET_SET)
+    expect(world.status()).toMatchObject({ budgetSet: true, budgetLeft: '1' })
+  })
+})
+
+describe('the budget proof', () => {
+  test('its signal carries the amount and the budget id, so a proof for another amount is refused', async () => {
+    const { world, store, verifyCalls } = setup()
+    const started = world.startBudget(usdc(1))
+    const otherAmount = { ...started, idkit: { ...started.idkit, signal: `budget:5:${started.request.id}` } }
+    const view = await world.complete(started.request.id, sessionResult(otherAmount))
+    expect(view).toMatchObject({ state: 'closed', message: NOT_APPROVED })
+    expect(verifyCalls).toEqual([])
+    expect(store.read().budget).toBeNull()
+  })
+
+  test('its signal and nullifier are recorded with the budget', async () => {
+    const { world, store } = setup()
+    const started = world.startBudget(usdc(1))
+    expect(started.idkit.signal).toBe(`budget:1:${started.request.id}`)
+    await world.complete(started.request.id, sessionResult(started, SESSION, '0xb0d6e7'))
+    const record = store.read()
+    expect(record.budget).toMatchObject({ id: started.request.id, amount: usdc(1).toString(), nullifier: 'b0d6e7' })
+    expect(record.nullifiers).toEqual(['b0d6e7'])
+  })
+
+  test('the same budget proof is refused when it is used again', async () => {
+    const { world, store, hold } = setup()
+    const first = world.startBudget(usdc(1))
+    const proof = sessionResult(first, SESSION, '0xb0d6e7')
+    expect((await world.complete(first.request.id, proof)).message).toBe(BUDGET_SET)
+    const saved = store.read().budget
+
+    // Sent as it is for a new budget: the signal names the old budget id.
+    const again = world.startBudget(usdc(1))
+    expect((await world.complete(again.request.id, proof)).message).toBe(NOT_APPROVED)
+
+    // Rebuilt for the new budget but with the same nullifier: refused as a reused proof.
+    const rebuilt = world.startBudget(usdc(1))
+    expect((await world.complete(rebuilt.request.id, sessionResult(rebuilt, SESSION, '0xb0d6e7'))).message).toBe(NOT_APPROVED)
+
+    // Sent for a hold: another signal again.
+    const asHold = world.startHold(usdc(1))
+    expect((await world.complete(asHold.request.id, { ...proof, nonce: asHold.idkit.rp_context.nonce })).message).toBe(ANOTHER_HOLD)
+
+    expect(store.read().budget).toEqual(saved)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('a budget proof with no signal or no nullifier is refused', async () => {
+    const { world, store } = setup()
+    const noSignal = world.startBudget(usdc(1))
+    expect((await world.complete(noSignal.request.id, { ...sessionResult(noSignal), responses: [] })).message).toBe(NOT_APPROVED)
+    const noNullifier = world.startBudget(usdc(1))
+    const result = sessionResult(noNullifier) as ReturnType<typeof sessionResult> & { responses: Array<Record<string, unknown>> }
+    delete result.responses[0].session_nullifier
+    expect((await world.complete(noNullifier.request.id, result)).message).toBe(NOT_APPROVED)
+    expect(store.read().budget).toBeNull()
+  })
+})
+
+describe('the session token', () => {
+  const servers: Server[] = []
+  afterEach(() => {
+    for (const server of servers.splice(0)) server.close()
+  })
+
+  async function start() {
+    const app = express()
+    app.use(express.json())
+    const created: bigint[] = []
+    mountWorld(app, {
+      env: { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: `0x${randomBytes(32).toString('hex')}` },
+      dataDir: dir,
+      token: TOKEN,
+      createHold: (amount) => {
+        created.push(amount)
+        return Promise.resolve()
+      },
+    })
+    const server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s))
+    })
+    servers.push(server)
+    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, created }
+  }
+
+  const routes = ['/world/budget', '/world/hold', '/world/requests/x/complete', '/world/requests/x/cancel', '/world/requests/x/use-last-approval']
+
+  for (const route of routes) {
+    test(`${route}: 401 without the token, 403 with a wrong one, and nothing changes`, async () => {
+      const { base, created } = await start()
+      const send = (headers: Record<string, string>) =>
+        fetch(`${base}${route}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ amount: '1' }),
+        })
+      expect((await send({})).status).toBe(401)
+      expect((await send({ [SESSION_HEADER]: 'wrong' })).status).toBe(403)
+      expect((await send({ [SESSION_HEADER]: `${TOKEN}x` })).status).toBe(403)
+      expect(createWorldStore(dir).read()).toEqual({ budget: null, request: null, nullifiers: [], lastApproval: null })
+      expect(created).toEqual([])
+    })
+  }
+
+  test('the token goes only to a request the browser marks as from the same page', async () => {
+    const { base } = await start()
+    const ask = (site?: string) => fetch(`${base}/world/session`, { headers: site ? { 'Sec-Fetch-Site': site } : {} })
+    expect((await ask()).status).toBe(403)
+    expect((await ask('cross-site')).status).toBe(403)
+    expect((await ask('same-site')).status).toBe(403)
+    const mine = await ask('same-origin')
+    expect(mine.status).toBe(200)
+    expect(await mine.json()).toEqual({ token: TOKEN })
+  })
+
+  test('the status needs no token and never shows it', async () => {
+    const { base } = await start()
+    const res = await fetch(`${base}/world/status`)
+    expect(res.status).toBe(200)
+    expect(await res.text()).not.toContain(TOKEN)
+  })
+})
+
+describe('what the verified result must be', () => {
+  test('a result that is not protocol 4.0 is refused, for the budget and for a hold', async () => {
+    const { world, store } = setup()
+    const budget = world.startBudget(usdc(1))
+    expect((await world.complete(budget.request.id, { ...sessionResult(budget), protocol_version: '3.0' })).message).toBe(NOT_APPROVED)
+    expect(store.read().budget).toBeNull()
+
+    const ok = await withBudget()
+    const started = ok.world.startHold(usdc(1))
+    for (const version of ['3.0', undefined, 4]) {
+      const next = ok.world.startHold(usdc(1))
+      const view = await ok.world.complete(next.request.id, proofFor(next, '1', { protocol_version: version }))
+      expect(view.message).toBe(NOT_APPROVED)
+    }
+    expect(started.request.id).toStartWith('hold_')
+    expect(ok.hold.deposits).toEqual([])
+  })
+
+  test('a credential other than proof_of_human is refused', async () => {
+    const { world, hold } = await withBudget()
+    for (const identifier of ['selfie', 'passport', undefined]) {
+      const started = world.startHold(usdc(1))
+      const proof = proofFor(started, '1') as ReturnType<typeof proofFor> & { responses: Array<Record<string, unknown>> }
+      proof.responses[0].identifier = identifier
+      expect((await world.complete(started.request.id, proof)).message).toBe(NOT_APPROVED)
+    }
+    const budget = setup()
+    const started = budget.world.startBudget(usdc(1))
+    const result = sessionResult(started) as ReturnType<typeof sessionResult> & { responses: Array<Record<string, unknown>> }
+    result.responses[0].identifier = 'selfie'
+    expect((await budget.world.complete(started.request.id, result)).message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('a session nullifier sent as a bare string is taken, and is the same one as in the array form', async () => {
+    const { world, hold, store } = await withBudget()
+    const first = world.startHold(usdc(1))
+    const proof = proofFor(first, '1') as ReturnType<typeof proofFor> & { responses: Array<Record<string, unknown>> }
+    proof.responses[0].session_nullifier = '0xabc'
+    expect((await world.complete(first.request.id, proof)).state).toBe('done')
+    expect(store.read().nullifiers.at(-1)).toBe('abc')
+
+    const second = world.startHold(usdc(1))
+    expect((await world.complete(second.request.id, proofFor(second, String(0xabc)))).message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([usdc(1)])
+  })
+})
+
+describe('found in review', () => {
+  test('two answers for one hold that World confirms at the same moment make one hold and charge the budget once', async () => {
+    const { world, hold, store, verifyAnswer } = await withBudget({}, usdc(1))
+    const started = world.startHold(usdc(1))
+    const waiting: Array<() => void> = []
+    verifyAnswer.current = () => new Promise((resolve) => waiting.push(() => resolve({ success: true, environment: 'staging' })))
+
+    const both = Promise.all([
+      world.complete(started.request.id, proofFor(started, '1')),
+      world.complete(started.request.id, proofFor(started, '1')),
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (const answer of waiting) answer()
+    await both
+
+    expect(hold.deposits).toEqual([usdc(1)])
+    expect(store.read().budget?.used).toBe(usdc(1).toString())
+    expect(store.read().nullifiers.filter((n) => n === '1')).toHaveLength(1)
+    expect(() => world.startHold(usdc(0.1))).toThrow(OVER_BUDGET)
+  })
+
+  test('every POST the browser marks as from another site is refused, the app\'s own page and non-browser calls pass', async () => {
+    const app = express()
+    app.use(refuseCrossSite)
+    let reached = 0
+    app.post('/demo/compare', (_req, res) => void res.json({ n: ++reached }))
+    app.get('/balances', (_req, res) => void res.json({ ok: true }))
+    const server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s))
+    })
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+      const post = (site?: string) => fetch(`${base}/demo/compare`, { method: 'POST', headers: site ? { 'Sec-Fetch-Site': site } : {} })
+      expect((await post('cross-site')).status).toBe(403)
+      expect((await post('same-site')).status).toBe(403)
+      expect((await post('none')).status).toBe(403)
+      expect(reached).toBe(0)
+      expect((await post('same-origin')).status).toBe(200)
+      expect((await post()).status).toBe(200)
+      expect((await fetch(`${base}/balances`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(200)
+    } finally {
+      server.close()
+    }
   })
 })

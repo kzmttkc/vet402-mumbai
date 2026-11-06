@@ -9,8 +9,6 @@ export interface WorldRequest {
   id: string
   kind: WorldRequestKind
   amount: string
-  /** Only a pending hold has a job id. */
-  jobId: string | null
   nonce: string
   expiresAt: number
   state: WorldRequestState
@@ -18,10 +16,23 @@ export interface WorldRequest {
   message: string
 }
 
+/** A budget set with its own World ID proof. Amounts are raw USDC units as strings. */
+export interface WorldBudget {
+  /** The budget request's id. It is part of the signal the budget proof carries. */
+  id: string
+  amount: string
+  sessionId: string
+  /** Every hold approved under this budget, plus the gas sent for it. It only goes down when a hold fails before money moved. */
+  used: string
+  /** The session nullifier of the proof that set this budget, as lowercase hex. */
+  nullifier: string
+}
+
 export interface WorldRecord {
-  budget: { amount: string; sessionId: string } | null
+  /** A file written before budgets had their own proof holds only amount and sessionId. Such a budget counts as unset. */
+  budget: WorldBudget | null
   request: WorldRequest | null
-  /** Every accepted session nullifier, as lowercase hex of the 256-bit integer. */
+  /** Every accepted session nullifier, budget proofs and hold proofs alike, as lowercase hex of the 256-bit integer. */
   nullifiers: string[]
   /** The last accepted hold proof. Only "Use the last approval" reads it. */
   lastApproval: unknown

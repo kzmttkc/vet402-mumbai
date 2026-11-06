@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Check, Copy, Loader2 } from 'lucide-react'
 import type { WorldApproval } from '@/hooks/useWorldApproval'
+import { parseUsdc } from '@/onchain-money'
 
 const primaryButton =
   'flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ink)] px-5 text-base font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
@@ -10,6 +11,16 @@ const ghostButton =
   'flex min-h-11 w-full items-center justify-center rounded-full px-5 text-sm font-semibold text-[var(--muted)] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]'
 
 const COPIED_MS = 1500
+
+/** A hold the budget cannot cover asks for a new budget first, with its own approval. */
+function fitsBudget(amount: string | null, left: string | null): boolean {
+  if (!amount || left === null) return false
+  try {
+    return parseUsdc(amount) <= parseUsdc(left)
+  } catch {
+    return false
+  }
+}
 
 export function WorldHoldActions({
   world,
@@ -28,6 +39,7 @@ export function WorldHoldActions({
   const creating = request?.state === 'creating'
   // Every sentence about a request comes from the backend. A closed request reads as a refusal.
   const refused = request?.state === 'closed'
+  const holdNext = world.budgetSet && fitsBudget(amount, world.budgetLeft)
 
   async function copy() {
     await world.copy()
@@ -61,7 +73,17 @@ export function WorldHoldActions({
               Copy the simulator request
             </button>
           )}
-          {request.kind === 'hold' && world.hasLastApproval && (
+          {request.kind === 'hold' && world.hasLastApproval && world.production && (
+            <div className="space-y-1">
+              <button type="button" onClick={() => void world.useLastApproval()} className={secondaryButton}>
+                Replay test
+              </button>
+              <p className="text-center text-xs text-pretty text-[var(--muted)]">
+                Sends the last hold’s approval for this one. It should be refused, and nothing is held.
+              </p>
+            </div>
+          )}
+          {request.kind === 'hold' && world.hasLastApproval && !world.production && (
             <button type="button" onClick={() => void world.useLastApproval()} className={secondaryButton}>
               Use the last approval
             </button>
@@ -76,17 +98,23 @@ export function WorldHoldActions({
           disabled={!amount || busy || creating}
           onClick={() => {
             if (!amount) return
-            void (world.budgetSet ? world.hold(amount) : world.setBudget(amount))
+            void (holdNext ? world.hold(amount) : world.setBudget(amount))
           }}
           className={primaryButton}
         >
           {(busy || creating) && <Loader2 size={18} className="animate-spin" aria-hidden />}
           {busy || creating
             ? 'Setting up the hold…'
-            : world.budgetSet
-              ? `Hold ${amount ?? text} USDC for this job`
-              : `Set budget ${amount ?? text} USDC`}
+            : holdNext
+              ? `Hold ${amount ?? text} USDC for your agent`
+              : world.budgetSet
+                ? `Set a new budget of ${amount ?? text} USDC`
+                : `Set budget ${amount ?? text} USDC`}
         </button>
+      )}
+
+      {world.budgetSet && world.budgetLeft !== null && !waiting && (
+        <p className="text-center text-sm text-[var(--muted)]">Budget left: {world.budgetLeft} USDC</p>
       )}
 
       {world.error && (

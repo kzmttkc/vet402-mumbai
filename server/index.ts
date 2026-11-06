@@ -13,7 +13,7 @@ import { createJobPorts } from './jobPorts'
 import { createJobService, JobError } from './jobs'
 import { createReceiptStore } from './receiptStore'
 import { readOnePayment } from './circleRecord'
-import { createDemoService, DemoError, SELLER_C_EXTRA_HOLD } from './demo'
+import { createDemoService, DemoError, fromApprovedHold, SELLER_C_EXTRA_HOLD } from './demo'
 import type { DemoAction, DemoKind } from './demo'
 import { createDemoPorts } from './demoPorts'
 import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
@@ -23,7 +23,8 @@ import { createEvidenceUploader } from './swarm'
 import { createSwarmWire, SWARM_GATEWAY } from '../src/lib/swarmBox'
 import type { Plan } from './planner'
 import type { Hex } from 'viem'
-import { mountWorld } from './worldRoutes'
+import { gasFromBudget } from './world'
+import { createWorld, refuseCrossSite } from './worldRoutes'
 
 const ARC_TESTNET_CHAIN_ID = 5042002
 // The other public node: the balance reads below share a rate limit with the contract reads.
@@ -41,6 +42,12 @@ const holds = createHoldService(
   createHoldPorts(ARC_TESTNET_CHAIN_ID, buyerClient, holdClient),
   createHoldStore(DATA_DIR),
 )
+
+// With the WORLD_* variables set, the approval takes over the hold. Without them nothing changes.
+const world = createWorld({ env: process.env, dataDir: DATA_DIR, createHold: (amount) => holds.start(amount) })
+// In production an approval is the only way money reaches the hold wallet. The demo scenes spend from the approved
+// hold, and gas for the hold wallet's contract calls is taken from the approved budget. Staging keeps the filmed flow.
+const approvalOnly = world?.environment === 'production' ? world.service : null
 
 const localReceipts = createReceiptStore(DATA_DIR)
 
@@ -137,11 +144,18 @@ const sellerC = createSeller({
   dropAfterSettle: () => false,
 })
 
+const plainDemoPorts = createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient })
 const demoPorts = {
-  ...createDemoPorts({ holdKey: keys.hold, holdClient, buyerClient }),
+  ...plainDemoPorts,
+  ...(approvalOnly ? { growHold: fromApprovedHold(plainDemoPorts) } : {}),
   ...(sealedClient && sealedScene
     ? {
-        sealed: createSealedPorts({ client: sealedClient, holdKey: keys.hold, buyerKey: keys.buyer, rejected: sealedScene.rejected }),
+        sealed: createSealedPorts({
+          client: approvalOnly ? gasFromBudget(sealedClient, approvalOnly.spend) : sealedClient,
+          holdKey: keys.hold,
+          buyerKey: keys.buyer,
+          rejected: sealedScene.rejected,
+        }),
         // SWARM_UPLOAD=off keeps every box off Swarm. SWARM_API_URL points the upload at another Bee API,
         // and SWARM_POSTAGE_BATCH_ID is the batch that Bee API stamps it with.
         ...(process.env.SWARM_UPLOAD === 'off'
@@ -186,6 +200,8 @@ function sendJobError(res: express.Response, error: unknown) {
 
 const app = express()
 app.use(express.json())
+// No page on another site may start a demo, approve a job or touch the hold.
+app.use(refuseCrossSite)
 
 // Amounts only. Keys and addresses never leave the backend.
 app.get('/balances', async (_req, res) => {
@@ -199,7 +215,8 @@ app.get('/balances', async (_req, res) => {
 })
 
 // With the WORLD_* variables set, this takes over the hold route. Without them nothing changes.
-mountWorld(app, { env: process.env, dataDir: DATA_DIR, createHold: (amount) => holds.start(amount) })
+if (world) world.mount(app)
+else app.get('/world/status', (_req, res) => void res.json({ enabled: false }))
 
 app.post('/hold', async (req, res) => {
   let amount: bigint
@@ -328,9 +345,10 @@ for (const action of demoActions) {
 }
 
 // Demo only: shows what signing a fresh payment would cost. vet402 does not do this.
+// In production it pays from the approved hold and adds nothing to it.
 app.post('/demo/compare', (_req, res) => startDemo('compare', res))
 
-// Demo only: the expiry scene. The hold grows first, then the normal flow asks for approval.
+// Demo only: the expiry scene. On staging the hold grows first. In production the approved hold must already cover it.
 app.post('/demo/seller-c', async (_req, res) => {
   if (!arkiv) {
     res.status(404).json({ error: 'This demo is not available.' })

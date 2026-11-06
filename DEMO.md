@@ -190,9 +190,25 @@ Time from the start of those runs:
 
 ## World ID
 
-What ran on 2026-11-05 in the staging Simulator: "Budget set.", a hold of 0.02 USDC, "Not approved: this approval is for another hold." for a proof from another hold, and "Not approved. Nothing was held or paid." for Cancel request. It has not run in the real World App.
+What ran on 2026-11-05 in the staging Simulator: "Budget set.", a hold of 0.02 USDC, "Not approved: this approval is for another hold." for a proof from another hold, and "Not approved. Nothing was held or paid." for Cancel request.
 
 What ran in production on 2026-11-05 with the real World App on iOS: "Budget set." at 22:16 UTC, "Held 1 USDC for this job." at 22:16 UTC and again at 23:25 UTC for the video, and "Not approved. Nothing was held or paid." for Cancel request at 23:23 UTC. The verified result reads environment production, protocol 4.0, proof_of_human.
+
+### How the approval works since 2026-11-06
+
+- The budget has its own proof. The first budget's createSession carries the signal `budget:<amount>:<budget id>`, and the backend saves the session nullifier with the budget. A budget proof sent again is refused. A new budget is a proveSession of the same session, so only the person who set the first budget can raise it.
+- The budget is a running total. Every approved hold counts toward it, so a 1 USDC budget refuses a second 0.6 USDC hold.
+- The backend requires protocol 4.0 and `proof_of_human` in every result, and takes the session nullifier as an array or as a single string.
+- In production nothing adds to the hold outside an approval. The compare and Seller C scenes spend from the approved hold, and gas for the hold wallet is taken from the approved budget.
+- In production "Use the last approval" is the Replay test. It shows the refusal "Not approved: this approval is for another hold." and holds nothing.
+- The routes that start, approve or cancel a request need a token that only the app's own page receives. Any POST a browser marks as sent from another site is refused.
+- A hold now reads "Held 1 USDC for your agent." The hold is the agent's spending limit, and the jobs it plans afterwards are paid from it.
+
+These changes are covered by the backend tests. They have not run with World App yet.
+
+### Why Proof of Human and not uniqueness or Selfie Check
+
+The hold asks one thing: is the owner there and releasing the money. It does not ask who the owner is or whether the owner is unique. A budget belongs to a single owner, and the session ties each hold to the person who set it. A Sybil score adds nothing to one owner's budget.
 
 ### Time to first success
 
@@ -204,7 +220,7 @@ About 25 minutes, from handing over the instruction to "Budget set." on staging,
 - Pasting the request URL opens the confirmation screen without a press on Continue. One extra press closes it, and the request is used up.
 - The Continue button on the confirmation screen is cut off at the bottom.
 - The app's tab has to stay in front during the approval. In a background tab the screen does not move on (seen on 2026-11-04).
-- I made a hold above the budget fail on purpose, so a 0.05 USDC request against a 0.02 USDC budget reads "Not approved." That is this app's rule, and a tester should expect it.
+- A hold past what the budget has left fails on purpose and reads "Not approved: this is more than the budget has left." Every approved hold counts toward the budget. That is this app's rule, and a tester should expect it.
 
 ### Missing capability or documentation
 

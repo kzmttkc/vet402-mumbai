@@ -74,6 +74,16 @@ export interface DemoPorts {
   evidence?: (box: SealedBox, claimId: Hex) => Promise<string>
 }
 
+/**
+ * With World ID in production the demo never adds to the hold. In place of growHold it spends from what an
+ * approval already put there, and refuses when that does not cover the scene.
+ */
+export function fromApprovedHold(ports: Pick<DemoPorts, 'holdAvailable'>): DemoPorts['growHold'] {
+  return async (amount) => {
+    if ((await ports.holdAvailable()) < amount) throw new DemoError('NOT_COVERED')
+  }
+}
+
 export interface DemoSeller {
   name: string
   url: string
