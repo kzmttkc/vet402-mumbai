@@ -46,7 +46,12 @@ export function TryDispute() {
   const open = async (done: Extract<TryResult, { ok: true }>) => {
     setOpening(true)
     const answer = { ref: 'try', sellerName: 'Seller A', ...done.box }
-    const read = await openSealedAnswer(answer, done.box.contract)
+    // A public RPC can refuse one read under load, so a failed read gets two more tries before the line shows.
+    let read = await openSealedAnswer(answer, done.box.contract)
+    for (let retry = 0; retry < 2 && !read.ok; retry++) {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      read = await openSealedAnswer(answer, done.box.contract)
+    }
     setSteps((current) => [
       ...current,
       { label: 'Your browser opened the box with the key from Arc', atMs: performance.now() - startedAt.current },
@@ -74,9 +79,10 @@ export function TryDispute() {
       (done) => {
         seen.result = done
         setResult(done)
+        if (!done.ok) return
         setPhase('finishing')
         setRecording(true)
-        if (done.ok) seen.opens = open(done)
+        seen.opens = open(done)
       },
     )
     if (!seen.result) setResult(final)
