@@ -64,7 +64,8 @@ export default defineConfig(({ mode }) => ({
       // scripts/try-dispute-serve.ts runs the try function on its own port.
       '/api/try-dispute': { target: 'http://localhost:3997', changeOrigin: true },
       '/api': {
-        target: 'http://localhost:3001',
+        // API_PORT lets a second copy of the app run beside the first one, against its own backend.
+        target: `http://localhost:${process.env.API_PORT || 3001}`,
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ''),
       },
