@@ -284,7 +284,24 @@ console.log(await isRuledAgainst('0x71f8005aE7757857DC6b7418b9beC75F19546aC3', {
 2026-11-06T10:20:41.001Z isRuledAgainst('0x71f8005aE7757857DC6b7418b9beC75F19546aC3', { writer }) -> false
 ```
 
-The public endpoint gives each caller a query budget. When it answers `ANON_COST_LIMITED`, a key from https://hub.arkiv.network, put at the end of the URL path, runs the same query.
+One command asks it for any payTo, with no key. It counts rulings from any writer once Arc holds the contract's Silent or Fraud event, and prints the newest claim behind a `true`:
+
+```bash
+npx bun@1.3.14 run scripts/arkiv-ruled.ts 0x1401bd7c7fab3fe8a429672fc1c5371456c8445d
+```
+
+Run on 2026-11-06 for Seller F, then for Seller A, which has no ruling:
+
+```
+2026-11-06T14:26:08.955Z isRuledAgainst('0x1401bd7c7fab3fe8a429672fc1c5371456c8445d', { writers: 'any', verifyOnArc: true }) -> true
+Newest ruling Arc confirms: fraud, claim 0xad1331ea025392f8d2c24bbd89b983318ea12d648e721f2aa4df6e6567c4528b, written about 2026-11-06T02:01Z by 0x4eea8eddcc608cbd8b3683f738a473923f2de4c5
+Claim on Arc: https://explorer.testnet.arc.io/tx/0x0bd9b7234d1c29973260969109a2827ef35b0d45be73fd9efb570f285361f48f. vet402 does not pay this address until about 2026-11-13T02:01Z.
+
+2026-11-06T14:26:12.320Z isRuledAgainst('0x71f8005aE7757857DC6b7418b9beC75F19546aC3', { writers: 'any', verifyOnArc: true }) -> false
+No ruling against this address in the last 7 days that Arc confirms.
+```
+
+The public endpoint gives each caller a query budget. When it answers `ANON_COST_LIMITED`, a key from https://hub.arkiv.network, put at the end of the URL path, runs the same query. `scripts/arkiv-ruled.ts` takes it as `ARKIV_ACCESS_KEY` and never prints it.
 
 Explorer: https://rabdi.explorer.arkiv.network
 

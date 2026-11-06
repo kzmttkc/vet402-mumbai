@@ -1,5 +1,9 @@
 # Reach
 
+- **vet402's buyer, ERC-8004 agent 9907**, reads Arc's rulings on Arkiv before it pays.
+- **Two third-party sellers from Circle's Discovery catalog**, Quicknode and BotPay, have vet402's payments to them on Arkiv: 4 and 1.
+- **88 payment entities and 6 rulings** were on Arkiv on 2026-11-06 at 10:56 UTC, counted page by page in [the table below](#counted-from-arkiv).
+
 Every x402 seller that seals its answers with `packages/sealed-delivery` and deposits into SealedDelivery is under the same rulings. Each Silent or Fraud verdict of the contract becomes a readonly `vet402_verdict` entity on Arkiv, keyed by the seller's payTo address, and any buyer reads it before paying with one `arkiv_query` and no key. A seller joins by naming its payTo in its 402 answer, so the check covers a catalog listing from its first payment, with no list kept by vet402.
 
 ## Today on Arkiv, 2026-11-06

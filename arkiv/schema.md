@@ -14,6 +14,17 @@ One column name means two things, and that is on purpose. `seller` holds the sel
 
 Every list read sorts by `$key`, takes 100 rows a page and moves the offset by the rows plus the ones the schema skipped, up to 20 pages (`src/arkiv/pages.ts`). A query that matches more than 2,000 entities stops with an error instead of returning part of them. The one exception is `isRuledAgainst` with `writers: 'any'`: it stops reading at 2,000 rows and answers from the rulings Arc confirms among them, so a flood of rows from other writers cannot stop payments to an honest seller (`packages/sealed-delivery/src/rulings.ts`).
 
+## One entity of each schema on the explorer
+
+Each link opens the entity on the Arkiv explorer, with its attributes and every operation on it. I read the keys on 2026-11-06 at 14:07 UTC with the README's query and the writer `0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5`, and each page answered 200, with its operations listed by the explorer's `/api/entity/<key>`.
+
+| Schema | Entity | What it is |
+|---|---|---|
+| `vet402_receipt` | [0xe7d98e45…5f81](https://rabdi.explorer.arkiv.network/entity/0xe7d98e45acb41fa9ddf27208c30985384633fad85a9d5518fa3539ce66ac5f81) | The payment entity the README's query returns: Seller A, transfer `4c985dc0-a59d-4674-9e8a-3d5d25def02b`, created 2026-11-06 01:42 UTC |
+| `vet402_seller` | [0x87d77626…3df9](https://rabdi.explorer.arkiv.network/entity/0x87d77626d35af6fb7ee9c829e81eb59c6d16e627dac6a28799e109f03f413df9) | Seller F's record, created 2026-11-05 17:51 UTC and extended 6 times by deliveries that kept the promise |
+| `vet402_evidence` | [0xec45f372…fe88](https://rabdi.explorer.arkiv.network/entity/0xec45f372c2cdf4d5b5b9dca43d45f50b4ff9abd610528c56ecc4f2cf28e5fe88) | The evidence of claim `0x2683bf0c…0456`, created by the writer on 2026-11-06 at 06:43 UTC and handed in the same transaction to the buyer that filed it, the app's hold `0x24Ab…6ba7` |
+| `vet402_verdict` | [0xffa6fdb0…e9bb](https://rabdi.explorer.arkiv.network/entity/0xffa6fdb0d9b700255f4de035a058d5e835de22a73729ce00fac745aa8830e9bb) | Arc's newest Fraud ruling against Seller F `0x1401…445d`, claim `0xad1331ea…528b`, written at Arkiv block 272347, 2026-11-06 02:00:56 UTC |
+
 ## vet402_receipt
 
 Shared by payment and settlement entities, so one query returns both for a transfer id.
