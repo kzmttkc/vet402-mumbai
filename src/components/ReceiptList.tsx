@@ -1,3 +1,4 @@
+import { FILM_MODE } from '@/lib/filmMode'
 import { ExternalLink, Receipt as ReceiptIcon } from 'lucide-react'
 import type { Receipt } from '@/hooks/useReceipts'
 import { useWriter } from '@/hooks/useWriter'
@@ -102,7 +103,7 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
                     >
                       Retry as a new payment
                     </button>
-                    <p className="mt-1 text-center text-xs text-[var(--muted)]">Demo only</p>
+                    {!FILM_MODE && <p className="mt-1 text-center text-xs text-[var(--muted)]">Demo only</p>}
                   </div>
                 )}
               </div>

@@ -1,3 +1,4 @@
+import { FILM_MODE } from '@/lib/filmMode'
 import { useState } from 'react'
 import { Check, Loader2, Sparkles } from 'lucide-react'
 import { PlanWhy } from '@/components/PlanWhy'
@@ -62,7 +63,7 @@ export function JobCard({ reload }: { reload: () => Promise<void> }) {
               >
                 Buy from Seller C
               </button>
-              <p className="mt-1 text-center text-xs text-[var(--muted)]">Demo only</p>
+              {!FILM_MODE && <p className="mt-1 text-center text-xs text-[var(--muted)]">Demo only</p>}
             </div>
           )}
         </form>

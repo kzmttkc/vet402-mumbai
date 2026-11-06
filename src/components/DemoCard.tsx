@@ -1,3 +1,4 @@
+import { FILM_MODE } from '@/lib/filmMode'
 import { Loader2, Unplug } from 'lucide-react'
 import type { DemoAction, DemoKind, DemoRun, StepName } from '@/hooks/useDemo'
 
@@ -50,7 +51,7 @@ export function DemoCard({ run, error, running, start, sealed, act, acting }: Pr
           <Unplug size={20} aria-hidden />
         </span>
         <div className="min-w-0">
-          <p className="text-sm text-[var(--muted)]">Lost-answer demo</p>
+          {!FILM_MODE && <p className="text-sm text-[var(--muted)]">Lost-answer demo</p>}
           <p className="text-sm text-pretty">Each seller charges 0.001 USDC, then the connection drops.</p>
         </div>
       </div>
