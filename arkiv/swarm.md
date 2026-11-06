@@ -178,9 +178,9 @@ Swarm is required. There is no copy on the page to open instead, so when a sourc
 
 ## Swarm in the demo video
 
-From 3:02.2: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order. At 3:06.7 Seller A's box opens to "Matches the seller's promise." and Seller F's to "Does not match the seller's promise."
+From 3:16.1 on the public page: Seller A's box from claim `0x0cf117a0…` (2026-11-06 04:17 UTC) shows "Kept on Swarm until 2026-12-13" under the seller's name, and opening it reads "Record from Arkiv." "Box from Swarm." "Key from Arc." and "Matches the seller's promise." That box went up through my own Bee node with batch `b6455d93…` and is pinned there. At 3:20.6 Seller A's box from the 01:42 run opens to "Matches the seller's promise." and Seller F's to "Does not match the seller's promise."
 
-The boxes are Seller A's and Seller F's from the 2026-11-06 runs on the live contract `0xE9C35ad2…`. Every box of those runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above.
+Every box of the 2026-11-06 runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above.
 
 ## What would make Swarm even better
 
