@@ -46,6 +46,9 @@ export const TRY_JOB_MESSAGES: Record<TryJobCode, string> = {
 /** On the card, only for a pick that seals and whose deposit the contract says covers the price. */
 export const PROTECTED_LINE = "Protected on Arc: if the answer goes missing, the seller's deposit pays you back."
 
+/** On every card, under the question: the most one job may cost, from the limit the agent actually keeps to. */
+export const limitLine = (limit: bigint) => `Each job can spend at most ${formatUsdc(limit)} USDC.`
+
 export const TRY_JOB_STATUS: Record<TryJobCode, number> = {
   RESTING: 503,
   RATE: 429,
@@ -73,9 +76,16 @@ export interface TryJobPorts {
   recentPayments(): Promise<number[]>
   sellerCheck?: SellerCheck
   coverage?: (candidate: Candidate) => Promise<boolean | null>
-  /** vet402's own seller, ranked beside the catalog and bought from vet402 itself. Absent without its keys. */
-  ownSeller?: { candidate: Candidate; buy(cap: bigint): Promise<OwnPurchase> }
+  /** vet402's own sellers, ranked beside the catalog and bought from vet402 itself. Absent without their keys. */
+  ownSellers?: OwnSeller[]
   log?: (message: string) => void
+}
+
+/** One of vet402's own sellers. `summary` is the card's sentence for it, when it has its own. */
+export interface OwnSeller {
+  candidate: Candidate
+  summary?: string
+  buy(cap: bigint): Promise<OwnPurchase>
 }
 
 export interface TryJobOptions {
@@ -100,6 +110,8 @@ export interface TryPlanView {
   delivery?: string
   /** PROTECTED_LINE, when the pick seals and its deposit covers the price. */
   protection?: string
+  /** limitLine of the limit this agent keeps to. */
+  limitLine: string
   /** True when the pick is vet402's own seller, not a Discovery listing. */
   own?: boolean
   /** False when the agent's test wallet cannot cover the price right now. */
@@ -175,12 +187,16 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       .update(['v1', issuedAt, job, plan.kind, plan.sellerName, plan.request.method, plan.request.url, plan.amount.toString()].join('\n'))
       .digest('hex')
 
-  // vet402's own seller goes beside the catalog. Only it may carry its name, so no listing can pass as it.
+  // vet402's own sellers go beside the catalog. Only they may carry their names, so no listing can pass as one.
+  const owns = ports.ownSellers ?? []
+  const ownNames = new Set(owns.map((o) => o.candidate.sellerName))
   const pool = async (): Promise<Candidate[]> => {
-    const listed = (await ports.candidates()).filter((c) => !c.own)
-    const own = ports.ownSeller?.candidate
-    return own ? [...listed.filter((c) => c.sellerName !== own.sellerName), own] : listed
+    const listed = (await ports.candidates()).filter((c) => !c.own && !ownNames.has(c.sellerName))
+    return [...listed, ...owns.map((o) => o.candidate)]
   }
+  /** The own seller a plan names, by its name and its resource. */
+  const ownFor = (plan: Plan) =>
+    plan.own ? owns.find((o) => o.candidate.sellerName === plan.sellerName && o.candidate.resource === plan.request.url) : undefined
 
   const choose = async (job: string): Promise<Chosen> =>
     choosePlan(job, await pool(), {
@@ -221,13 +237,14 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
         plan: {
           id: `${issuedAt}.${sign(issuedAt, job, picked)}`,
           sellerName: picked.sellerName,
-          summary: picked.summary,
+          summary: ownFor(picked)?.summary ?? picked.summary,
           amount: formatUsdc(picked.amount),
           ...(picked.why ? { why: picked.why } : {}),
           compared: picked.compared ?? [],
           ...(chosen.notices.length ? { notices: chosen.notices } : {}),
           ...(chosen.delivery ? { delivery: chosen.delivery } : {}),
           ...(chosen.protectedOnArc ? { protection: PROTECTED_LINE } : {}),
+          limitLine: limitLine(limit),
           ...(picked.own ? { own: true } : {}),
           covered,
         },
@@ -284,7 +301,8 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       const given = Buffer.from(id[2] as string, 'hex')
       if (expected.length !== given.length || !timingSafeEqual(expected, given)) return { ok: false, code: 'EXPIRED' }
       // Only vet402's own seller may sell what its plan names, and it is only planned when it is there.
-      if (approved.own && !ports.ownSeller) return { ok: false, code: 'EXPIRED' }
+      const own = ownFor(approved)
+      if (approved.own && !own) return { ok: false, code: 'EXPIRED' }
 
       if ((await ports.holdAvailable()) < approved.amount) return { ok: false, code: 'RESTING' }
 
@@ -296,11 +314,11 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       let lines: string[] = []
       try {
         // The approved amount is the most the agent may spend on this job.
-        if (approved.own && ports.ownSeller) {
+        if (own) {
           // vet402's own seller is bought from vet402 itself. Its resource is never fetched.
-          const own = await ports.ownSeller.buy(approved.amount)
-          paid = own
-          lines = own.lines
+          const bought = await own.buy(approved.amount)
+          paid = bought
+          lines = bought.lines
         } else {
           paid = await ports.pay(approved.request, approved.amount)
         }

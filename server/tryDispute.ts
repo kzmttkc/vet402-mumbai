@@ -3,7 +3,7 @@ import type { DemoPorts, DemoSeller, StepName } from './demo'
 import type { TransferInfo } from './jobs'
 import type { ReceiptRow, ReceiptStore } from './receiptStore'
 import type { SealedPorts } from './sealedDelivery'
-import { splitLines } from '../src/lib/receiptLines'
+import { detail, splitLines } from '../src/lib/receiptLines'
 
 // "Try a dispute yourself": one press on the public page runs Seller A's sealed scene end to end,
 // in one function call, and streams each step as it happens. The amount and the seller are fixed
@@ -39,6 +39,33 @@ export const TRY_MESSAGES: Record<TryErrorCode, string> = {
 export const TRY_STATUS: Record<TryErrorCode, number> = { BUSY: 409, RATE: 429, DAILY: 429, RESTING: 503, UNREACHABLE: 503 }
 
 export const NO_ANSWER = 'Seller A did not answer in time. The case stays open on Arc.'
+
+/**
+ * The receipt's lines as the public screen shows them. A line that still names the key gets a plain line in its
+ * place, with the same amounts, and the original goes under Details. The stored receipt is left as it was.
+ */
+const PLAIN_RECEIPT: [RegExp, (amount: string) => string][] = [
+  [/^Charged once\. Key read from Arc\.$/, () => 'Charged once. The answer came through Arc.'],
+  [
+    /^The seller sent the key late and paid back the (\S+ USDC) it cost you to ask for it\.$/,
+    (amount) => `The seller answered late and paid back the ${amount} it cost you to ask Arc to step in.`,
+  ],
+  [
+    /^The seller sent the key late\. The (\S+ USDC) it cost you to ask for it is waiting for you on Arc\.$/,
+    (amount) => `The seller answered late. The ${amount} it cost you to ask Arc to step in is waiting for you on Arc.`,
+  ],
+  [/^The seller sent the wrong key\. Arc refused it\.$/, () => 'The seller sent something that does not open the answer. Arc refused it.'],
+]
+
+export function plainReceipt(lines: readonly string[]): string[] {
+  return lines.flatMap((line) => {
+    for (const [pattern, plain] of PLAIN_RECEIPT) {
+      const found = pattern.exec(line)
+      if (found) return [plain(found[1] ?? ''), detail(line)]
+    }
+    return [line]
+  })
+}
 
 /** What the screen shows for each step, in plain words. The second wait is the key request. */
 export function stepLabel(name: StepName, waitingSeen: number): string {
@@ -297,7 +324,7 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
         emit({
           type: 'result',
           ok: true,
-          lines: row.outcome ?? [],
+          lines: plainReceipt(row.outcome ?? []),
           claimTx: tx.claim,
           answerTx: tx.answer,
           box: {
@@ -310,7 +337,7 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
           totalMs: now() - startedAt,
         })
       } else {
-        fail(splitLines(row?.outcome ?? []).plain.join(' ') || TRY_MESSAGES.UNREACHABLE)
+        fail(splitLines(plainReceipt(row?.outcome ?? [])).plain.join(' ') || TRY_MESSAGES.UNREACHABLE)
       }
     } catch (error) {
       log(`try-dispute run failed: ${messageOf(error)}`)

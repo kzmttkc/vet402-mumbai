@@ -6,8 +6,8 @@ import { approvePlan, arcTxUrl, askAgent, receiptLine, settlementOf } from '@/li
 import type { AgentPlan as Plan, Compared, Paid as PaidReply } from '@/lib/askAgent'
 import { splitLines } from '@/lib/receiptLines'
 
-/** The card as the server sends it. A pick that seals has the protection line, and vet402's own seller says so. */
-type AgentPlan = Plan & { protection?: string; own?: boolean }
+/** The card as the server sends it. A pick that seals has the protection line, vet402's own seller says so, and every card says the limit. */
+type AgentPlan = Plan & { protection?: string; own?: boolean; limitLine?: string }
 /** A sealed answer's receipt has its own lines. Technical ones start with "Detail: ". */
 type Paid = PaidReply & { lines?: string[] }
 
@@ -33,13 +33,14 @@ type State =
   | { step: 'paying'; plan: AgentPlan }
   | { step: 'done'; paid: Paid }
 
-/** The question on the card. A pick that seals, with a deposit that covers it, has the protection line under it. */
-export function SpendQuestion({ plan }: { plan: Pick<AgentPlan, 'amount' | 'protection'> }) {
+/** The question on the card, with the limit under it. A pick that seals, with a deposit that covers it, also has the protection line. */
+export function SpendQuestion({ plan }: { plan: Pick<AgentPlan, 'amount' | 'protection' | 'limitLine'> }) {
   return (
     <>
       <p className="display text-xl font-semibold text-balance">
         May I spend up to <span className="tabular-nums">{plan.amount} USDC</span> on this job?
       </p>
+      {plan.limitLine && <p className="text-sm text-pretty text-[var(--muted)]">{plan.limitLine}</p>}
       {plan.protection && (
         <p className="flex items-start gap-2 text-sm text-pretty">
           <ShieldCheck size={18} className="mt-0.5 shrink-0 text-[var(--success)]" aria-hidden />

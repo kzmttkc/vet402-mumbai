@@ -11,6 +11,7 @@ import {
   IP_GAP_MS,
   NO_ANSWER,
   parseDailyLimit,
+  plainReceipt,
   TRY_MESSAGES,
 } from '../tryDispute'
 import type { TryEvent, TryPorts, TryRecord } from '../tryDispute'
@@ -138,8 +139,10 @@ describe('try a dispute yourself', () => {
     const { tries } = setup({ sealed: { claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }) } })
     const result = resultOf((await runTry(tries)).events)
     expect(result?.type === 'result' && result.ok ? result.lines : null).toEqual([
-      'Charged once. Key read from Arc.',
-      'The seller sent the key late and paid back the 0.005698 USDC it cost you to ask for it.',
+      'Charged once. The answer came through Arc.',
+      'Detail: Charged once. Key read from Arc.',
+      'The seller answered late and paid back the 0.005698 USDC it cost you to ask Arc to step in.',
+      'Detail: The seller sent the key late and paid back the 0.005698 USDC it cost you to ask for it.',
       'Detail: Claim gas repaid by the seller: 0.005698 USDC.',
       'Circle record: 1 transfer for this payment.',
     ])
@@ -152,6 +155,34 @@ describe('try a dispute yourself', () => {
     expect(shown.length).toBeGreaterThan(5)
     for (const line of shown) expect(line).not.toMatch(/gas|contract|claim/i)
     expect(NO_ANSWER).not.toMatch(/gas|contract|claim/i)
+  })
+
+  test('the receipt body names no key and no contract function, and keeps every amount', async () => {
+    const { tries } = setup({ sealed: { claimGasRepaid: () => Promise.resolve({ amount: 6949n, sent: true }) } })
+    const result = resultOf((await runTry(tries)).events)
+    if (result?.type !== 'result' || !result.ok) throw new Error('expected a delivered try')
+    const { plain, details } = splitLines(result.lines)
+    for (const line of plain) expect(line).not.toMatch(/\bkey\b|gas|claim|depositFor|finalize|prove/i)
+    expect(plain.join(' ')).toContain('0.006949 USDC')
+    expect(details).toContain('The seller sent the key late and paid back the 0.006949 USDC it cost you to ask for it.')
+  })
+
+  test('plainReceipt: each line that names the key gets a plain line with the same amount, the rest pass as they are', () => {
+    expect(
+      plainReceipt([
+        'The seller sent the wrong key. Arc refused it.',
+        'The seller sent the key late. The 0.0042 USDC it cost you to ask for it is waiting for you on Arc.',
+        'Circle record: 1 transfer for this payment.',
+        'Detail: Wrong key rejected by the contract.',
+      ]),
+    ).toEqual([
+      'The seller sent something that does not open the answer. Arc refused it.',
+      'Detail: The seller sent the wrong key. Arc refused it.',
+      'The seller answered late. The 0.0042 USDC it cost you to ask Arc to step in is waiting for you on Arc.',
+      'Detail: The seller sent the key late. The 0.0042 USDC it cost you to ask for it is waiting for you on Arc.',
+      'Circle record: 1 transfer for this payment.',
+      'Detail: Wrong key rejected by the contract.',
+    ])
   })
 
   test('success: every step streams, then the receipt lines, both transactions and the box', async () => {
@@ -167,7 +198,7 @@ describe('try a dispute yourself', () => {
     expect(result).toEqual({
       type: 'result',
       ok: true,
-      lines: ['Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'],
+      lines: ['Charged once. The answer came through Arc.', 'Detail: Charged once. Key read from Arc.', 'Circle record: 1 transfer for this payment.'],
       claimTx: CLAIM_TX,
       answerTx: ANSWER_TX,
       box: {

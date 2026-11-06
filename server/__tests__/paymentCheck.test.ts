@@ -17,6 +17,7 @@ import {
 import type { Address, Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
+import { BALANCE_CHECK_NAME, createBalanceCheck } from '../balanceCheckSeller'
 import { toCandidate } from '../discovery'
 import type { Candidate } from '../discovery'
 import {
@@ -122,7 +123,11 @@ function setup(over: Setup = {}) {
     nonce: `0x${'ee'.repeat(32)}`,
     timesReceived: 1,
     transaction: TRANSFER_ID,
-    lines: [DELIVERED_SEALED, 'Detail: The key and the answer match the hashes the seller signed for this payment.'],
+    lines: [
+      'Answer received and checked. You paid 0.001 USDC once.',
+      `Detail: ${DELIVERED_SEALED}`,
+      'Detail: The key and the answer match the hashes the seller signed for this payment.',
+    ],
   }
   const ports: TryJobPorts = {
     candidates: () => {
@@ -138,13 +143,15 @@ function setup(over: Setup = {}) {
     findTransfer: () => Promise.resolve({ id: TRANSFER_ID, status: 'received', txHash: null }),
     ownTransfer: () => Promise.resolve(null),
     recentPayments: () => Promise.resolve([]),
-    ownSeller: {
-      candidate,
-      buy: (cap) => {
-        bought.push(cap)
-        return Promise.resolve(purchase)
+    ownSellers: [
+      {
+        candidate,
+        buy: (cap) => {
+          bought.push(cap)
+          return Promise.resolve(purchase)
+        },
       },
-    },
+    ],
     ...(over.covers === undefined
       ? {}
       : { coverage: (c: Candidate) => Promise.resolve(c.sealedBy ? (over.covers as boolean | null) : null) }),
@@ -240,7 +247,11 @@ describe('approving vet402 Payment Check', () => {
     expect(value.sellerName).toBe(PAYMENT_CHECK_NAME)
     expect(value.text).toBe("Yes, your agent's last payment went through.")
     expect(value.paid).toBe('0.001')
-    expect(value.lines).toEqual([DELIVERED_SEALED, 'Detail: The key and the answer match the hashes the seller signed for this payment.'])
+    expect(value.lines).toEqual([
+      'Answer received and checked. You paid 0.001 USDC once.',
+      `Detail: ${DELIVERED_SEALED}`,
+      'Detail: The key and the answer match the hashes the seller signed for this payment.',
+    ])
   })
 })
 
@@ -369,7 +380,9 @@ const facilitator: SellerFacilitator = {
   settle: () => Promise.resolve({ success: true, transaction: TRANSFER_ID }),
 }
 
-async function seller(handsOverKey: boolean) {
+const BALANCE_ANSWER = 'Your agent has 0.9839 USDC left to spend after this check, in its Circle Gateway balance on Arc.'
+
+async function seller(handsOverKey: boolean, kind: 'payment' | 'balance' = 'payment') {
   const node = await fakeNode()
   const client = createSealedDelivery({ address: SEALED, net: { chain: arcTestnet, rpcUrl: node.url, pollingMs: 5 } })
   const real = createSealedPorts({ client, holdKey, buyerKey, rejected: new Set() })
@@ -388,24 +401,38 @@ async function seller(handsOverKey: boolean) {
     },
   }
   const payers: string[] = []
-  const check = createPaymentCheck({
+  const prices: bigint[] = []
+  const options = {
     client,
     sealed,
     sealedAddress: SEALED,
     keys: { hold: holdKey, seller: sellerKey, buyer: buyerKey },
     facilitator,
     holdAvailable: () => Promise.resolve(1_000_000n),
-    lastPayment: (payer) => {
-      payers.push(payer)
-      return Promise.resolve("Yes, your agent's last payment went through. It paid 0.0001 USDC to 0xf463…623c, and Arc has settled it.")
-    },
     handsOverKey: () => handsOverKey,
     watchMs: 20,
     pollMs: 20,
     keyWaitMs: 300,
     log: () => {},
-  })
-  return { node, check, boxes, claims, payers }
+  }
+  const check =
+    kind === 'payment'
+      ? createPaymentCheck({
+          ...options,
+          lastPayment: (payer) => {
+            payers.push(payer)
+            return Promise.resolve("Yes, your agent's last payment went through. It paid 0.0001 USDC to 0xf463…623c, and Arc has settled it.")
+          },
+        })
+      : createBalanceCheck({
+          ...options,
+          balance: (payer, thisCheck) => {
+            payers.push(payer)
+            prices.push(thisCheck)
+            return Promise.resolve(BALANCE_ANSWER)
+          },
+        })
+  return { node, check, boxes, claims, payers, prices }
 }
 
 describe('vet402 Payment Check, bought for real against a fake chain', () => {
@@ -417,8 +444,12 @@ describe('vet402 Payment Check, bought for real against a fake chain', () => {
     expect(result.data).toBe("Yes, your agent's last payment went through. It paid 0.0001 USDC to 0xf463…623c, and Arc has settled it.")
     expect(result.paid).toBe(DEMO_PRICE)
     expect(result.transaction).toBe(TRANSFER_ID)
-    expect(result.lines[0]).toBe(DELIVERED_SEALED)
-    expect(result.lines[1]?.startsWith('Detail: ')).toBe(true)
+    // The first line is plain, from the amount actually paid. The seal and the key are under Details.
+    expect(result.lines).toEqual([
+      'Answer received and checked. You paid 0.001 USDC once.',
+      `Detail: ${DELIVERED_SEALED}`,
+      'Detail: The key and the answer match the hashes the seller signed for this payment.',
+    ])
 
     expect(boxes).toHaveLength(1)
     const box = boxes[0]!
@@ -443,5 +474,40 @@ describe('vet402 Payment Check, bought for real against a fake chain', () => {
     expect(result.paid).toBe(DEMO_PRICE)
     expect(result.data).toBe(CLAIM_OPEN)
     expect(result.lines).toEqual([`Detail: Claim ${CLAIM_ID} is open on SealedDelivery ${SEALED}.`])
+  })
+})
+
+describe('vet402 Balance Check, bought for real against a fake chain', () => {
+  test('the same seller wallet seals the balance answer, the box opens to the promise, and the receipt reads plainly', async () => {
+    const { node, check, boxes, claims, payers, prices } = await seller(true, 'balance')
+    expect(check.candidate.sellerName).toBe(BALANCE_CHECK_NAME)
+    const result = await check.buy(DEMO_PRICE)
+
+    expect(payers.map((p) => p.toLowerCase())).toEqual([HOLD.toLowerCase()])
+    // The answer is written with this check's own price, to take off the balance Circle shows before settling.
+    expect(prices).toEqual([DEMO_PRICE])
+    expect(result.data).toBe(BALANCE_ANSWER)
+    expect(result.paid).toBe(DEMO_PRICE)
+    expect(result.lines).toEqual([
+      'Answer received and checked. You paid 0.001 USDC once.',
+      `Detail: ${DELIVERED_SEALED}`,
+      'Detail: The key and the answer match the hashes the seller signed for this payment.',
+    ])
+    const box = boxes[0]!
+    expect(box.promise.seller.toLowerCase()).toBe(SELLER.toLowerCase())
+    expect(keccak256(stringToBytes(result.body ?? ''))).toBe(box.promise.plaintextHash)
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ seller: BALANCE_CHECK_NAME, answer: BALANCE_ANSWER })
+    expect(claims).toHaveLength(0)
+    expect(node.sent).toEqual([])
+  })
+
+  test('the key does not come: the same claim on SealedDelivery, against the same seller', async () => {
+    const { node, check, claims } = await seller(false, 'balance')
+    const result = await check.buy(DEMO_PRICE)
+    expect(claims).toHaveLength(1)
+    expect(claims[0]!.promise.seller.toLowerCase()).toBe(SELLER.toLowerCase())
+    const toContract = node.sent.filter((tx) => tx.to.toLowerCase() === SEALED.toLowerCase())
+    expect(toContract.map((tx) => decodeFunctionData({ abi: SEALED_ABI, data: tx.data }).functionName)).toEqual(['claim'])
+    expect(result.data).toBe(CLAIM_OPEN)
   })
 })
