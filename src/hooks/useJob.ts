@@ -10,6 +10,10 @@ export interface PlanView {
   notices?: string[]
   /** What the delivery check found. */
   delivery?: string
+  /** One line on why this seller. */
+  why?: string
+  /** The top listings the agent compared. */
+  compared?: { sellerName: string; listing: string; amount: string; note: string }[]
 }
 
 export interface JobResult {

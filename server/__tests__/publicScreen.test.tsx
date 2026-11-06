@@ -84,8 +84,9 @@ describe('loadCheckFile', () => {
   })
 })
 
+const textOf = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+
 describe('the published screen', () => {
-  const textOf = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 
   test('shows the static receipts, and offers no button on them', () => {
     const html = renderToStaticMarkup(
@@ -93,7 +94,10 @@ describe('the published screen', () => {
     )
     expect(html).toContain('Seller A')
     expect(html).toContain('0.001 USDC')
-    expect(html).toContain('Settled in batch')
+    expect(html).toContain('Settled ✓')
+    expect(html).toContain(`href="https://explorer.testnet.arc.io/tx/0x${'e'.repeat(64)}"`)
+    expect(html).toContain('View on Arc')
+    expect(textOf(html)).not.toMatch(/0x[0-9a-f]{8}/i)
     expect(html).toContain('Charged once. Delivered.')
     expect(html).not.toContain('<button')
     // The static files do not carry it, so the row leaves it out instead of guessing.
@@ -118,9 +122,36 @@ describe('the published screen', () => {
     )
     const text = `${textOf(renderToStaticMarkup(<PublicApp />))} ${textOf(rows)}`
     expect(text).toContain('Check a receipt')
+    expect(text).toContain('Ask the agent')
     expect(text).toContain('Try a dispute yourself')
     // Arc is the one chain the screen may name, since the try runs there.
     expect(text).not.toMatch(/wallet|\bgas\b|signature|ethereum|\bbase\b|polygon|solana|0x[0-9a-f]{40}(?![0-9a-f])/i)
+  })
+})
+
+describe('the consumer screen on a phone', () => {
+  test('the agent card comes first, and no scene button or hash is on the page', () => {
+    const page = renderToStaticMarkup(<PublicApp />)
+    const text = textOf(page)
+    expect(text.indexOf('Ask the agent')).toBeLessThan(text.indexOf('Try a dispute yourself'))
+    expect(text).toContain('Did my last payment go through?')
+    for (const demo of ['Lost-answer demo', 'Try Seller', 'Buy from Seller C', 'Demo only', 'Retry as a new payment']) {
+      expect(text).not.toContain(demo)
+    }
+    expect(text).not.toMatch(/0x[0-9a-f]{8}/i)
+  })
+
+  test('a receipt row from the comparison scene shows no retry button outside ?demo', () => {
+    const row: ReceiptView = { ...joinStatic(list, statuses)[0]!, demo: 'b' }
+    const html = renderToStaticMarkup(<ReceiptList receipts={[row]} onRetryAsNew={() => {}} busy={false} />)
+    expect(html).not.toContain('Retry as a new payment')
+    expect(html).not.toContain('Demo only')
+  })
+
+  test('the proof stays one tap away, closed by default', () => {
+    const html = renderToStaticMarkup(<ReceiptList receipts={joinStatic(list, statuses)} onRetryAsNew={() => {}} busy={false} />)
+    expect(html).toMatch(/<details[^>]*><summary[^>]*>Details<\/summary>/)
+    expect(html).not.toMatch(/<details[^>]*open/)
   })
 })
 
@@ -130,16 +161,16 @@ describe('vercel.json', () => {
     functions: unknown
   }
 
-  test('has one rule and the try function, and nothing else', () => {
+  test('has one rule and the two try functions, and nothing else', () => {
     expect(Object.keys(config)).toEqual(['rewrites', 'functions'])
-    expect(config.functions).toEqual({ 'api/try-dispute.ts': { maxDuration: 60 } })
+    expect(config.functions).toEqual({ 'api/try-dispute.ts': { maxDuration: 60 }, 'api/try-job.ts': { maxDuration: 60 } })
     expect(config.rewrites).toHaveLength(1)
     expect(config.rewrites[0]?.destination).toBe('/index.html')
   })
 
-  test('the rule takes every path except /assets and the try function', () => {
+  test('the rule takes every path except /assets and the try functions', () => {
     const source = new RegExp(`^${config.rewrites[0]?.source}$`)
     for (const hit of ['/', '/api/receipts', '/some/page', '/assetsish', '/receipts.html']) expect(source.test(hit)).toBe(true)
-    for (const miss of ['/assets/index.js', '/assets/a/b.css', '/api/try-dispute']) expect(source.test(miss)).toBe(false)
+    for (const miss of ['/assets/index.js', '/assets/a/b.css', '/api/try-dispute', '/api/try-job']) expect(source.test(miss)).toBe(false)
   })
 })

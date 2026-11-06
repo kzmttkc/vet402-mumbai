@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { formatUsdc } from '../src/onchain-money'
 import { NOT_PAID } from './arkiv'
-import type { DeliveryCheck, SellerCheck } from './arkiv'
+import type { SellerCheck } from './arkiv'
 import type { Candidate } from './discovery'
-import { isPaymentJob, planCheapest, planJob } from './planner'
-import type { LatestReceipt, Plan, PlanFailure, PlanOutcome, PlannedRequest } from './planner'
+import { decide, needsLatestPayment, planCheapest, rankJob } from './planner'
+import type { Compared, LatestReceipt, Plan, PlanFailure, PlanOutcome, PlannedRequest, SellerSignal } from './planner'
 import type { ReceiptRow, ReceiptStore, TransferStatus } from './receiptStore'
 import { SELLER_C_NAME } from './sellers'
 
@@ -51,6 +51,7 @@ export type JobErrorCode = PlanFailure | 'UNKNOWN_PLAN' | 'NOT_COVERED' | 'BUSY'
 const MESSAGES: Record<JobErrorCode, string> = {
   EMPTY_JOB: 'Describe the job first.',
   NO_SELLER: 'I couldn’t find anyone who can do this job.',
+  OVER_LIMIT: 'The seller that fits asks more than I may spend. Nothing was paid.',
   NO_PAYMENTS: 'There is no payment to check yet.',
   NOT_SETTLED: 'Your latest payment is still being processed. Try again in a moment.',
   UNKNOWN_PLAN: 'That request has expired. Describe the job again.',
@@ -61,11 +62,15 @@ const MESSAGES: Record<JobErrorCode, string> = {
 
 export class JobError extends Error {
   readonly code: JobErrorCode
+  /** What the agent compared before it gave up, when it got that far. */
+  readonly compared: Compared[]
 
-  constructor(code: JobErrorCode) {
-    super(MESSAGES[code])
+  /** `why` is the planner's own sentence, which says more than the stock one. */
+  constructor(code: JobErrorCode, why?: string, compared: Compared[] = []) {
+    super(why ?? MESSAGES[code])
     this.name = 'JobError'
     this.code = code
+    this.compared = compared
   }
 }
 
@@ -81,6 +86,10 @@ export interface PlanView {
   notices?: string[]
   /** What the delivery check found. Absent when Arkiv is off. */
   delivery?: string
+  /** One line on why this seller, e.g. "Picked from 134 Arc listings: best match for 'payment', 0.0001 USDC". Absent for a scene plan. */
+  why?: string
+  /** The top listings the agent compared, the picked one first. Absent for a scene plan. */
+  compared?: Compared[]
 }
 
 export interface JobResult {
@@ -152,7 +161,7 @@ export function describeReceipt(data: unknown): string {
   return 'No, that payment didn’t go through.'
 }
 
-function describeAnswer(data: unknown): string {
+export function describeAnswer(data: unknown): string {
   const text = typeof data === 'string' ? data : JSON.stringify(data)
   if (!text) return 'Done.'
   return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}…` : text
@@ -161,19 +170,100 @@ function describeAnswer(data: unknown): string {
 export interface JobOptions {
   /** Reads a seller from Arkiv before the approval card. Absent when Arkiv is off. */
   sellerCheck?: SellerCheck
+  /** Only for a listing that seals: whether its deposit covers the price. Null for one that does not seal. */
+  coverage?: (candidate: Candidate) => Promise<boolean | null>
+  /** The network the agent's payments settle on, by name. */
+  networkName?: string
+  /** The most the agent may spend on one job, in atomic USDC units. */
+  limit?: bigint
   /** The plan for the Seller C scene. It is ours, so it never comes from the catalog. */
   sellerCPlan?: Plan
 }
 
-// Each passed-over seller costs a read, so a catalog full of them cannot keep the screen waiting.
+// Each seller read costs a call, so a catalog full of them cannot keep the screen waiting.
 const MAX_SELLERS_CHECKED = 5
 const SCENE_JOB = 'Give me one short answer.'
+export const DEFAULT_NETWORK_NAME = 'Arc Testnet'
+/** 0.01 USDC: the most one job may cost unless the caller says otherwise. */
+export const DEFAULT_JOB_LIMIT = 10_000n
+
+/**
+ * Reads what Arkiv and the deposit contract say about the sellers the ranking would reach, at most
+ * MAX_SELLERS_CHECKED of them, so the second ranking can skip a seller that stopped delivering.
+ */
+export async function readSignals(
+  ranked: { candidate: Candidate; blocked: string | null }[],
+  sellerCheck: SellerCheck | undefined,
+  coverage: ((candidate: Candidate) => Promise<boolean | null>) | undefined,
+): Promise<{ signals: Map<string, SellerSignal>; lines: Map<string, string> }> {
+  const signals = new Map<string, SellerSignal>()
+  const lines = new Map<string, string>()
+  if (!sellerCheck && !coverage) return { signals, lines }
+  const reachable = ranked.filter((r) => r.blocked === null)
+  const sellers: Candidate[] = []
+  for (const r of reachable) {
+    if (sellers.length >= MAX_SELLERS_CHECKED) break
+    if (!sellers.some((c) => c.sellerName === r.candidate.sellerName)) sellers.push(r.candidate)
+  }
+  await Promise.all(
+    sellers.map(async (candidate) => {
+      const [check, covered] = await Promise.all([
+        sellerCheck ? sellerCheck(candidate.sellerName) : Promise.resolve(null),
+        coverage && candidate.sealedBy ? coverage(candidate).catch(() => null) : Promise.resolve(null),
+      ])
+      signals.set(candidate.sellerName, { ...(check ? { delivery: check.kind } : {}), covered })
+      if (check) lines.set(candidate.sellerName, check.line)
+    }),
+  )
+  return { signals, lines }
+}
+
+export interface ChooseDeps {
+  latestReceipt: () => Promise<LatestReceipt | null>
+  sellerCheck?: SellerCheck
+  coverage?: (candidate: Candidate) => Promise<boolean | null>
+  networkName: string
+  limit: bigint
+}
+
+export interface Chosen {
+  plan: Plan
+  /** One sentence per seller passed over because Arkiv says it stopped delivering. */
+  notices: string[]
+  /** What the delivery check found for the picked seller. */
+  delivery: string | null
+}
+
+/**
+ * The agent's choice for one job: rank the whole catalog, read Arkiv and the deposit for the front
+ * runners, rank again with that, and read the latest payment only when the pick is a payment check.
+ * Throws a JobError with the planner's own sentence when it will not pay anyone.
+ */
+export async function choosePlan(job: string, candidates: Candidate[], deps: ChooseDeps): Promise<Chosen> {
+  if (!job.trim()) throw new JobError('EMPTY_JOB')
+  const ctx = { networkName: deps.networkName, limit: deps.limit }
+
+  const first = rankJob(job, candidates, ctx)
+  const { signals, lines } = await readSignals(first.ranked, deps.sellerCheck, deps.coverage)
+  const ranking = signals.size > 0 ? rankJob(job, candidates, { ...ctx, signals }) : first
+  const latest = needsLatestPayment(ranking) ? await deps.latestReceipt() : null
+  const outcome = decide(job, ranking, latest)
+  if (!outcome.ok) throw new JobError(outcome.reason, outcome.why, outcome.compared)
+
+  // A seller Arkiv says stopped delivering, that words and price alone would have put first, is named above the card.
+  const pickAt = first.ranked.findIndex((r) => r.candidate === ranking.pick?.candidate)
+  const notices = first.ranked
+    .slice(0, pickAt < 0 ? first.ranked.length : pickAt)
+    .filter((r) => signals.get(r.candidate.sellerName)?.delivery === 'expired')
+    .map((r) => `${r.candidate.sellerName}: ${NOT_PAID}`)
+  return { plan: outcome.plan, notices: [...new Set(notices)], delivery: lines.get(outcome.plan.sellerName) ?? null }
+}
 
 export function createJobService(
   ports: JobPorts,
   receipts: ReceiptStore,
   now: () => number = Date.now,
-  { sellerCheck, sellerCPlan }: JobOptions = {},
+  { sellerCheck, sellerCPlan, coverage, networkName = DEFAULT_NETWORK_NAME, limit = DEFAULT_JOB_LIMIT }: JobOptions = {},
 ) {
   const plans = new Map<string, Stored>()
   let busy = false
@@ -184,11 +274,14 @@ export function createJobService(
 
   async function plan(job: string): Promise<PlanView> {
     sweep()
-    const candidates = listings(await ports.candidates())
-    // Only look at payment history when the job is about it, and then only once.
-    const latest = isPaymentJob(job) ? await ports.latestReceipt() : null
-
-    return firstDeliverable(candidates, [], (pool) => planJob(job, pool, latest))
+    const chosen = await choosePlan(job, listings(await ports.candidates()), {
+      latestReceipt: ports.latestReceipt,
+      sellerCheck,
+      coverage,
+      networkName,
+      limit,
+    })
+    return present(chosen.plan, chosen.notices, chosen.delivery)
   }
 
   // Only the scene may buy from Seller C, and nothing in the catalog may pass as it.
@@ -196,7 +289,7 @@ export function createJobService(
 
   const skipNotice = (seller: string) => `${seller}: ${NOT_PAID}`
 
-  /** Plans, reads the chosen seller, and moves on to the next listing while the answer is "do not pay". */
+  /** The Seller C scene: plans, reads the chosen seller, and moves on while the answer is "do not pay". */
   async function firstDeliverable(
     candidates: Candidate[],
     notices: string[],
@@ -207,7 +300,7 @@ export function createJobService(
       const outcome = next(pool)
       if (!outcome.ok) throw new JobError(outcome.reason)
       const check = sellerCheck ? await sellerCheck(outcome.plan.sellerName) : null
-      if (check?.kind !== 'expired') return present(outcome.plan, notices, check)
+      if (check?.kind !== 'expired') return present(outcome.plan, notices, check?.line ?? null)
       notices.push(skipNotice(outcome.plan.sellerName))
       const skipped = outcome.plan.sellerName
       pool = pool.filter((c) => c.sellerName !== skipped)
@@ -215,7 +308,7 @@ export function createJobService(
     throw new JobError('NO_SELLER')
   }
 
-  async function present(approved: Plan, notices: string[], check: DeliveryCheck | null): Promise<PlanView> {
+  async function present(approved: Plan, notices: string[], delivery: string | null): Promise<PlanView> {
     const id = randomUUID()
     plans.set(id, { plan: approved, expiresAt: now() + PLAN_TTL_MS })
     return {
@@ -225,7 +318,9 @@ export function createJobService(
       amount: formatUsdc(approved.amount),
       covered: (await ports.holdAvailable()) >= approved.amount,
       ...(notices.length > 0 ? { notices } : {}),
-      ...(check ? { delivery: check.line } : {}),
+      ...(delivery ? { delivery } : {}),
+      ...(approved.why ? { why: approved.why } : {}),
+      ...(approved.compared?.length ? { compared: approved.compared } : {}),
     }
   }
 
@@ -234,7 +329,7 @@ export function createJobService(
     sweep()
     if (!sellerCPlan || !sellerCheck) throw new JobError('NO_SELLER')
     const first = await sellerCheck(sellerCPlan.sellerName)
-    if (first.kind !== 'expired') return present(sellerCPlan, [], first)
+    if (first.kind !== 'expired') return present(sellerCPlan, [], first.line)
     return firstDeliverable(listings(await ports.candidates()), [skipNotice(sellerCPlan.sellerName)], (pool) =>
       planCheapest(SCENE_JOB, pool),
     )

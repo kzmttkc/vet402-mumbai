@@ -26,6 +26,24 @@ A payment that goes normally sends no transaction to SealedDelivery. Measured on
 
 Before paying, vet402 reads `coverageFor(seller, price)`. If the deposit does not cover the verdict, the seller gets the same treatment as Seller B: no claim and no second charge. A box lost on the way comes back on a second fetch with the same payment, for a seller that declares it.
 
+## The agent picks the seller
+
+Ask the agent at the top of https://vet402-mumbai-live.vercel.app, from a phone. vet402 reads Circle's Discovery catalog for Arc testnet, 134 listings on 2026-11-06 (132 Quicknode JSON-RPC nodes and 2 BotPay listings), and scores every listing against the words of the job with BM25. No language model runs, and no seller or path is written into the code.
+
+- A job about a payment goes to a JSON-RPC node on the network vet402 pays on. vet402 knows a node by the request its listing asks for, and finds Arc Testnet by name in the listing. It then asks for the receipt of its own latest batch, once.
+- Any other job goes to the listing whose own words fit best, if vet402 can fill in the request that listing needs.
+- A listing over the 0.01 USDC limit, a seller Arkiv shows with no recent delivery, or a sealing seller whose deposit does not cover the price is passed over for the next one.
+
+Before it pays, the card shows the pick, one line on why, and the top 3 it compared, then asks "May I spend up to 0.0001 USDC on this job?" Nothing moves until Approve. The receipt reads "Paid 0.0001 USDC. Settled on Arc." with a link to the batch on the Arc explorer.
+
+| Job | Pick | Price |
+|---|---|---|
+| Did my last payment go through? | Quicknode, the Arc Testnet node | 0.0001 USDC |
+| Get me a paid access receipt | BotPay, `/pay` | 0.01 USDC |
+| What's the weather in Mumbai? | Nobody. "None of the 134 Arc listings matched. Nothing was paid." | 0 |
+
+The public agent pays from its own Arc testnet wallet, `TRY_JOB_HOLD_KEY`, never the dispute wallet. The browser sends only the words of the job and, to approve, the signed id of the plan. The server plans again from the same words and pays only the same seller at the same price. One paid job every 2 minutes per address, and 40 a day across every instance (`TRY_JOB_DAILY_LIMIT`). Without the key the card says the agent is resting. The tests run on a saved copy of the catalog: `server/__tests__/agentPick.test.ts` and `server/__tests__/tryJob.test.ts`.
+
 ## Contract
 
 | | |
@@ -109,7 +127,7 @@ To pay for real on Arc testnet:
 
 1. Print the buyer address with `cast wallet address --private-key <BUYER_PRIVATE_KEY from .env>` and send it testnet USDC from https://faucet.circle.com.
 2. Run `SEALED_DELIVERY_ADDRESS=0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5 npx bun run scripts/sealed-setup.ts --dry-run` to see the plan, then run it again without `--dry-run`. It sends each of Seller A, D, E and F 0.03 USDC for gas and has each deposit 0.1 USDC, so 0.52 USDC in total.
-3. Set a hold on the screen, then press "Seller A, line stays up", "Try Seller A", "Try Seller B", "Try Seller D", "Try Seller E" or "Try Seller F".
+3. Open http://localhost:5173/?demo, which shows the scene buttons. Set a hold, then press "Seller A, line stays up", "Try Seller A", "Try Seller B", "Try Seller D", "Try Seller E" or "Try Seller F".
 
 The sellers close the connection on purpose, apart from the "line stays up" button.
 
@@ -121,7 +139,7 @@ The sellers close the connection on purpose, apart from the "line stays up" butt
 | `SWARM_API_URL`, `SWARM_POSTAGE_BATCH_ID` | Upload each dispute box through your own Bee API, stamped with your own postage batch. Without them the box goes through the public Swarm gateway. `SWARM_UPLOAD=off` keeps boxes off Swarm |
 | `PORT`, `DATA_DIR` | The backend port, 3001 by default, and its data folder |
 
-`npx vite build` makes the published screen, which has no paying route.
+`npx vite build` makes the published screen. Its only paying routes are the two Vercel functions, `api/try-dispute.ts` and `api/try-job.ts`, each on a fixed Arc testnet wallet.
 
 ## Boundary
 
