@@ -280,6 +280,13 @@ I designed the mechanism and made each decision below. Arc Studio and Claude Cod
 
 Arc Studio (session `mumbai`) started the app, and its agent wrote, tested and deployed the first five versions of the contract on testnet. The final testnet contract went through the same Studio sandbox: its source in the code editor, 246 tests passed and 0 failed with forge 1.7.1 in the sandbox terminal, and `forge create` from that terminal on 2026-11-06 at 01:35 UTC. The app's full source, copied into the sandbox, passed `tsc` and 432 tests there. On 2026-11-06 at 02:06 UTC, Studio's Preview ran the published screen from the sandbox, and its Tracing listed the screen's calls to `/api/receipts`, Circle's `/v1/x402/transfers` and Arkiv's `arkiv_query`. Claude Code wrote out my instructions to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents.
 
+What I did with my own hands, beside the decisions in the table:
+
+- Set up the World ID app and its signer in World's Developer Portal, and approved budgets and holds in World App on my iPhone in production: 2026-11-05 at 22:16 UTC, and 2026-11-06 at 02:10, 02:18, 05:05 and 05:06 UTC.
+- Ran the Arc mainnet disputes and the seller's withdrawal from my own terminal, each after reading the decoded transaction (2026-11-06, 02:03 to 02:04 and 05:02 UTC).
+- Funded my Bee node's wallet with xDAI and xBZZ, so the node bought and topped up its own postage batch.
+- Recorded every voice line in the demo video.
+
 The table says who wrote each part first, who changed it, and what I decided. Times are 2026-11-05 UTC unless a date is given, with India time (IST) where my design notes give it.
 
 | Part | First written by | Changed by | What I decided |
