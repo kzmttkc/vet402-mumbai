@@ -57,6 +57,13 @@ const fraudLines = (paid: bigint, price: bigint) => [
   `The answer wasn't what the seller promised. ${gotBack(paid, price)}`,
   detail(`The answer did not match the seller's promise. ${paidBack(paid, price)}`),
 ]
+/** Money disputes won back, once Circle Gateway's depositFor has put it in the hold's Gateway balance. Only then. */
+export const BACK_IN_GATEWAY = "The refund is back in your agent's Gateway balance, ready for the next payment."
+const backLines = (amount: bigint) => [
+  BACK_IN_GATEWAY,
+  detail(`${usdcAmount(amount)} went back into the hold's Circle Gateway balance through depositFor.`),
+]
+
 /** From the answer's ClaimGasRepaid. A transfer that failed stays on Arc as the buyer's credit. */
 const claimGasLines = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
   sent
@@ -174,6 +181,18 @@ export function createDemoService(
     price: payment.amount,
     ...(claim.transactionHash ? { claimTx: claim.transactionHash } : {}),
   })
+
+  /** Counts money won back toward a Gateway deposit. Lines only when a deposit went through. A failure only logs. */
+  async function backToGateway(sealed: SealedPorts, amount: bigint): Promise<string[]> {
+    if (!sealed.backToGateway || amount <= 0n) return []
+    try {
+      const back = await sealed.backToGateway(amount)
+      return back > 0n ? backLines(back) : []
+    } catch (error) {
+      console.error('gateway deposit failed:', error instanceof Error ? error.message.split('\n')[0] : error)
+      return []
+    }
+  }
 
   /** The Swarm reference, or null when there is no uploader or the upload failed. Never throws. */
   async function keepEvidence(box: SealedBox, claimId: Hex): Promise<string | null> {
@@ -391,6 +410,8 @@ export function createDemoService(
     // The answer that put the key on Arc also repaid the claim's gas. The line is there only when Arc says so.
     const repaid = await readClaimGasRepaid(sealed, claim)
     const repaidLines = repaid && repaid.amount > 0n ? claimGasLines(repaid) : []
+    // A repayment that reached the hold wallet counts toward the next Gateway deposit. One that stayed a credit waits for withdraw.
+    const sentBack = repaid?.sent ? await backToGateway(sealed, repaid.amount) : []
     const result = open(box, found.key)
     mark(run, 'opened')
     const record: SealedRecord = {
@@ -401,7 +422,7 @@ export function createDemoService(
     }
 
     if (!result?.matches) {
-      lines.push(...repaidLines)
+      lines.push(...repaidLines, ...sentBack)
       const rowId = addRow(seller, payment, {
         body: result?.text ?? '',
         received: 1,
@@ -419,7 +440,7 @@ export function createDemoService(
     const id = addRow(seller, payment, {
       body: result.text,
       received: 1,
-      outcome: [...lines, KEY_FROM_CHAIN, ...repaidLines],
+      outcome: [...lines, KEY_FROM_CHAIN, ...repaidLines, ...sentBack],
       demo: kind,
       sealed: record,
     })
@@ -430,6 +451,7 @@ export function createDemoService(
         ...lines,
         KEY_FROM_CHAIN,
         ...repaidLines,
+        ...sentBack,
         confirmed ? 'Circle record: 1 transfer for this payment.' : 'Circle record: not confirmed yet.',
       ],
     })
@@ -550,8 +572,13 @@ export function createDemoService(
     run.acting = true
     try {
       if (action === 'withdraw') {
-        await sealed.withdraw()
+        const withdrawn = await sealed.withdraw()
         run.action = null
+        const back = await backToGateway(sealed, withdrawn)
+        if (back.length > 0) {
+          opened.lines.push(...back)
+          receipts.update(opened.rowId, { outcome: [...opened.lines] })
+        }
       } else {
         const paid =
           action === 'finalize'

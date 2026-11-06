@@ -218,6 +218,19 @@ describe('hold status', () => {
 
     expect((await holds.status()).state).toBe('used-up')
   })
+
+  // A dispute's refund goes back into the hold's Gateway balance (SealedPorts.backToGateway), and the agent spends it next.
+  test('a refund put back into Gateway makes a used-up hold spendable again', async () => {
+    const { ports, state } = fakePorts()
+    const holds = createHoldService(ports, createHoldStore(dir))
+    await holds.start(usdc(5))
+    await holds.status() // seen funded
+    state.available = 0n
+    expect((await holds.status()).state).toBe('used-up')
+
+    state.available += 13268n
+    expect(await holds.status()).toEqual({ state: 'active', amount: '5', remaining: '0.013268' })
+  })
 })
 
 describe('storage', () => {

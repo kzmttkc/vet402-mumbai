@@ -6,7 +6,7 @@ import { keccak256 } from 'viem'
 import type { Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
-import { createDemoService, DemoError } from '../demo'
+import { BACK_IN_GATEWAY, createDemoService, DemoError } from '../demo'
 import type { DemoPorts, DemoRunView } from '../demo'
 import { preparePayment } from '../gatewayPay'
 import type { PreparedPayment } from '../gatewayPay'
@@ -666,6 +666,66 @@ describe('the demo with a contract', () => {
       for (const line of plain) expect(line).not.toMatch(/gas|contract|claim/i)
       expect(details.join(' ')).toMatch(/gas|contract/i)
     }
+  })
+
+  // Circle Gateway: once enough has come back, it goes into the hold's Gateway balance, and only then the receipt says so.
+  test('withdraw: the refund goes back into the Gateway balance, and the receipt says so word for word', async () => {
+    const back: bigint[] = []
+    const { demos, receipts } = setup({
+      readKey: () => Promise.resolve(null),
+      chainTime: () => Promise.resolve(100n),
+      finalize: () => Promise.resolve(13268n),
+      withdraw: () => Promise.resolve(13268n),
+      backToGateway: (amount) => {
+        back.push(amount)
+        return Promise.resolve(amount)
+      },
+    })
+    const finished = await run(demos, 'e')
+    await demos.act(finished.id, 'finalize')
+    expect((await demos.act(finished.id, 'withdraw')).action).toBeNull()
+    expect(back).toEqual([13268n])
+    expect(receipts.list()[0]?.outcome).toEqual([
+      "The seller didn't deliver. You got 0.013268 USDC back: your 0.001 USDC and your costs.",
+      'Detail: The seller stayed silent. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.',
+      "The refund is back in your agent's Gateway balance, ready for the next payment.",
+      "Detail: 0.013268 USDC went back into the hold's Circle Gateway balance through depositFor.",
+    ])
+  })
+
+  test('answer ending: a repayment that reached the wallet counts toward Gateway, the deposit is named word for word, and a credit waits', async () => {
+    const back: bigint[] = []
+    // This repayment brings the refunds waiting in the wallet to the threshold, so all of them go back together.
+    const backToGateway = (amount: bigint) => {
+      back.push(amount)
+      return Promise.resolve(50_000n)
+    }
+    const sent = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }), backToGateway })
+    await run(sent.demos, 'a')
+    expect(sent.receipts.list()[0]?.outcome).toEqual([
+      'Charged once. Key read from Arc.',
+      'The seller sent the key late and paid back the 0.005698 USDC it cost you to ask for it.',
+      'Detail: Claim gas repaid by the seller: 0.005698 USDC.',
+      "The refund is back in your agent's Gateway balance, ready for the next payment.",
+      "Detail: 0.05 USDC went back into the hold's Circle Gateway balance through depositFor.",
+      'Circle record: 1 transfer for this payment.',
+    ])
+    const credit = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: false }), backToGateway })
+    await run(credit.demos, 'a')
+    expect(back).toEqual([5698n])
+    expect(splitLines(credit.receipts.list()[0]?.outcome ?? []).plain).not.toContain(BACK_IN_GATEWAY)
+  })
+
+  test('a refund still waiting for the threshold, or a deposit that fails, adds no line, and the run still ends', async () => {
+    for (const backToGateway of [() => Promise.reject(new Error('rpc down')), () => Promise.resolve(0n)]) {
+      const { demos, receipts } = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }), backToGateway })
+      expect((await run(demos, 'a')).state).toBe('done')
+      expect(receipts.list()[0]?.outcome).not.toContain(BACK_IN_GATEWAY)
+    }
+  })
+
+  test('the Gateway line reads without gas, contract or claim', () => {
+    expect(BACK_IN_GATEWAY).not.toMatch(/gas|contract|claim/i)
   })
 
   test('a button that does not apply is refused', async () => {
