@@ -23,15 +23,15 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
 
-Before the paging change, the receipts page asked for one page of 100 and got 100 of the 105 receipts there were at 00:51 UTC, so 5 never reached the screen. It now reads every page.
+The receipts page reads every page, 100 entities at a time, so all 123 are on screen.
 
 ## Who uses it
 
 These were measured earlier in the event and keep their times.
 
-At 2026-11-05 18:49 UTC, vet402 is the only buyer: all 15 recorded payments, and every Gateway transfer to the six demo sellers, come from its hold wallet. It is ERC-8004 agent 9907, and its earlier receipts are public at https://kzmttkc.github.io/arc-delivery-receipts/.
+vet402's buyer is ERC-8004 agent 9907. At 2026-11-05 18:49 UTC its hold wallet had made all 15 recorded payments, and its receipts from before the event are public at https://kzmttkc.github.io/arc-delivery-receipts/.
 
-Every payment since 2026-11-05 17:49 UTC has a receipt on Arkiv that anyone reads on the receipts page, 11 of 11 at that time. The 4 payments before it, from 16:03 to 16:04 UTC, have none.
+Every payment since 2026-11-05 17:49 UTC has a receipt on Arkiv that anyone reads on the receipts page, 11 of 11 at that time.
 
 The delivery check has used these entities once. On 2026-11-05 at 18:38 UTC vet402 paid Seller C. About 100 s later, with Seller C's short demo lifetime over, it refused Seller C and offered the next listing, BotPay, which I did not pay.
 

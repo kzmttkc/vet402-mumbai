@@ -145,7 +145,7 @@ The earlier version at [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://ex
 
 #### The filmed run, 22:40 to 22:49 UTC
 
-The video filmed on 2026-11-05 shows these rows. The dispute boxes of this run went to Swarm through the public gateway and its null stamp, because my own postage batch did not exist until 22:53 UTC.
+The video filmed on 2026-11-05 shows these rows. The dispute boxes of this run went to Swarm through the public gateway and its null stamp. My own postage batch was bought at 22:53 UTC, and the runs after it used my Bee node.
 
 | Time | Seller | Gateway transfer id | Status | Batch | Outcome on the receipt |
 |---|---|---|---|---|---|
@@ -349,4 +349,4 @@ To see it, start the backend with `ARKIV_WRITER_KEY`, `ARKIV_ACCESS_KEY` and `SE
 
 ### The box comes only from Swarm
 
-"Open a sealed answer" lists the claims that have a `vet402_evidence` entity on Arkiv and opens each box from Swarm. The exported file no longer holds a ciphertext or a plaintext hash, so when Swarm does not return the box the screen shows "Box not found on Swarm." and opens nothing. Details in [arkiv/swarm.md](arkiv/swarm.md#run-one-upload-and-one-read-yourself).
+"Open a sealed answer" lists the claims that have a `vet402_evidence` entity on Arkiv and opens each box from Swarm. The exported file holds only each claim's id, seller name and key block, so every box opened on the screen is the one Swarm returned, checked against the claim on Arc. Details in [arkiv/swarm.md](arkiv/swarm.md#run-one-upload-and-one-read-yourself).
