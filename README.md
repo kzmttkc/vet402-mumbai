@@ -219,6 +219,8 @@ While a hold waits in production, the screen offers **Replay test**. It sends th
 
 It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. The demo video shows the production approval filmed at 23:25 UTC. Those runs came before the budget had its own signal. The budget signal, the running total, the production limits on the demo scenes, the session token and the cross site check were added on 2026-11-06 and are covered by the backend tests. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
+Feedback for the sponsors, each with the step, what came back and the date: [Arc Studio](docs/arc-studio-feedback.md), [World ID](docs/world-feedback.md), [Arkiv](arkiv/friction.md).
+
 ## After judging
 
 The buyer side of this goes into vet402's production buyer, which paid through Gateway on Arc mainnet on 2026-09-28. The receipt writer keeps writing one Arkiv entity per payment on Rabdi until Arkiv announces a mainnet.
