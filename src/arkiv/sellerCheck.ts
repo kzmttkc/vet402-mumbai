@@ -24,11 +24,15 @@ export interface RawRuling {
   createdAt: bigint
   /** True when Arc holds the contract's Silent or Fraud event for this claim. */
   onArc?: boolean
+  /** The address that wrote the entity, lowercase, when the read covers every writer. */
+  writer?: string
 }
 
 export interface RulingsRead {
   rulings: RawRuling[]
   timing: BlockTiming
+  /** vet402's own writer, lowercase, when the read covers every writer. Only its rulings set the date vet402 pays again. */
+  own?: string
 }
 
 export type SellerAnswer =
@@ -47,6 +51,8 @@ export type SellerAnswer =
       notPaidUntil: string | null
       /** Present when the latest ruling's event was found on Arc. */
       checkedOnArc?: true
+      /** Who wrote the latest ruling to Arkiv, 'vet402' or an address, when the read covers every writer. */
+      writtenBy?: string
     }
 
 export const verdictLabel = (verdict: string) => (verdict ? verdict[0]!.toUpperCase() + verdict.slice(1) : verdict)
@@ -59,23 +65,33 @@ export function rulingLine(answer: Extract<SellerAnswer, { kind: 'ruled' }>): st
 
 export const notPaidLine = (date: string) => `vet402 does not pay this seller until ${date}.`
 
+export const shortAddress = (address: string) => (address.length > 10 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address)
+
+export const writtenByLine = (writtenBy: string) =>
+  `Written to Arkiv by ${writtenBy === 'vet402' ? 'vet402' : shortAddress(writtenBy)}, checked on Arc.`
+
 export const latestRuling = (rulings: RawRuling[]) =>
   rulings.reduce<RawRuling | null>((a, b) => (a && a.createdAt >= b.createdAt ? a : b), null)
 
-/** The latest ruling decides the answer. An older one ends its 7 days sooner. */
-export function answerFrom({ rulings, timing }: RulingsRead): SellerAnswer {
+/**
+ * The latest ruling decides the answer. An older one ends its 7 days sooner. When the read covers every
+ * writer, the date vet402 pays again comes from vet402's own latest ruling, as vet402 counts only its own.
+ */
+export function answerFrom({ rulings, timing, own }: RulingsRead): SellerAnswer {
   const latest = latestRuling(rulings)
   if (!latest) return { kind: 'clear' }
-  const age = (timing.currentBlock - latest.createdAt) * BigInt(timing.blockDuration)
-  const endBlock = latest.createdAt + BigInt(Math.ceil(RULING_SECONDS / timing.blockDuration))
+  const ownLatest = own === undefined ? latest : latestRuling(rulings.filter((r) => r.writer === own))
+  const age = ownLatest ? (timing.currentBlock - ownLatest.createdAt) * BigInt(timing.blockDuration) : null
+  const endBlock = ownLatest ? ownLatest.createdAt + BigInt(Math.ceil(RULING_SECONDS / timing.blockDuration)) : 0n
   return {
     kind: 'ruled',
     date: blockToDate(latest.createdAt, timing),
     verdict: latest.verdict,
     claimId: latest.claimId,
     claimUrl: latest.claimTx ? `${ARC_TX}${latest.claimTx}` : null,
-    notPaidUntil: age < BigInt(RULING_SECONDS) ? blockToDate(endBlock, timing) : null,
+    notPaidUntil: age !== null && age < BigInt(RULING_SECONDS) ? blockToDate(endBlock, timing) : null,
     ...(latest.onArc ? { checkedOnArc: true as const } : {}),
+    ...(own !== undefined && latest.writer ? { writtenBy: latest.writer === own ? 'vet402' : latest.writer } : {}),
   }
 }
 

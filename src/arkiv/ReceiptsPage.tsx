@@ -45,7 +45,8 @@ export function ReceiptsPage() {
   const [state, setState] = useState<FeedState>(() => ({ rows: savedRows.load(), busy: false }))
   const [writer, setWriter] = useState<Hex | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const readRulings = useMemo(() => (writer ? createRulingsReader(writer) : null), [writer])
+  // Every writer's rulings, each kept once Arc confirms it. vet402's own address names it in the answer.
+  const readRulings = useMemo(() => (writer ? createRulingsReader(writer, undefined, {}, 'any') : null), [writer])
 
   useEffect(() => {
     const life = new AbortController()

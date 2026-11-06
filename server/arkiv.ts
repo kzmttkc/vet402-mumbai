@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk'
 import type { CreateEntityParameters } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
-import { asc, eq } from '@arkiv-network/sdk/query'
+import { asc, eq, or } from '@arkiv-network/sdk/query'
 import { u64 } from '@arkiv-network/sdk/schema'
 import type { CreateEntityValues, Schema } from '@arkiv-network/sdk/schema'
 import { http } from 'viem'
@@ -255,19 +255,23 @@ function createReads(accessKey: string, writer: Hex, transport?: Transport): Rea
       .fetch()
   }
 
-  const readVerdicts = (payTo: string) =>
-    readAllPages((offset) =>
+  // Either address column, as the receipts page reads them. A row with `pay_to` is judged by `pay_to`.
+  const readVerdicts = async (payTo: string) => {
+    const address = addressColumn(payTo)
+    const rows = await readAllPages((offset) =>
       reads
-        .select({ $key: true, $createdAt: true })
+        .select({ $key: true, $createdAt: true, seller: true, pay_to: true })
         .from(VerdictSchema)
         .where(eq('kind', 'verdict'))
-        .where(eq('seller', addressColumn(payTo)))
+        .where(or(eq('pay_to', address), eq('seller', address)))
         .ownedBy(writer)
         .orderBy(asc('$key'))
         .limit(PAGE_SIZE)
         .offset(offset)
         .fetch(),
     )
+    return rows.filter((row) => (row.pay_to?.value ?? row.seller.value) === address)
+  }
 
   return {
     async findPaymentKey(transferId) {
