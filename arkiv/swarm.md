@@ -4,7 +4,7 @@ vet402 keeps the evidence of every dispute on Swarm and points to it from a new 
 
 ## What existed before the event, and what I added
 
-Before ETHGlobal Mumbai, vet402 did not use Swarm at all. There was no Swarm code and no Swarm dependency. This repo itself started at the event (first commit `4c45218`, 2026-11-05 15:30 UTC). The Arkiv receipts (payment, settlement and seller entities) were also built here earlier in the event, in commit `7df3fb3` and after.
+Swarm is new to vet402 at ETHGlobal Mumbai: every line of Swarm code and the Swarm dependency came in here. This repo itself started at the event (first commit `4c45218`, 2026-11-05 15:30 UTC). The Arkiv receipts (payment, settlement and seller entities) were also built here earlier in the event, in commit `7df3fb3` and after.
 
 Everything about Swarm below is new work at ETHGlobal Mumbai, in these commits on the `swarm` branch:
 

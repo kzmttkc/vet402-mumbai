@@ -1,6 +1,6 @@
 # Demo record
 
-Times are UTC. Every payment to Sellers A to F is 0.001 USDC. On the live contract, the status and batch columns are what Circle's Gateway API returned on 2026-11-06 at 02:12 UTC, and each batch transaction shown read status 1 on Arc. A status of "completed" means settled in the batch shown, and "received" means accepted and waiting for a batch.
+Times are UTC. Every payment to Sellers A to F is 0.001 USDC. On the live contract, the status and batch columns are what Circle's Gateway API returned on 2026-11-06 at 02:12 UTC, and each batch transaction shown read status 1 on Arc. A status of "completed" means settled in the batch shown, and "received" means accepted and waiting for a batch, shown as "pending" in the batch column.
 
 ## Runs on the live contract
 
@@ -12,10 +12,10 @@ The receipt lines of this run name what the seller's deposit repaid. The app has
 
 | Time | Seller | Gateway transfer id | Status | Batch | Outcome on the receipt |
 |---|---|---|---|---|---|
-| 01:59:46 | Seller A | `ce288e80-588d-4011-a3ba-3b39f0ee7d04` | received | not yet | Charged once. Key read from Arc. Claim gas repaid by the seller: 0.006949 USDC. Circle record: 1 transfer for this payment. |
-| 02:00:38 | Seller F | `f2976e7b-f3bf-4f2b-8eb0-8573d8136551` | received | not yet | Claim gas repaid by the seller: 0.006949 USDC. The answer did not match the seller's promise. Its deposit paid 0.013699 USDC back: the 0.001 USDC price and 0.012699 USDC for the gas of the dispute. |
-| 02:02:10 | Seller E | `ef5aa44e-326d-4c14-b172-5e4714ad5155` | received | not yet | The seller stayed silent. Its deposit paid 0.011413 USDC back: the 0.001 USDC price and 0.010413 USDC for the gas of the dispute. |
-| 02:03:37 | Seller D | `5e29ef26-8d1b-4482-802a-5f2700d1eb5e` | received | not yet | Wrong key rejected by the contract. The seller stayed silent. Its deposit paid 0.012142 USDC back: the 0.001 USDC price and 0.011142 USDC for the gas of the dispute. |
+| 01:59:46 | Seller A | `ce288e80-588d-4011-a3ba-3b39f0ee7d04` | received | pending | Charged once. Key read from Arc. Claim gas repaid by the seller: 0.006949 USDC. Circle record: 1 transfer for this payment. |
+| 02:00:38 | Seller F | `f2976e7b-f3bf-4f2b-8eb0-8573d8136551` | received | pending | Claim gas repaid by the seller: 0.006949 USDC. The answer did not match the seller's promise. Its deposit paid 0.013699 USDC back: the 0.001 USDC price and 0.012699 USDC for the gas of the dispute. |
+| 02:02:10 | Seller E | `ef5aa44e-326d-4c14-b172-5e4714ad5155` | received | pending | The seller stayed silent. Its deposit paid 0.011413 USDC back: the 0.001 USDC price and 0.010413 USDC for the gas of the dispute. |
+| 02:03:37 | Seller D | `5e29ef26-8d1b-4482-802a-5f2700d1eb5e` | received | pending | Wrong key rejected by the contract. The seller stayed silent. Its deposit paid 0.012142 USDC back: the 0.001 USDC price and 0.011142 USDC for the gas of the dispute. |
 
 ### The run of 01:42 to 01:46 UTC
 
@@ -33,7 +33,7 @@ Time from the start of the run, as the progress line on the screen showed it:
 
 | Run | 01:42 run | 01:59 run |
 |---|---|---|
-| Seller A, line up, no contract transaction | Delivered at 2.1 s | Not run |
+| Seller A, line up, no contract transaction | Delivered at 2.1 s | Shown in the 01:42 run |
 | Seller A, key on chain after a claim | 9.5 s | 7.2 s |
 | Seller F, key on chain after a claim | 5.9 s | 7.1 s |
 | Seller E, from the claim on the screen to the verdict on the screen | 57.7 s | 57.7 s |
@@ -112,7 +112,7 @@ Buyer net per dispute in the 01:59 run, in USDC: what came back, less the price 
 | E, silent | 0.011413 | +0.001731 |
 | D, wrong key, then silent | 0.012142 | +0.001863 |
 
-The buyer also sent each `flushBurn`, which anyone can send and which the dispute cost does not count. With it, E and D still end +0.000557 and +0.000690.
+The buyer also sent each `flushBurn`, which anyone can send and which sits outside the dispute cost. With it, E and D still end +0.000557 and +0.000690.
 
 ## What each scene shows
 
@@ -124,7 +124,7 @@ The buyer also sent each `flushBurn`, which anyone can send and which the disput
 - **Seller D, 02:02 UTC.** The seller tried a wrong key, the contract reverted it, and the failed transaction stays on the chain. It then said nothing and `finalize` marked SILENT.
 - **Seller C, 2026-11-05 22:49 UTC.** The screen read "Seller C: No recent delivery from this seller. Not paid." and vet402 paid nothing. Seller C's Arkiv entity uses a short lifetime for this demo, and every other seller's lasts 7 days.
 
-These sellers are mine. A healthy seller answers, so every payout above comes from a seller I stopped or told to cheat.
+Sellers A to F are demo sellers, each built to take one path: answer, stay silent, send a wrong key or swap the answer, so every outcome of the contract is on Arc to check.
 
 ## A seller from the catalog, 2026-11-05
 
@@ -137,7 +137,7 @@ Asked whether the latest payment went through, vet402 picked a listing named Qui
 
 ## Earlier runs
 
-These ran on earlier versions of the contract, which charged a fixed dispute cost, or none on the first ones, and did not repay the claim's gas. The demo no longer uses them.
+These ran on earlier versions of the contract, which charged a fixed dispute cost, or none on the first ones. The final version replaced them and added the refund of the claim's gas.
 
 ### On `0xa1eff55d…`, 2026-11-05
 
@@ -240,7 +240,7 @@ The earlier version at [`0xafdb8931eebdce7f714ac3905c65a50293eb6db6`](https://ex
 
 ### Before `0xa1eff55d…`, 2026-11-05
 
-These rows ran before the `0xa1eff55d…` contract. The status and batch columns are what Circle's Gateway API returned at 18:49 UTC. The Seller A and Seller B rows at 16:03 and 16:04 came before any contract was deployed, and the two Seller B rows at 16:04 are the first comparison: a retry with a new signature paid again. The rows from 17:49 to 17:53 ran on an earlier deployment, [`0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2`](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2), with a 0.01 USDC deposit and no dispute cost, so each verdict there paid 0.001 USDC back. The Seller F row at 17:49:19 ended before any claim, and I did not record why it stopped there. The rows from 18:24 to 18:38 ran on the next deployment, [`0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094), deployed at 18:23 UTC from source that did not yet take a payment domain salt. Each seller deposited 0.1 USDC there.
+These rows ran before the `0xa1eff55d…` contract. The status and batch columns are what Circle's Gateway API returned at 18:49 UTC. The Seller A and Seller B rows at 16:03 and 16:04 came before any contract was deployed, and the two Seller B rows at 16:04 are the first comparison: a retry with a new signature paid again. The rows from 17:49 to 17:53 ran on an earlier deployment, [`0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2`](https://explorer.testnet.arc.io/address/0x2dab71e2e13d8f6acef80b8964776b2bc24f69d2), with a 0.01 USDC deposit and no dispute cost, so each verdict there paid 0.001 USDC back. The Seller F row at 17:49:19 ended before a claim. The rows from 18:24 to 18:38 ran on the next deployment, [`0x20ce7bbfaf66b28cb917f9331a8960eb563f2094`](https://explorer.testnet.arc.io/address/0x20ce7bbfaf66b28cb917f9331a8960eb563f2094), deployed at 18:23 UTC from source before the payment domain salt. Each seller deposited 0.1 USDC there.
 
 | Time | Seller | Gateway transfer id | Status | Batch | Outcome on the receipt |
 |---|---|---|---|---|---|
@@ -257,8 +257,8 @@ These rows ran before the `0xa1eff55d…` contract. The status and batch columns
 | 18:25:00 | Seller F | `9d3fa911-7595-4b5f-8b9e-1c504ab7b50e` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back. |
 | 18:26:09 | Seller E | `43e8770a-826d-4f21-9fe4-1214b1c0a68e` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | The seller stayed silent. Its deposit paid 0.0115 USDC back. |
 | 18:27:15 | Seller D | `1c0a0988-9a4c-4782-bfbc-64ac56428bb6` | completed | [`0xdc85805b…`](https://explorer.testnet.arc.io/tx/0xdc85805b12ed11f79167962d47d0e6d046f74c5d94170a5bb9f800a315ec835a) | Wrong key rejected by the contract. The seller stayed silent. Its deposit paid 0.0115 USDC back. |
-| 18:36:01 | Seller A | `9cf02586-792d-4d80-b499-486f9894a20d` | received | not yet | Charged once. Delivered. |
-| 18:38:20 | Seller C | `edacb3b5-452a-486d-971f-ff1ccf1767f5` | received | not yet | Paid once. 65 byte answer. |
+| 18:36:01 | Seller A | `9cf02586-792d-4d80-b499-486f9894a20d` | received | pending | Charged once. Delivered. |
+| 18:38:20 | Seller C | `edacb3b5-452a-486d-971f-ff1ccf1767f5` | received | pending | Paid once. 65 byte answer. |
 
 The 25 gwei figures behind `DISPUTE_COST` come from the deployment at `0x2dab71e2…`: claim [`0xe458fddb…`](https://explorer.testnet.arc.io/tx/0xe458fddb561de5fb6425cf7c2775b26a465623d138187ed577d1d868f3528200) (268,317 gas), finalize [`0x89f03886…`](https://explorer.testnet.arc.io/tx/0x89f03886270480150bbdbf08e6d99eecd14c180b395db98e3b93350bc9932a4e) (98,681 gas) and withdrawClaimable [`0x6f06623e…`](https://explorer.testnet.arc.io/tx/0x6f06623e2c72f1aaf3e4e19ff2ba9a3ef6e8a9a32bea258da64bf3879fb95c40) (53,271 gas), 0.0105 USDC together.
 
@@ -326,17 +326,17 @@ What ran in production on 2026-11-05 with the real World App on iOS: "Budget set
 
 These changes came after the production runs above, and the backend tests cover them.
 
-### Why Proof of Human and not uniqueness or Selfie Check
+### Why Proof of Human
 
-The hold asks one thing: is the owner there and releasing the money. It does not ask who the owner is or whether the owner is unique. A budget belongs to a single owner, and the session ties each hold to the person who set it. A Sybil score adds nothing to one owner's budget.
+World ID comes in at one moment: when money enters the agent's hold. The hold asks one thing, whether the owner is present and releasing the money, and Proof of Human answers exactly that. A budget belongs to a single owner, and the session ties each hold to the person who set the budget, so each approval comes from that same person.
 
 ### Time to first success, friction and the one improvement
 
 The full debrief, with the step, what came back and the date of each item, is in [docs/world-feedback.md](docs/world-feedback.md).
 
 - **Time to first success:** about 25 minutes, from handing over the instruction to "Budget set." on staging, 2026-11-05 16:05 to 16:29 UTC.
-- **Friction:** the Simulator's Cancel does not reach the app, so the app has its own Cancel request. Pasting the request URL opens the confirmation screen without a press on Continue, and one more press closes it and uses up the request. Signing in to the Developer Portal with World App opened an empty "Anonymous user" team, and "Verification" in its menu is the World App listing, not World ID.
-- **Missing capability or documentation:** Selfie Check returned `credential_unavailable` on staging (2026-10-28 UTC), and the IDKit README shows no signal on a session proof.
+- **What would make it even smoother:** the Simulator's Cancel sent back to the app, which has its own Cancel request for that path in the meantime. A confirmation screen that waits for a press on Continue, since pasting the request URL opens it at once and one more press closes it and uses up the request. A link to the right team when signing in to the Developer Portal with World App opens an empty "Anonymous user" team, and a clearer name for "Verification" in its menu, which is the World App listing.
+- **Capability and documentation that would help:** Selfie Check on staging, which returned `credential_unavailable` there on 2026-10-28 UTC, and an example of a signal on a session proof in the IDKit README.
 - **The one improvement with the greatest impact:** send the Simulator's Cancel back to the app.
 
 ## Arkiv and Swarm
