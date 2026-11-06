@@ -41,6 +41,7 @@ import {
   GATEWAY_DEPOSIT_GAS,
   GATEWAY_WALLET_ABI,
   linksFromSellerStore,
+  linksOf,
   MEMO_ABI,
   parseRefundMin,
   readClaimMemo,
@@ -363,6 +364,10 @@ describe('the links a seller puts on its answer', () => {
     expect(links).toEqual({ gatewayTransferId: TRANSFER_ID, swarmRef: await evidenceRefOf(sold, claimId, CONTRACT, arcTestnet.id) })
     expect(await linksFromSellerStore(file, client)(`0x${'0'.repeat(64)}`, claimId)).toBeNull()
     expect(await linksFromSellerStore(path.join(dir, 'none.json'), client)(NONCE, claimId)).toBeNull()
+    // The public try keeps its seller in memory, and reads the same links from it.
+    const paid = handler.paidFor(challenge.payment.nonce)
+    expect(paid ? await linksOf(paid, claimId, client) : null).toEqual(links)
+    expect(handler.paidFor(`0x${'0'.repeat(64)}`)).toBeNull()
   })
 
   test('the lookout answers with them, and answers without them when they cannot be found', async () => {

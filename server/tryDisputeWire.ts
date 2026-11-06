@@ -25,6 +25,7 @@ import {
   createSealedPorts,
   createSealer,
   createSellerWatcher,
+  linksOf,
   parseSealedAddress,
 } from './sealedDelivery'
 import type { SealedNet } from './sealedDelivery'
@@ -105,7 +106,12 @@ export function createTryPorts(options: TryWireOptions): TryPorts {
         const s = app.listen(0, '127.0.0.1', () => resolve(s))
         s.once('error', reject)
       })
-      const watcher = createSellerWatcher({ client, sellerKey: keys.seller, keyFor: handler.keyFor, mode: 'answer', log })
+      // The answer carries a memo on Arc, paid by the seller, as in the demo scene.
+      const linksFor = async (nonce: Hex, claimId: Hex) => {
+        const paid = handler.paidFor(nonce)
+        return paid ? linksOf(paid, claimId, client) : null
+      }
+      const watcher = createSellerWatcher({ client, sellerKey: keys.seller, keyFor: handler.keyFor, mode: 'answer', linksFor, log })
       // The lookout reads its starting block before the payment, so the claim is always after it.
       await watcher.tick()
       const stop = watcher.start(options.watchMs ?? 1000)

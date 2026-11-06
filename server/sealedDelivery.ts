@@ -743,22 +743,30 @@ export function linksFromSellerStore(file: string, client: Pick<SealedClient, 'a
     if (!existsSync(file)) return null
     const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { body?: unknown; settledHeader?: unknown }>
     const item = Object.entries(stored).find(([key]) => key.toLowerCase() === nonce.toLowerCase())?.[1]
-    if (!item) return null
-    const links: ClaimLinks = {}
-    try {
-      const settled = JSON.parse(Buffer.from(String(item.settledHeader), 'base64').toString('utf8')) as { transaction?: unknown }
-      if (typeof settled.transaction === 'string' && settled.transaction) links.gatewayTransferId = settled.transaction
-    } catch {
-      // No transfer id. The Swarm reference can still go in.
-    }
-    try {
-      const box = (JSON.parse(String(item.body)) as { sealed?: SealedBox }).sealed
-      if (box) links.swarmRef = await evidenceRefOf(box, claimId, client.address, client.chainId)
-    } catch {
-      // No box. The transfer id can still go in.
-    }
-    return links.gatewayTransferId || links.swarmRef ? links : null
+    return item ? linksOf(item, claimId, client) : null
   }
+}
+
+/** The links for an answer's memo from one settled payment: the body the seller sent and its PAYMENT-RESPONSE header. */
+export async function linksOf(
+  item: { body?: unknown; settledHeader?: unknown },
+  claimId: Hex,
+  client: Pick<SealedClient, 'address' | 'chainId'>,
+): Promise<ClaimLinks | null> {
+  const links: ClaimLinks = {}
+  try {
+    const settled = JSON.parse(Buffer.from(String(item.settledHeader), 'base64').toString('utf8')) as { transaction?: unknown }
+    if (typeof settled.transaction === 'string' && settled.transaction) links.gatewayTransferId = settled.transaction
+  } catch {
+    // No transfer id. The Swarm reference can still go in.
+  }
+  try {
+    const box = (JSON.parse(String(item.body)) as { sealed?: SealedBox }).sealed
+    if (box) links.swarmRef = await evidenceRefOf(box, claimId, client.address, client.chainId)
+  } catch {
+    // No box. The transfer id can still go in.
+  }
+  return links.gatewayTransferId || links.swarmRef ? links : null
 }
 
 /** What Seller F encrypts instead of what it promised. */
