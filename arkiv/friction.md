@@ -13,6 +13,13 @@ I am the builder of vet402, and I used Arkiv (`@arkiv-network/sdk@1.0.1` on Rabd
 ## What would make it even better
 
 1. **The access key in a header.** On 2026-11-05 before 16:24 UTC I called Rabdi with a wrong access key on purpose. The 401 error's `message` held the full RPC URL with the key in its path, and `shortMessage` held the clean text. To reproduce, build the chain with `rabdi({ accessKey: "wrong" })`, make any read, and print `error.message`. vet402 logs only `shortMessage`, with known secrets removed. Carrying the key in a header would keep it out of every app's logs at once.
+   To see it in one command: `npx bun run scripts/arkiv-401.ts`. With a made-up key, on 2026-11-06 at 08:15 UTC it printed `error.message holds the key: true`, `shortMessage holds the key: false`, and this masked message:
+   ```
+   HTTP request failed.
+
+   Status: 401
+   URL: https://rpc.rabdi.db-chain.testnet.arkiv.network/<access key>
+   ```
 2. **A timestamp next to the block.** On 2026-11-05 before 16:24 UTC, `$createdAt` read back as a block number, such as 544, and "older than 60 seconds" came from that number, the current block and the block duration from `getBlockTiming`. A timestamp field on the entity would make it one read.
 3. **Sorting by `$createdAt`.** On 2026-11-06 before 01:04 UTC I wanted the newest ruling and the oldest payment for a seller as one row each. The README notes "$createdAt cannot be sorted on", so vet402 reads every page and compares the blocks. Sorting by creation, even by block, would make "latest" a single query.
 4. **A pointer to `withCount()` in the paging section.** On 2026-11-06 before 01:04 UTC a reader that asked for one page with `limit(100)`, the node's maximum, showed 100 of 105 receipts. To reproduce, write 101 entities under one schema and read them with `limit(100)`. vet402 pages to the end (commit `c4b0dfe`). `withCount()` in the SDK's type definitions returns the total, and one line about it in the README's paging section would make the last page obvious at a glance.

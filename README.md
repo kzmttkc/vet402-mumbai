@@ -227,7 +227,7 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'4c985dc0-a59d-4674-9e8a-3d5d25def02b'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
 ```
 
-Arc's rulings, the entities the check reads before paying. At 03:15 UTC on 2026-11-06 it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND seller = str('<payTo, lowercase>')` for one seller.
+Arc's rulings, the entities the check reads before paying. At 03:15 UTC on 2026-11-06 it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND (pay_to = str('<payTo, lowercase>') OR seller = str('<payTo, lowercase>'))` for one seller. Rulings written since 2026-11-06 carry `pay_to`, and older ones have the address in `seller`.
 
 ```bash
 curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
@@ -253,6 +253,19 @@ Every hold approved under a budget counts toward it, spent or not. A 1 USDC budg
 In production (`WORLD_ENVIRONMENT=production`) nothing else adds to the hold. The plain hold route answers 403. The compare scene and the Seller C scene spend from the approved hold, and stop with "The hold doesn’t cover this. Hold more first." when it is too small. Gas sent to the hold wallet for contract calls is taken from the approved budget, and nothing is sent once the budget has no room. Staging keeps the filmed flow, where those two scenes add their own small extra hold.
 
 While a hold waits in production, the screen offers **Replay test**. It sends the previous hold's approval for the new hold, and the screen reads "Not approved: this approval is for another hold." Nothing is held. Every route that starts, approves or cancels a request needs a token the backend makes at start. It hands the token only to a request the browser marks as coming from the app's own page (`Sec-Fetch-Site: same-origin`). Any other POST a browser marks as sent from another site is refused, so no other page can start a demo or approve a job.
+
+**What the backend checks before anything is held**, in `server/world.ts`:
+
+| Check | Line |
+|---|---|
+| The request is signed with the RP key on the server (`signRequest`) | 101 |
+| Every proof carries this hold's signal, `<hold id>:<amount>` | 371 |
+| World's v4 verify answers for the same environment | 388 |
+| This request's nonce | 390 |
+| Protocol 4.0 | 391 |
+| Every credential asked for is named as passed in World's `results`, the selfie check included | 395 to 400 |
+| The same session as the budget, in full | 402 to 404 |
+| A new nullifier for each credential, never seen before | 406 to 413 |
 
 **The check grows with the amount.** World ID comes in at one moment: when money enters the agent's hold. vet402 asks for the least that answers the question at that amount.
 
