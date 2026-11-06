@@ -30,7 +30,7 @@ import { sealedDelivery } from '@vet402/sealed-delivery'
 
 const app = express()
 const sealed = sealedDelivery({
-  contract: '0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5',
+  contract: '0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B',
   sellerKey,              // signs promises, receives the payment, answers claims
   facilitator,            // the one you already use, for example Circle's BatchFacilitatorClient
   accepts,                // your x402 payment requirement, with payTo set to sellerKey's address
@@ -72,7 +72,7 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 ## The contract
 
-The source in `contracts/` repays the buyer's gas and is not deployed yet. The contract live on Arc testnet at `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` since 2026-11-05 22:20 UTC runs the earlier source with a fixed `DISPUTE_COST`, and this package reads `MAX_DISPUTE_COST`, so it needs the new deployment. Each seller has its own deposit pool. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
+The source in `contracts/` repays the buyer's gas, and it is deployed on Arc testnet at `0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B` (2026-11-06 01:35 UTC, source verified on the explorer) and on Arc mainnet at `0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9` (2026-11-06 02:02 UTC, Sourcify `exact_match`). This package reads `MAX_DISPUTE_COST`, so it does not work with the earlier testnet version `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`, which charged a fixed `DISPUTE_COST`. Each seller has its own deposit pool. The contract has no owner, administrator or upgrade path. The full state table is in `contracts/README.md`.
 
 | # | Argument | Recommended on Arc testnet | Meaning |
 |---:|---|---|---|
@@ -111,5 +111,5 @@ forge create contracts/SealedDelivery.sol:SealedDelivery --rpc-url "$RPC" --priv
 - **`prove` gas grows with the answer.** It suits small answers.
 - **Signatures must come from EOAs.** Contract wallets are refused.
 - **Gas above `maxGasPrice` is not repaid**, and a verdict counts the buyer's later calls at the claim's gas price.
-- **Arc testnet only, with no outside audit.**
+- **Arc testnet and one small Arc mainnet run, with no outside audit.** The package has run only against the testnet contract.
 - **The package lives in this repository** and imports the app's sealing, ABI and lookout from `src/` and `server/`. It is not on npm.

@@ -2,7 +2,16 @@
 
 SealedDelivery lets a seller stand behind a paid answer without holding the buyer's money. The payment settles through Circle Gateway and goes to the seller. The contract decides only what happens when the key to a sealed answer does not arrive, or opens something other than what the seller signed.
 
-This source repays the buyer's gas at the price it actually paid, and it is not deployed yet. The contract live on Arc testnet at [`0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5`](https://explorer.testnet.arc.io/address/0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5), deployed by Arc Studio on 2026-11-05 at 22:20 UTC, runs the earlier source with a fixed `DISPUTE_COST`. `contract-metadata/SealedDelivery.json` lists deployments of earlier source.
+This source is the one deployed. It repays the buyer's gas at the price the claim actually paid.
+
+| Network | Address | Deployed (UTC) | Source check |
+|---|---|---|---|
+| Arc testnet, 5042002 | [`0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`](https://explorer.testnet.arc.io/address/0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B) | 2026-11-06 01:35:22, [`0x38095fb7…`](https://explorer.testnet.arc.io/tx/0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733), `forge create` from the terminal of the Arc Studio sandbox | Verified on the Arc testnet explorer (Blockscout) at 01:50 UTC. The verified file has the same sha256 as this one (`93a08889…`) |
+| Arc mainnet, 5042 | [`0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9) | 2026-11-06 02:02:56, [`0x6a276f7a…`](https://explorer.arc.io/tx/0x6a276f7a2ca79260ccdfc28a809b889a2febd95d684e9a5db818ecb2581eabd8), by script | Sourcify `exact_match`, with the same sha256 |
+
+Both take the recommended arguments under [Constructor](#constructor). Mainnet takes Arc mainnet's Gateway Wallet, `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Before the testnet deploy, the source was pasted into the code editor of the Studio sandbox and the tests copied in through its terminal, where forge 1.7.1 passed 246 tests and failed 0. That count includes `contracts/test-integration`, which only the sandbox holds.
+
+Earlier versions charged a fixed dispute cost in place of the gas each claim paid: `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` on testnet (deployed by Arc Studio on 2026-11-05 at 22:20 UTC, `disputeCost` 0.0105 USDC) and `0xafdb8931eebdce7f714ac3905c65a50293eb6db6` on mainnet (2026-11-05 21:59 UTC, 0.009 USDC). `contract-metadata/SealedDelivery.json` lists deployments of earlier source.
 
 ## Where the idea comes from
 
@@ -106,7 +115,21 @@ Measured on 2026-11-06. The ranges are anvil receipts of this source, from `scri
 | `prove` on a 1 KiB answer | at most 148,451 | 0.0037 |
 | `withdrawClaimable` | 41,343 to 58,443 (the higher when the buyer held no USDC) | 0.0010 to 0.0015 |
 
-The earlier contract on Arc testnet used 268,376 to 268,460 gas per `claim` on 2026-11-05, close to the 271,000 here, which also checks the `validAfter` window and books the gas.
+On Arc, 2026-11-06, the deployed contract matched these ranges. Read with `cast receipt`, all status 1:
+
+| Call | Arc testnet, 01:37 to 02:05 UTC | Arc mainnet, 02:03 to 02:04 UTC |
+|---|---|---|
+| `claim` | 271,013 to 271,049 | 271,037 and 271,049 |
+| `answer`, with the refund transfer | 131,592 to 131,604 for a seller's first answer, 97,015 after | 131,604 |
+| `answer` with a wrong key, reverted on purpose | 29,267 and 29,279 | |
+| `finalize` | 115,862 the first time for a seller, 98,774 after | 115,874 |
+| `prove` on a 70 byte answer | 123,452 the first time, 106,352 after | |
+| `withdrawClaimable` | 53,316 | 53,316 |
+| `flushBurn` | 57,256 | 57,256 |
+
+What the buyer got back, from the events of those transactions. An answer's `ClaimGasRepaid` came out above the claim's fee every time, by about 2.6 %: claim [`0x6fbe43cb…`](https://explorer.testnet.arc.io/tx/0x6fbe43cb52a151c51b4b01736bcc99f94bc9f98b249c42de09acf54c1af0d5da) cost 0.006775 USDC (271,013 gas at 25 gwei) and its answer [`0x7e816df8…`](https://explorer.testnet.arc.io/tx/0x7e816df8f4631d9b0172c9a3da16f820f56dc4360f0657816d9914bc29f3fc11) repaid 0.006949. On mainnet, claim [`0x183be3f0…`](https://explorer.arc.io/tx/0x183be3f0fb87c826b6f26f2a4103e5419772843d842c3718f96e284c85e37fa8) cost 0.005421 and its answer [`0x7541a28b…`](https://explorer.arc.io/tx/0x7541a28bc973fec1969705db7a5e407e48b8ec27c8ff9419732ceb03fd235124) repaid 0.00556, so the buyer ended 0.000139 USDC ahead. A silent seller on mainnet ([`0x52162804…`](https://explorer.arc.io/tx/0x521628040a75d008ab4fed04c01f7351ea2035d4c6ed93e5b3fe581b99865555)) credited the buyer 0.01116 USDC, which left it 0.001355 ahead after the price, its claim, the `finalize` and the withdrawal. The testnet verdicts of 2026-11-06 are in [DEMO.md](../DEMO.md#contract-transactions).
+
+The earlier testnet contract used 268,376 to 268,460 gas per `claim` on 2026-11-05, close to the 271,000 here, which also checks the `validAfter` window and books the gas.
 
 ## Limits
 
@@ -116,7 +139,7 @@ The earlier contract on Arc testnet used 268,376 to 268,460 gas per `claim` on 2
 - **`FOLLOW_UP_GAS` is sized for small answers.** 230,000 covers the worst `finalize` or a `prove` on up to 1 KiB, plus a withdrawal. A proof on a larger answer costs the buyer more than it gets back for that step.
 - **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, and now does it at no cost to itself, since an answer repays its gas. The seller pays its answer and that claim gas, about 0.010 USDC at 25 gwei, and each such claim needs a payment the seller already settled. A seller whose watcher is down for the 60 s window pays that buyer's verdict too. Set a longer `answerWindow` for real use.
 - **A blocked buyer waits for its refund.** If the token refuses the answer's transfer, the refund becomes a credit, and the buyer pays the gas of `withdrawClaimable` itself.
-- **Gas is converted as USDC.** `WEI_PER_USDC_UNIT` is 1e12 because Arc charges gas in USDC at 18 decimals and the deposit token has 6. I checked that on 2026-11-06: the live contract's native balance was exactly 1e12 times its ERC-20 balance. On a chain whose gas is another token, deploy with `maxGasPrice` 0, which repays no gas.
+- **Gas is converted as USDC.** `WEI_PER_USDC_UNIT` is 1e12 because Arc charges gas in USDC at 18 decimals and the deposit token has 6. I checked that on 2026-11-06 at 02:26 UTC: the native balance of `0xE9C35ad2…` was exactly 1e12 times its ERC-20 balance of 2.247216 USDC. On a chain whose gas is another token, deploy with `maxGasPrice` 0, which repays no gas.
 - **It never sees the payment.** `claim` checks signed intent and the authorization's `validAfter` window, and settlement stays in Gateway. A seller must sign a promise only in a flow that settles before the box leaves, as `server/sellers.ts` does.
 - **A seller can commit to garbage from the start.** If `plaintextHash` is the hash of junk and the key opens that junk, the promise was kept and `prove` reverts. Judging the content belongs to a delivery check outside this contract.
 - **A box lost before it arrives leaves nothing to claim.** Without a signed promise there is no claim. vet402 covers that case with a second fetch on the same payment, for sellers that declare it.
@@ -124,7 +147,7 @@ The earlier contract on Arc testnet used 268,376 to 268,460 gas per `claim` on 2
 - **Disputes publish the answer.** `answer` puts the key on chain, so anyone holding that ciphertext can read the answer. `prove` puts key and ciphertext on chain, so anyone can read it. Keys are per request, so other answers stay sealed.
 - **`prove` gas grows with the answer**, because it decrypts in a loop. It suits small answers.
 - **Signatures must come from EOAs.** Contract wallets are refused.
-- **Not deployed yet, and no outside audit.** The tests in `contracts/test` passed on 2026-11-06 (236 tests in 19 suites, on branch `econ`).
+- **Testnet and a small mainnet run only, with no outside audit.** The tests in `contracts/test` passed on 2026-11-06 between 02:10 and 02:20 UTC on a fresh clone of `main` at `4ad89eb` (236 tests in 19 suites, forge 1.8.3).
 
 ## Use it with your own x402 seller
 
