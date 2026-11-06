@@ -1,5 +1,5 @@
-// The browser's side of "Ask the agent". It sends the job's words, and to approve, the plan's id.
-// Nothing here sends an amount, a seller or a payee.
+// The browser's side of "Ask the agent". It sends the job's words, the person's limit, and to approve, the plan's id.
+// Nothing here sends an amount, a seller or a payee. The limit can only lower what the server allows.
 
 export const JOB_URL = '/api/try-job'
 export const ARC_TX = 'https://explorer.testnet.arc.io/tx/'
@@ -60,22 +60,25 @@ async function call<T>(init: RequestInit, url: string, fetchImpl: typeof fetch):
   return { ok: true, value: body }
 }
 
-const post = (body: Record<string, string>): RequestInit => ({
+const post = (body: Record<string, string | boolean>): RequestInit => ({
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 })
 
-/** Asks the agent to pick a seller. Nothing is paid. */
-export async function askAgent(job: string, fetchImpl: typeof fetch = fetch): Promise<PlanAnswer> {
-  const reply = await call<PlanAnswer>(post({ step: 'plan', job }), JOB_URL, fetchImpl)
+/** Asks the agent to pick a seller, within the person's limit. Nothing is paid. */
+export async function askAgent(job: string, limit: string, fetchImpl: typeof fetch = fetch): Promise<PlanAnswer> {
+  const reply = await call<PlanAnswer>(post({ step: 'plan', job, limit }), JOB_URL, fetchImpl)
   if (!reply.ok) return { ok: false, message: reply.message, compared: [] }
   return reply.value.ok ? reply.value : { ok: false, message: reply.value.message, compared: reply.value.compared ?? [] }
 }
 
-/** Approves the plan on the card. The server plans again from the same words and pays only the same pick. */
-export async function approvePlan(job: string, id: string, fetchImpl: typeof fetch = fetch) {
-  return call<Paid>(post({ step: 'approve', job, id }), JOB_URL, fetchImpl)
+/**
+ * Approves the plan on the card, with the limit it was planned under. The server plans again from the same words and pays
+ * only the same pick. `lineDropped` keeps the key off the connection, so the answer has to come through Arc.
+ */
+export async function approvePlan(job: string, id: string, limit: string, { lineDropped = false } = {}, fetchImpl: typeof fetch = fetch) {
+  return call<Paid>(post({ step: 'approve', job, id, limit, ...(lineDropped ? { lineDropped: true } : {}) }), JOB_URL, fetchImpl)
 }
 
 /** Where the payment stands on Arc. */
@@ -83,8 +86,8 @@ export async function settlementOf(transferId: string, fetchImpl: typeof fetch =
   return call<Settlement>({ method: 'GET' }, `${JOB_URL}?transfer=${encodeURIComponent(transferId)}`, fetchImpl)
 }
 
-/** The receipt line, in plain words. No hashes. */
+/** The receipt line, in plain words. No hashes. The link to Arc sits under it once the payment has settled. */
 export function receiptLine(paid: string, settled: boolean): string {
   if (Number(paid) === 0) return 'Nothing was charged.'
-  return settled ? `Paid ${paid} USDC. Settled on Arc.` : `Paid ${paid} USDC. Settling on Arc…`
+  return settled ? `Paid ${paid} USDC.` : `Paid ${paid} USDC. Confirming…`
 }
