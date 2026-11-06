@@ -101,7 +101,7 @@ The contract read at 02:17 UTC:
 | Seller E | `0x2d86121923E9662D4d926d657FE91A2141BD93e8` | 0.450638 | 2 | 0 |
 | Seller F | `0x1401Bd7C7FAb3FE8A429672Fc1C5371456c8445d` | 0.437452 | 0 | 2 |
 
-Each verdict took twice what it credited the buyer: one half to the buyer and one half burned by the `flushBurn` after it. Seller A's two answers repaid 0.005698 and 0.006949 USDC of claim gas, and Seller F's two answers 0.005629 and 0.006949. The buyer withdrew every credit, and `claimable` for the vet402 hold read 0 at 02:17 UTC.
+Each verdict took twice what it credited the buyer: one half to the buyer and one half burned by the `flushBurn` after it, which sends it to `0x000000000000000000000000000000000000dEaD`, where no one can spend it. Seller A's two answers repaid 0.005698 and 0.006949 USDC of claim gas, and Seller F's two answers 0.005629 and 0.006949. The buyer withdrew every credit, and `claimable` for the vet402 hold read 0 at 02:17 UTC.
 
 Buyer net per dispute in the 01:59 run, in USDC: what came back, less the price (except after Seller A's answer, when the key came), less the buyer's own gas for the claim, the verdict and the withdrawal.
 
@@ -312,7 +312,7 @@ Time from the start of those runs:
 
 What ran on 2026-11-05 in the staging Simulator: "Budget set.", a hold of 0.02 USDC, "Not approved: this approval is for another hold." for a proof from another hold, and "Not approved. Nothing was held or paid." for Cancel request.
 
-What ran in production on 2026-11-05 with the real World App on iOS: "Budget set." at 22:16 UTC, "Held 1 USDC for this job." at 22:16 UTC and again at 23:25 UTC for the video, and "Not approved. Nothing was held or paid." for Cancel request at 23:23 UTC. The verified result reads environment production, protocol 4.0, proof_of_human.
+What ran in production on 2026-11-05 with the real World App on iOS: "Budget set." at 22:16 UTC, "Held 1 USDC for this job." (the wording of that version, now "Held 1 USDC for your agent.") at 22:16 UTC and again at 23:25 UTC for the video, and "Not approved. Nothing was held or paid." for Cancel request at 23:23 UTC. The verified result reads environment production, protocol 4.0, proof_of_human.
 
 ### How the approval works since 2026-11-06
 
@@ -326,9 +326,14 @@ What ran in production on 2026-11-05 with the real World App on iOS: "Budget set
 
 These changes came after the production runs above, and the backend tests cover them.
 
-### Why Proof of Human
+### Why Proof of Human, with Selfie Check above 0.5 USDC
 
-World ID comes in at one moment: when money enters the agent's hold. The hold asks one thing, whether the owner is present and releasing the money, and Proof of Human answers exactly that. A budget belongs to a single owner, and the session ties each hold to the person who set the budget, so each approval comes from that same person.
+World ID comes in at one moment: when money enters the agent's hold on the owner's app. The public page's agent pays from its own fixed test wallet (`TRY_JOB_HOLD_KEY` in `server/tryJobWire.ts`). The hold asks whether the owner is present and releasing the money. A budget belongs to a single owner, and the session ties each hold to the person who set the budget, so each approval comes from that same person.
+
+- **0.5 USDC or less:** Proof of Human. The screen reads "Held {amount} USDC for your agent."
+- **Above 0.5 USDC:** Proof of Human and Selfie Check in one approval. vet402 holds only when the selfie line of World's answer passed (`server/world.ts`, with each check in the backend tests).
+- **In production on this version:** the approved holds are 0.5 USDC or less, a budget at 05:05 UTC and "Held 0.5 USDC for your agent." at 05:06 UTC on 2026-11-06. That day World App showed no approval sheet for a request that included Selfie Check ([item 8 of docs/world-feedback.md](docs/world-feedback.md)), and the request closed at the app's 2 minute limit with nothing held.
+- **When World App answers `credential_unavailable`:** `cancel` in `server/world.ts` closes the request with `SELFIE_UNAVAILABLE`, "Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held." The budget keeps its full room (`server/__tests__/world.test.ts:1457`).
 
 ### Time to first success, friction and the one improvement
 

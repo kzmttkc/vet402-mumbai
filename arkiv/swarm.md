@@ -65,7 +65,7 @@ Seller A, 2026-11-06 01:42 UTC, on the live contract `0xE9C35ad2caF5D76CA5a5F61c
 
 | | Value |
 |---|---|
-| Arkiv entity key | `0x23d6b0048670a9413f774ba86c7db4bca5acaab69a8ab6aa77496e3c0ce13f3c` |
+| Arkiv entity key | [`0x23d6b0048670a9413f774ba86c7db4bca5acaab69a8ab6aa77496e3c0ce13f3c`](https://rabdi.explorer.arkiv.network/entity/0x23d6b0048670a9413f774ba86c7db4bca5acaab69a8ab6aa77496e3c0ce13f3c) on the Arkiv explorer |
 | `claim_id` in it | `0x2c880d2b0768269fb827dca6e23aba464c5aa686f62310d4153d0971b8b582a5` |
 | `gateway_transfer_id` in it | `4c985dc0-a59d-4674-9e8a-3d5d25def02b` |
 | `swarm_ref` in it | `678485f34be28e46bc7791341ea987e149b38b592ff52ad9aecfa6e292696ec8` |

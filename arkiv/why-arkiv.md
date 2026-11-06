@@ -2,6 +2,8 @@
 
 A receipt that lives inside the app that took the payment proves little. If vet402 stops, the receipt stops with it. I wanted a receipt the buyer can still open when the app is gone, one vet402 itself cannot quietly rewrite.
 
+**Before the event, and now.** Before the event, vet402's receipts were a file: round 2's `records.json` sits in the public repository `kzmttkc/arc-delivery-receipts`, committed on 2026-09-28 at 05:22 UTC (`c6746b6`) to a `main` branch I push to, and served by GitHub Pages. Arc held only the round's Merkle root, `0xc6c42f0a…`, written to the DeliveryLedger contract `0x7238b5cc…` on Arc mainnet in [`0x604e4a79…`](https://explorer.arc.io/tx/0x604e4a79a7d7f3c9208c84aa10c6c2d031da104b254e3de0684dba26563eab40) at 05:17:43 UTC, so a reader checked a receipt with its Merkle proof against that root, once the whole round was published. On Arkiv each receipt is its own `readonly` entity, written when the payment happens, found by one query on its transfer id or payTo, and kept by a network vet402 does not run. The receipt a buyer reads is the one written at payment time, and Arc's ruling against a seller is on Arkiv before the next payment to it.
+
 Arkiv gives me that with four things built in.
 
 **Nobody can edit a receipt, including vet402.** Receipts are created `readonly`, and every receipt on Rabdi reads its flags back as `raw: 3`, readonly and open to extension, on 2026-11-06 at 01:01 UTC. Arkiv's SDK says a readonly entity's attributes can never change, and the engine has a `ReadOnlyEntity` error for a write that tries. Step (11) of `scripts/arkiv-live.ts` has vet402's own key try to change a receipt and passes only when the network refuses.

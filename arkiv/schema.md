@@ -1,10 +1,12 @@
 # Arkiv schema
 
-vet402 writes to Arkiv's Rabdi testnet (chain id 7794095) with `@arkiv-network/sdk@1.0.1`. One key writes everything. Every query filters on that key's address: with `ownedBy` for receipts, sellers and rulings, which stay with the writer, and with `createdBy` for evidence, which the writer hands to the buyer on the claim.
+vet402 writes to Arkiv's Rabdi testnet (chain id 7794095) with `@arkiv-network/sdk@1.0.1`. One key writes everything. Every query a payment waits on filters on that key's address: with `ownedBy` for receipts, sellers and rulings, which stay with the writer, and with `createdBy` for evidence, which the writer hands to the buyer on the claim. "Check a seller" on the receipts page also reads rulings from other writers and keeps each only once Arc holds its event ([how-you-use-arkiv.md](how-you-use-arkiv.md#reading-before-paying)).
 
 The definitions live in `src/arkiv/schema.ts`.
 
 Each table says which query reads a column. A column is indexed only when some query filters on it. On 2026-11-06 I took the index off `job_id`, `status` and `payment_key`, because no query filtered on them. Entities written before that still carry the index flag on those three. Reads never compare the flag, so old and new entities read the same.
+
+`kind` keeps its index even in the schemas where it holds one value, because the published queries (the README's curl, `isRuledAgainst` and the receipts page) filter on it, and Arkiv matches a filter only on an indexed column. On 2026-11-06 at 10:59 UTC, `status = str('accepted')`, unindexed since that day, matched 54 of the 88 payment entities, the ones written before the index came off.
 
 One column name means two things, and that is on purpose. `seller` holds the seller's **name** in `vet402_receipt` and `vet402_seller`, because the catalog names a seller and a receipt must show it. `seller` holds the **payTo address** in `vet402_verdict`, because Arc rules against the address that was paid, and a name is something any listing can copy. The address of a receipt or seller entity is in its own column, `pay_to`. So a ruling joins to a receipt on `vet402_verdict.pay_to = vet402_receipt.pay_to` (or `vet402_verdict.seller` on a ruling older than its `pay_to`), never on the two `seller` columns. Entities written before `pay_to` existed carry the name alone: at 03:15 UTC on 2026-11-06, 18 of the 123 receipts carried `pay_to`.
 
