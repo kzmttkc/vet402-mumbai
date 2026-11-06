@@ -178,7 +178,7 @@ Swarm is required. There is no copy on the page to open instead, so when a sourc
 
 ## Swarm in the demo video
 
-From 3:16.1 on the public page: Seller A's box from claim `0x0cf117a0…` (2026-11-06 04:17 UTC) shows "Kept on Swarm until 2026-12-13" under the seller's name, and opening it reads "Record from Arkiv." "Box from Swarm." "Key from Arc." and "Matches the seller's promise." That box went up through my own Bee node with batch `b6455d93…` and is pinned there. At 3:20.6 another Seller A box opens to "Matches the seller's promise." and a Seller F box to "Does not match the seller's promise."
+From 3:18.2 on the public page: Seller A's box from claim `0x0cf117a0…` (2026-11-06 04:17 UTC) shows "Kept on Swarm until 2026-12-13" under the seller's name, and opening it reads "Record from Arkiv." "Box from Swarm." "Key from Arc." and "Matches the seller's promise." That box went up through my own Bee node with batch `b6455d93…` and is pinned there. At 3:22.8 another Seller A box opens to "Matches the seller's promise." and a Seller F box to "Does not match the seller's promise."
 
 Every box of the 2026-11-06 runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above.
 
