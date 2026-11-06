@@ -243,5 +243,10 @@ export function createSeller(config: SellerConfig) {
   return Object.assign(handle, {
     key,
     keyFor: (nonce: string): Hex | null => stored.get(nonce)?.key ?? null,
+    /** The body and PAYMENT-RESPONSE this seller sent for a payment nonce, for the memo on its answer. */
+    paidFor: (nonce: string): { body: string; settledHeader: string } | null => {
+      const item = stored.get(nonce)
+      return item ? { body: item.body, settledHeader: item.settledHeader } : null
+    },
   })
 }
