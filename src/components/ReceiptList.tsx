@@ -3,6 +3,7 @@ import type { Receipt } from '@/hooks/useReceipts'
 import { useWriter } from '@/hooks/useWriter'
 import { arcTxUrl } from '@/lib/askAgent'
 import { DEMO_CONTROLS } from '@/lib/demoMode'
+import { splitLines } from '@/lib/receiptLines'
 import { COMPARISON_LINE, settledLine } from '@/lib/receiptStatus'
 
 const short = (value: string, keep = 10) => (value.length > keep ? `${value.slice(0, keep)}…` : value)
@@ -31,6 +32,7 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
       <ul className="mt-2 space-y-2">
         {receipts.map((r) => {
           const onArc = r.status === 'completed' ? arcTxUrl(r.batchTx) : null
+          const lines = splitLines(r.outcome)
           return (
           <li key={r.id} className="rounded-2xl bg-[var(--surface-muted)] p-4">
             <div className="flex items-start gap-3">
@@ -57,7 +59,7 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
                     </a>
                   )}
                 </p>
-                {r.outcome.map((line) => (
+                {lines.plain.map((line) => (
                   <p key={line} className="mt-1 text-sm font-medium text-pretty">
                     {line}
                   </p>
@@ -84,6 +86,11 @@ export function ReceiptList({ receipts, onRetryAsNew, busy }: Props) {
                     {r.transferId ? short(r.transferId, 13) : 'Not assigned yet'}
                   </dd>
                 </dl>
+                {lines.details.map((line) => (
+                  <p key={line} className="mt-2 text-pretty">
+                    {line}
+                  </p>
+                ))}
                 </details>
                 {r.demo === 'b' && DEMO_CONTROLS && (
                   <div className="mt-3">

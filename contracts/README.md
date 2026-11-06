@@ -76,19 +76,21 @@ Reads: `coverage(seller)` is `deposits - pendingWithdrawal`. `coverageFor(seller
 
 ## The economics
 
-**The buyer never loses, whatever the seller does.** A claim used about 271,000 gas, which costs more than a sub-cent price. So the contract counts the buyer's gas, at the gas price the claim actually paid, and makes the seller carry it.
+**A dispute leaves the buyer at or above zero, whatever the seller does, under three conditions.** The claim's gas price is at or below `MAX_GAS_PRICE` (100 gwei in both deployments). The buyer sends its later calls (`finalize`, `prove`, `withdrawClaimable`) at the claim's gas price or lower. And the seller's free deposit still covers the verdict when it lands (`coverageFor` was true before paying, and no earlier verdict drained the pool). Outside any of them the buyer carries the difference, as [Limits](#limits) says case by case. A claim used about 271,000 gas, which costs more than a sub-cent price. So the contract counts the buyer's gas, at the gas price the claim actually paid, and makes the seller carry it.
 
 - **Silent or lying seller.** The verdict credits the buyer `value + disputeCost`: the price, the claim's measured gas, and `FOLLOW_UP_GAS` for the verdict and the withdrawal. The seller pays the same again into the burn.
 - **Seller answers on chain.** The answer sends the buyer `gasRefund`, the claim's gas, in the same transaction. The buyer already has the key it paid for, so this is all it is owed. It needs no second transaction, whose gas would not be repaid.
 
-I checked this in `test_Economics_BuyerNeverLosesAndNeverGainsFromAnAnswer`, with the buyer starting with no USDC so that its withdrawal costs the most. Buyer net is what came back, less the price (except after an answer, when the key came), less its own gas, in USDC:
+I checked this in `test_Economics_BuyerNeverLosesAndNeverGainsFromAnAnswer`, with the buyer starting with no USDC so that its withdrawal costs the most, every call at the claim's gas price, and a deposit that covers the verdict. Buyer net is what came back, less the price (except after an answer, when the key came), less its own gas, in USDC:
 
 | Gas price | SILENT | FRAUD (claim, prove) | Answered |
 |---:|---:|---:|---:|
 | 1 gwei | +0.000050 | +0.000058 | +0.000007 |
 | 25 gwei | +0.002103 | +0.001884 | +0.000166 |
 | 100 gwei | +0.008412 | +0.007533 | +0.000665 |
-| 1000 gwei | +0.084102 | +0.075348 | +0.006631 |
+| 1000 gwei, test deployment only | +0.084102 | +0.075348 | +0.006631 |
+
+The test deploys with `maxGasPrice` at 1000 gwei, its own ceiling, so the last row is the test's and not the live contract's. The deployed contracts cap at 100 gwei: a claim sent above that is repaid as if at 100 gwei, and the buyer carries the rest.
 
 `scripts/sealed-local-e2e.ts` checks the same from real receipts on anvil: the buyer ends at or above zero after silence and fraud, and between zero and 5 % of its claim gas after an answer.
 
@@ -138,6 +140,7 @@ The earlier testnet contract used 268,376 to 268,460 gas per `claim` on 2026-11-
 - **Gas is repaid only up to `MAX_GAS_PRICE`.** A buyer that claims above it carries the part above. The verdict's share is counted at the claim's price too, so a buyer that sends `finalize`, `prove` or `withdrawClaimable` at a higher price than its claim carries that difference.
 - **`FOLLOW_UP_GAS` is sized for small answers.** 230,000 covers the worst `finalize` or a `prove` on up to 1 KiB, plus a withdrawal. A proof on a larger answer costs the buyer more than it gets back for that step.
 - **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, and now does it at no cost to itself, since an answer repays its gas. The seller pays its answer and that claim gas, about 0.010 USDC at 25 gwei, and each such claim needs a payment the seller already settled. A seller whose watcher is down for the 60 s window pays that buyer's verdict too. Set a longer `answerWindow` for real use.
+- **The seller's guard against that buyer reads the chain, not the contract.** `buyerClaimRecord` in `packages/sealed-delivery` counts a buyer's `Claimed` events and how many of its latest claims ended in a `KeyRevealed`, that is, the seller had the key and handed it over. The middleware's `claimGuard` option then refuses that buyer a sealed box, without charging it, or asks it a higher price that the seller sets, for example the 0.010 USDC such a claim costs it. The contract itself still accepts every valid claim. The record follows one address: a buyer that moves to a fresh one starts clean, though every claim from it still needs a payment the seller settled. And a buyer whose line really did drop several times looks the same, so the bar (3 answered among the latest 5 by default) is the seller's choice.
 - **A blocked buyer waits for its refund.** If the token refuses the answer's transfer, the refund becomes a credit, and the buyer pays the gas of `withdrawClaimable` itself.
 - **Gas is converted as USDC.** `WEI_PER_USDC_UNIT` is 1e12 because Arc charges gas in USDC at 18 decimals and the deposit token has 6. I checked that on 2026-11-06 at 02:26 UTC: the native balance of `0xE9C35ad2…` was exactly 1e12 times its ERC-20 balance of 2.247216 USDC. On a chain whose gas is another token, deploy with `maxGasPrice` 0, which repays no gas.
 - **It never sees the payment.** `claim` checks signed intent and the authorization's `validAfter` window, and settlement stays in Gateway. A seller must sign a promise only in a flow that settles before the box leaves, as `server/sellers.ts` does.

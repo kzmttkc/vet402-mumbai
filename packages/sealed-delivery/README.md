@@ -52,6 +52,36 @@ Size the deposit as `2 * (price + MAX_DISPUTE_COST)` times the open claims you w
 
 The full example is `examples/seller.ts`.
 
+### Guard against a buyer that claims with the key in hand
+
+A claim needs no proof that the key never came. A buyer that already has it can still claim, at no cost to itself, and an honest seller pays its answer and the claim's gas, about 0.010 USDC at 25 gwei. `claimGuard` reads the buyer's record from the chain after verify, before anything is settled:
+
+```ts
+import { buyerClaimRecord, createSealedChain, sealedDelivery } from '@vet402/sealed-delivery'
+
+const chain = createSealedChain({ contract, rpcUrl })
+const sealed = sealedDelivery({
+  contract, sellerKey, facilitator, accepts, rpcUrl, chain,
+  claimGuard: {
+    fromBlock: async () => (await chain.latestBlock()) - 100_000n, // the latest 100,000 blocks
+    last: 5,               // look at the buyer's 5 latest claims
+    answeredAtLeast: 3,    // 3 of them ended with the seller handing over the key
+    action: 'refuse',      // or { surcharge: 10_000n } to ask 0.01 USDC more
+  },
+})
+
+// The same record, read by hand:
+const record = await buyerClaimRecord(buyer, { contract, rpcUrl, fromBlock: 0n, last: 5 })
+// record.claims, record.answered, record.recent[i].answered
+```
+
+- `'refuse'`: the buyer gets a 403 that says why, and nothing is settled, so it is not charged.
+- `{ surcharge }`: a payment of the plain price gets a 402 asking for the price plus `surcharge`. A payment of that amount gets a sealed box as usual. Anyone may pay it.
+- A record that cannot be read is logged and the sale goes on. One buyer's verdict is reused for `cacheMs` (60 s by default).
+- `buyerClaimRecord` reads `Claimed`, filters the buyer here because it is not an indexed field, then reads `KeyRevealed` for the latest claims only. Both reads go 10,000 blocks per call. `seller` (or `thisSellerOnly: true` in the guard) counts only claims against one seller.
+
+`test/guard.test.ts` runs both actions and the record against a node that serves real event logs.
+
 ## Buyer
 
 ```ts
@@ -68,7 +98,7 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 ## Also exported
 
-`sealResponse`, `openResponse`, `sealAndPromise`, `signPromise`, `promiseSigner`, `checkBox`, `openBox`, `claimIdOf`, `paymentAuthOf`, `PROMISE_TYPES`, `promiseDomain`, `SEALED_DELIVERY_ABI` and `createSealedChain`, for a seller or buyer that is not on Express.
+`buyerClaimRecord`, `isGuarded`, `sealResponse`, `openResponse`, `sealAndPromise`, `signPromise`, `promiseSigner`, `checkBox`, `openBox`, `claimIdOf`, `paymentAuthOf`, `PROMISE_TYPES`, `promiseDomain`, `SEALED_DELIVERY_ABI` and `createSealedChain`, for a seller or buyer that is not on Express.
 
 ## The contract
 
@@ -106,7 +136,7 @@ forge create contracts/SealedDelivery.sol:SealedDelivery --rpc-url "$RPC" --priv
 - **The deposit is shared per seller, first come, first served.** Nothing is reserved at claim time. `coverageFor` is true when read and can change after that. A later verdict gets what is left, which can be nothing.
 - **The contract cannot judge what the answer means.** It checks that the key opens exactly the plaintext the seller signed. A seller that signs the hash of junk and delivers that junk has kept its promise.
 - **The payment is never seen on chain.** `claim` checks the buyer's signed intent. The middleware signs a promise only after verify and before settle, and returns the box only after settle.
-- **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, at no cost to itself, and the seller must answer within the window and repay the claim's gas. Keep the lookout running and set a longer `answerWindow` for real use.
+- **A claim needs no proof of non-delivery.** A buyer that already has the key can still claim, at no cost to itself, and the seller must answer within the window and repay the claim's gas. Keep the lookout running and set a longer `answerWindow` for real use. `claimGuard` stops repeat offenders from getting a sealed box, but its record follows one address, and a buyer whose line really dropped several times looks the same.
 - **Disputes publish the answer.** `answer` puts the key on chain, so anyone with that box can read it. Keys are per request, so other answers stay sealed.
 - **`prove` gas grows with the answer.** It suits small answers.
 - **Signatures must come from EOAs.** Contract wallets are refused.

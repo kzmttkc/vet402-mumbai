@@ -4,6 +4,7 @@ import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CheckReceipt } from '../../src/components/CheckReceipt'
 import { ReceiptList } from '../../src/components/ReceiptList'
+import { TryOutcome } from '../../src/components/TryDispute'
 import { PublicApp } from '../../src/PublicApp'
 import { joinStatic, loadCheckFile, loadReceipts, STATIC_PATHS } from '../../src/lib/publicData'
 import type { PublicReceiptsFile, PublicStatusesFile, ReceiptView } from '../../src/lib/publicData'
@@ -146,6 +147,45 @@ describe('the consumer screen on a phone', () => {
     const html = renderToStaticMarkup(<ReceiptList receipts={[row]} onRetryAsNew={() => {}} busy={false} />)
     expect(html).not.toContain('Retry as a new payment')
     expect(html).not.toContain('Demo only')
+  })
+
+  test('a dispute receipt and a try read without gas, contract or claim until Details is opened', () => {
+    const outcome = [
+      'The seller sent the wrong key. Arc refused it.',
+      'Detail: Wrong key rejected by the contract.',
+      "The seller didn't deliver. You got 0.013268 USDC back: your 0.001 USDC and your costs.",
+      'Detail: The seller stayed silent. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.',
+    ]
+    const row: ReceiptView = { ...joinStatic(list, statuses)[0]!, outcome }
+    const receipt = renderToStaticMarkup(<ReceiptList receipts={[row]} onRetryAsNew={() => {}} busy={false} />)
+    const tried = renderToStaticMarkup(
+      <TryOutcome
+        result={{
+          ok: true,
+          lines: [
+            'Charged once. Key read from Arc.',
+            'The seller sent the key late and paid back the 0.006949 USDC it cost you to ask for it.',
+            'Detail: Claim gas repaid by the seller: 0.006949 USDC.',
+          ],
+          claimTx: `0x${'c'.repeat(64)}`,
+          answerTx: `0x${'a'.repeat(64)}`,
+          box: { contract: '', ciphertext: '0x', claimId: '0x', plaintextHash: '0x', keyBlock: '1' },
+          totalMs: 5000,
+        }}
+        opened={null}
+      />,
+    )
+    const intro = textOf(renderToStaticMarkup(<PublicApp />))
+    for (const html of [receipt, tried]) {
+      const body = textOf(html.replace(/<details[\s\S]*?<\/details>/g, ''))
+      const inside = textOf(html.match(/<details[\s\S]*?<\/details>/g)?.join(' ') ?? '')
+      expect(body).not.toMatch(/gas|contract|claim/i)
+      expect(inside).toMatch(/gas/i)
+      expect(html).not.toContain('Detail: ')
+    }
+    expect(textOf(receipt).replaceAll('&#x27;', "'")).toContain("The seller didn't deliver. You got 0.013268 USDC back: your 0.001 USDC and your costs.")
+    expect(textOf(tried)).toContain('The seller sent the key late and paid back the 0.006949 USDC it cost you to ask for it.')
+    expect(intro).not.toMatch(/\bgas\b|contract|claim/i)
   })
 
   test('the proof stays one tap away, closed by default', () => {

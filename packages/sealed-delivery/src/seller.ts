@@ -12,6 +12,8 @@ import { createSealedChain } from './chain'
 import type { SealedChain } from './chain'
 import { sealAndPromise } from './common'
 import type { SealedBox } from './common'
+import { buyerClaimRecord, GUARD_DEFAULTS, isGuarded } from './guard'
+import type { ClaimGuard } from './guard'
 
 /** The facilitator you already use: Circle's BatchFacilitatorClient or any x402 facilitator client. */
 export interface Facilitator {
@@ -47,6 +49,11 @@ export interface SealedDeliveryOptions {
   /** How long a promise lives. It must stay under the contract's MAX_EXPIRY. */
   promiseSeconds?: number
   log?: (message: string) => void
+  /**
+   * Guards an honest seller against a buyer that claims with the key in hand: such a claim costs the seller its
+   * answer and the claim's gas. Reads the buyer's record from the chain after verify. Off unless set.
+   */
+  claimGuard?: ClaimGuard
   /** For tests: a prepared chain client. */
   chain?: SealedChain
 }
@@ -130,6 +137,36 @@ export function sealedDelivery(options: SealedDeliveryOptions) {
   }
   const keyFor = (nonce: string): Hex | null => stored.get(nonce.toLowerCase())?.key ?? null
 
+  const guard = options.claimGuard
+  const surcharge = guard && typeof guard.action === 'object' ? guard.action.surcharge : null
+  const surcharged: PaymentRequirement | null =
+    surcharge !== null ? { ...options.accepts, amount: (BigInt(options.accepts.amount) + surcharge).toString() } : null
+  const verdicts = new Map<string, { at: number; guarded: boolean }>()
+  /** True when this buyer's latest claims mostly ended in an answer. A failed read logs and lets the sale go on. */
+  async function guarded(buyer: Address): Promise<boolean> {
+    if (!guard) return false
+    const id = buyer.toLowerCase()
+    const cached = verdicts.get(id)
+    if (cached && Date.now() - cached.at < (guard.cacheMs ?? GUARD_DEFAULTS.cacheMs)) return cached.guarded
+    try {
+      const fromBlock = typeof guard.fromBlock === 'function' ? await guard.fromBlock() : guard.fromBlock
+      const record = await buyerClaimRecord(buyer, {
+        contract: options.contract,
+        rpcUrl: options.rpcUrl,
+        chain,
+        fromBlock,
+        last: guard.last,
+        ...(guard.thisSellerOnly ? { seller } : {}),
+      })
+      const verdict = isGuarded(record, guard)
+      verdicts.set(id, { at: Date.now(), guarded: verdict })
+      return verdict
+    } catch (error) {
+      log(`claim guard could not read ${buyer}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`)
+      return false
+    }
+  }
+
   let stopWatch: (() => void) | null = null
   const startWatch = () => {
     if (stopWatch || options.watch === false) return
@@ -161,19 +198,23 @@ export function sealedDelivery(options: SealedDeliveryOptions) {
   }
 
   async function paid(req: Request, res: Response, next: NextFunction) {
-    const requirements = {
+    const requirementsFor = (accepts: PaymentRequirement) => ({
       x402Version: 2,
       resource: { url: `${req.protocol}://${req.get('host')}${req.originalUrl}`, mimeType: 'application/json' },
-      accepts: [options.accepts],
+      accepts: [accepts],
+    })
+    const reject = (status: number, error?: string, accepts: PaymentRequirement = options.accepts) => {
+      const requirements = requirementsFor(accepts)
+      return res.status(status).set('PAYMENT-REQUIRED', b64(requirements)).json({ ...requirements, ...(error ? { error } : {}) })
     }
-    const reject = (status: number, error?: string) =>
-      res.status(status).set('PAYMENT-REQUIRED', b64(requirements)).json({ ...requirements, ...(error ? { error } : {}) })
 
     const header = paymentHeaderOf(req)
     if (!header) return reject(402)
     const payment = parsePayment(header)
     if (!payment) return reject(402, 'Unreadable payment')
-    if (lower(payment.to) !== lower(options.accepts.payTo) || payment.value !== options.accepts.amount) {
+    // The surcharged price is accepted from anyone who pays it. Only the plain price is checked against the record.
+    const accepts = surcharged && payment.value === surcharged.amount ? surcharged : options.accepts
+    if (lower(payment.to) !== lower(options.accepts.payTo) || payment.value !== accepts.amount) {
       return reject(402, 'Wrong payee or amount')
     }
 
@@ -185,8 +226,14 @@ export function sealedDelivery(options: SealedDeliveryOptions) {
         return void res.status(200).set({ 'Content-Type': 'application/json', 'PAYMENT-RESPONSE': previous.settledHeader }).send(previous.body)
       }
 
-      const verified = await options.facilitator.verify(payment.payload, options.accepts)
+      const verified = await options.facilitator.verify(payment.payload, accepts)
       if (!verified.isValid) return void reject(402, verified.invalidReason ?? 'Payment not valid')
+
+      // Checked after verify, so the payer is the one that signed. Nothing is settled on either refusal.
+      if (accepts === options.accepts && (await guarded(payment.from))) {
+        if (surcharged) return void reject(402, 'This payer pays more for a sealed answer', surcharged)
+        return void res.status(403).json({ error: 'No sealed answer for this payer: most of its latest claims ended with the seller handing over the key' })
+      }
 
       // Let the route answer, and keep its answer from the buyer until it is sealed and settled.
       const send = res.send.bind(res)
@@ -213,11 +260,11 @@ export function sealedDelivery(options: SealedDeliveryOptions) {
       })
 
       // Sealed before settling: a failure up to here leaves the buyer uncharged.
-      const settled = await options.facilitator.settle(payment.payload, options.accepts)
+      const settled = await options.facilitator.settle(payment.payload, accepts)
       if (!settled.success) return void reject(402, settled.errorReason ?? 'Payment not settled')
 
       const body = JSON.stringify({ sealed: box satisfies SealedBox, contentType: answer.contentType })
-      const settledHeader = b64({ success: true, transaction: settled.transaction ?? '', network: options.accepts.network, payer: payment.from })
+      const settledHeader = b64({ success: true, transaction: settled.transaction ?? '', network: accepts.network, payer: payment.from })
       remember(payment.nonce, { headerHash: sha256(header), key: sealKey, body, settledHeader })
       startWatch()
       res.status(200).set({ 'Content-Type': 'application/json', 'PAYMENT-RESPONSE': settledHeader }).send(body)

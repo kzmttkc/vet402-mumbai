@@ -4,7 +4,7 @@ When an AI agent pays for an API, nothing guarantees the answer arrives. On 2026
 
 A retry with a new signature pays again. I measured it at the event with Seller B, which declares nothing: Circle's record shows 2 transfers, `e9cbd6d5-d3a3-4693-9e6d-f9d33a197b31` and `b9d962ef-6276-4f29-a94d-87618539a6fd`, 2026-11-05 16:04 UTC. [circlefin/arc-nanopayments#43](https://github.com/circlefin/arc-nanopayments/issues/43) describes the same problem (open, 0 comments, read 2026-11-05 UTC).
 
-With vet402, the answer arrives locked, and the key comes on a separate request. When the key does not come, vet402 sends one claim to SealedDelivery on Arc. The seller then has 60 seconds to put the key on chain. If it answers, the same transaction repays the buyer the gas of its claim from the seller's deposit. If it stays silent or swaps the answer, its deposit pays twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer, the rest burned.
+With vet402, the answer arrives locked, and the key comes on a separate request. When the key does not come, vet402 sends one claim to SealedDelivery on Arc. The seller then has 60 seconds to put the key on chain. If it answers, the same transaction repays the buyer the gas of its claim from the seller's deposit. If it stays silent or swaps the answer, its deposit pays twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer, the rest burned. That leaves the buyer whole when three things hold: the claim's gas price is at most 100 gwei, the buyer's later calls use the claim's gas price, and the deposit still covers the verdict when it lands.
 
 Proof on Arc testnet, 2026-11-06 01:59 to 02:04 UTC, on the final contract, each at a price of 0.001 USDC. Sellers A, D, E and F each deposited 0.5 USDC at 01:37 UTC. The "line stayed up" row is from the run of 01:42 UTC on the same contract. I run these sellers, so every payout comes from a seller I stopped or told to cheat. All rows, the run of 01:42 to 01:46 UTC, and the runs on earlier versions are in [DEMO.md](DEMO.md).
 
@@ -111,7 +111,7 @@ The answer pays the buyer back. Claim `0x6fbe43cb…` cost the buyer 0.006775 US
 
 Deposits read from the contract on 2026-11-06 at 02:17 UTC: Seller A 0.487353 USDC, Seller D 0.448318, Seller E 0.450638, Seller F 0.437452. Each started at 0.5 at 01:37 UTC. Seller A repaid two claims' gas. Sellers D and E each had two SILENT verdicts and Seller F two FRAUD verdicts, one in each run, and Seller F also repaid two claims' gas. The buyer withdrew every credit, and its `claimable` read 0 at 02:17 UTC. A `flushBurn` after each verdict burned the other half.
 
-A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and the seller's deposit repays the dispute. [contracts/README.md](contracts/README.md#the-economics) has the numbers.
+A claim at the price of 0.001 USDC costs more than the price, so the contract runs only when a delivery fails, and the seller's deposit repays the dispute, under the same three conditions: a claim at 100 gwei or less, later calls at the claim's gas price, and a deposit that still covers the verdict. [contracts/README.md](contracts/README.md#the-economics) has the numbers and [its Limits](contracts/README.md#limits) the cases outside them.
 
 ## How to check this, in order
 
