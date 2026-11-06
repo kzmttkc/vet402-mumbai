@@ -1,3 +1,4 @@
+import { readable } from '@/lib/readable'
 import { useEffect, useRef, useState } from 'react'
 import { Check, ExternalLink, Loader2, Sparkles } from 'lucide-react'
 import { PlanWhy } from '@/components/PlanWhy'
@@ -16,17 +17,6 @@ const ghost =
   'flex min-h-11 w-full items-center justify-center rounded-full px-5 text-sm font-semibold text-[var(--muted)] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
 const chip =
   'min-h-9 rounded-full border border-[var(--border)] bg-white px-3 text-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
-/** A seller that answers in JSON usually puts the sentence for people in "message". Show that, and the raw answer otherwise. */
-const readable = (text: string): string => {
-  try {
-    const value: unknown = JSON.parse(text)
-    if (value && typeof value === 'object' && typeof (value as { message?: unknown }).message === 'string') return (value as { message: string }).message
-  } catch {
-    // Not JSON. The answer is shown as it came.
-  }
-  return text
-}
-
 const link = 'inline-flex items-center gap-1 text-sm font-semibold underline underline-offset-2'
 
 type State =

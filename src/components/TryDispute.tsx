@@ -1,3 +1,4 @@
+import { readable } from '@/lib/readable'
 import { useRef, useState } from 'react'
 import { ExternalLink, Loader2, Scale } from 'lucide-react'
 import { openSealedAnswer } from '@/lib/openSealed'
@@ -76,7 +77,7 @@ export function TryDispute() {
 
       {result?.ok && (
         <div className="mt-4 rounded-xl bg-white p-3" role="status">
-          {opened?.ok && <p className="break-words text-sm">{opened.text}</p>}
+          {opened?.ok && <p className="break-words text-sm">{readable(opened.text)}</p>}
           {opened && <p className={`mt-1 text-sm ${opened.ok && opened.matches ? '' : 'text-[var(--danger)]'}`}>{opened.line}</p>}
           {result.lines.map((line) => (
             <p key={line} className="mt-2 text-sm font-semibold">
