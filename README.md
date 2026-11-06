@@ -12,12 +12,18 @@ vet402 solves it on Arc. The answer arrives locked, and the key comes on a separ
 
 vet402's sellers answer a claim through Arc's Memo contract at their own cost, so the answer transaction on the explorer names the Circle Gateway transfer, the Swarm reference of the box, and the claim id the Arkiv evidence entity carries. Once 0.05 USDC of refunds has come back, vet402 puts it into the agent's Gateway balance in one Circle Gateway `depositFor`, ready for the next payment.
 
-Proof on Arc testnet, 2026-11-06 01:59 to 02:04 UTC, on the final contract, each at a price of 0.001 USDC. Sellers A, D, E and F are demo sellers, each built to take one path: answer, stay silent, send a wrong key, or swap the answer, so every outcome of the contract is on Arc to check. Each deposited 0.5 USDC at 01:37 UTC. The "line stayed up" row is from the run of 01:42 UTC on the same contract. All rows, the run of 01:42 to 01:46 UTC, and the runs on earlier versions are in [DEMO.md](DEMO.md).
+On 2026-11-06 at 04:17:01 UTC Seller A answered claim `0x0cf117a0…` through Arc's Memo contract [`0x5294E992…`](https://explorer.testnet.arc.io/address/0x5294E9927c3306DcBaDb03fe70b92e01cCede505) in [`0x398f28ee…`](https://explorer.testnet.arc.io/tx/0x398f28ee3970e29fc0255748ce8e845ba6709863d7a78a469080fb190164f5e2), and the seller of Try a dispute did the same at 04:23:05 UTC in [`0xbf449909…`](https://explorer.testnet.arc.io/tx/0xbf44990914eed4adfce1dbf6f261da3dd8a79a80cdfaaec04b1c724f4099477e). Each transaction goes to Memo, and its logs hold `KeyRevealed` and `ClaimGasRepaid` from SealedDelivery next to Memo's own event, whose text names the claim id, the Gateway transfer and the Swarm reference (read from `https://rpc.testnet.arc.network` on 2026-11-06 at 10:00 UTC).
+
+- An answer repays the claim's gas, counted up to 320,000 gas (`CLAIM_GAS_CAP`) at a price up to 100 gwei ([the economics](contracts/README.md#the-economics)), and a seller's `claimGuard` turns away a buyer whose latest claims it already answered ([using it well](contracts/README.md#using-it-well)).
+- A seller signs its `Promise` only after it verifies the payment, and the box leaves once Gateway has settled it ([using it well](contracts/README.md#using-it-well), and step 2 of [use it with your own x402 seller](contracts/README.md#use-it-with-your-own-x402-seller)).
+
+Proof on Arc testnet, 2026-11-06 01:59 to 02:04 UTC, on the final contract, each at a price of 0.001 USDC. Sellers A, D, E and F are demo sellers, each built to take one path: answer, stay silent, send a wrong key, or swap the answer, so every outcome of the contract is on Arc to check. Each deposited 0.5 USDC at 01:37 UTC. The "line stayed up" row is from the run of 01:42 UTC, and the Arc Memo row from 04:17 UTC, both on the same contract. All rows, the run of 01:42 to 01:46 UTC, and the runs on earlier versions are in [DEMO.md](DEMO.md).
 
 | Seller | What it did | Result | Onchain proof |
 |---|---|---|---|
 | A | Line stayed up | "Charged once. Delivered." 2.1 s from the start, 01:42 UTC | Transfer `8df8ff6d-df86-4aa1-b9fb-840347074510`, 0 transactions to the contract |
 | A | Dropped the key request, answered the claim | "Charged once. Key read from Arc." "Claim gas repaid by the seller: 0.006949 USDC." "Circle record: 1 transfer for this payment." Key on chain 7.2 s from the start | Claim [`0x6fbe43cb…`](https://explorer.testnet.arc.io/tx/0x6fbe43cb52a151c51b4b01736bcc99f94bc9f98b249c42de09acf54c1af0d5da), answer [`0x7e816df8…`](https://explorer.testnet.arc.io/tx/0x7e816df8f4631d9b0172c9a3da16f820f56dc4360f0657816d9914bc29f3fc11) |
+| A | Dropped the key request, answered the claim through Arc Memo | `ClaimGasRepaid` 0.005559 USDC to the buyer in the answer's own transaction, 5 s after the claim, 04:17 UTC | Claim [`0x91a2b636…`](https://explorer.testnet.arc.io/tx/0x91a2b636d53a27c98c2abdc2360a9ecb35a5b3a4128adf2f8c6f374b9b7f44c7), answer through Memo [`0x398f28ee…`](https://explorer.testnet.arc.io/tx/0x398f28ee3970e29fc0255748ce8e845ba6709863d7a78a469080fb190164f5e2) |
 | E | Said nothing | "The seller stayed silent. Its deposit paid 0.011413 USDC back: the 0.001 USDC price and 0.010413 USDC for the gas of the dispute." | Claim [`0xf1ba70bd…`](https://explorer.testnet.arc.io/tx/0xf1ba70bd45d40f05cccaae9fbf8e3d39b6f027375f3cf28ed5b9b2fa89aa681f), finalize [`0x924ad0c9…`](https://explorer.testnet.arc.io/tx/0x924ad0c91688abcb24c83d9c99efd72e365102f2b626fc0045f39166c716a9ed) |
 | D | Tried a wrong key, then said nothing | "Wrong key rejected by the contract." "The seller stayed silent. Its deposit paid 0.012142 USDC back: the 0.001 USDC price and 0.011142 USDC for the gas of the dispute." | Claim [`0x67698fff…`](https://explorer.testnet.arc.io/tx/0x67698fff825e33a5246cbd352e0e22287a39c4f01138e14112dee3842efc066d), reverted answer [`0x95b35393…`](https://explorer.testnet.arc.io/tx/0x95b353935b893116dd398828157e1ef7676a368e4428284acd1abc9361d72aa1), finalize [`0x9baef1dd…`](https://explorer.testnet.arc.io/tx/0x9baef1dd448e64221aa186f77a46e3d8ed720e245aabcf42f60e2502d02baa98) |
 | F | Swapped the answer, then gave its key | "Claim gas repaid by the seller: 0.006949 USDC." "The answer did not match the seller's promise. Its deposit paid 0.013699 USDC back: the 0.001 USDC price and 0.012699 USDC for the gas of the dispute." | Claim [`0x0bd9b723…`](https://explorer.testnet.arc.io/tx/0x0bd9b7234d1c29973260969109a2827ef35b0d45be73fd9efb570f285361f48f), answer [`0x5a5e0606…`](https://explorer.testnet.arc.io/tx/0x5a5e06064433ab10ea339b76f5a8c3da64b6fdd37c97175182a67b173a1a74d0), prove [`0xccfb2bd7…`](https://explorer.testnet.arc.io/tx/0xccfb2bd733da6f8a0980a8a6a2a80f04706a792ba78b973a1cc8d6c7d819df12) |
@@ -35,7 +41,7 @@ Other fixes put every payment through an escrow or a job contract. vet402 leaves
 | Escrow or job contract calls on a payment with no dispute | 1 or more. The buyer pays into escrow and the merchant captures | 1 or more. Authorize then capture on `AuthCaptureEscrow`, or one call when it captures at once | 1 or more. The money goes into Boson's escrow at commit | 4: `createJob`, `fund`, `submit`, `complete` | 0 to SealedDelivery, measured with Seller A on 2026-11-06 at 01:42 UTC ([Architecture](#architecture)) |
 | Buyer signatures per payment | Not stated in the docs | 1, an ERC-3009 or Permit2 signature | 2 or more, a meta transaction and a token authorization | 2 or more transactions, `createJob` and `fund` | 1, the EIP-3009 signature x402 already asks for |
 | Works with Circle Gateway batched payments | Not stated. The docs list Base and Base Sepolia | Not stated | Not stated | Not stated | Yes. The contract checks the buyer's `GatewayWalletBatched` signature, and every payment of the [run of 01:42 UTC on the live contract](DEMO.md#the-run-of-0142-to-0146-utc) settled in a Gateway batch |
-| What a seller adds | Not measured | Not measured | Not measured | Not measured | One middleware and its route, 2 lines in the [package README](packages/sealed-delivery/README.md) that `test/readme.test.ts` runs. The package source is 692 lines |
+| What a seller adds | Not measured | Not measured | Not measured | Not measured | One middleware and its route, 2 lines in the [package README](packages/sealed-delivery/README.md) that `test/readme.test.ts` runs. The package source is 1,063 lines in 7 files, `wc -l packages/sealed-delivery/src/*.ts` at commit `dc06b0c` on 2026-11-06 |
 
 ERC-8183 also says it has "No dispute resolution or arbitration". In a dispute vet402 sends one claim, and a seller that stays silent or lies pays the buyer from its deposit.
 
@@ -135,11 +141,11 @@ With nothing installed:
 7. Open the [mainnet contract](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9) and its answer [`0x7541a28b…`](https://explorer.arc.io/tx/0x7541a28bc973fec1969705db7a5e407e48b8ec27c8ff9419732ceb03fd235124) and finalize [`0x52162804…`](https://explorer.arc.io/tx/0x521628040a75d008ab4fed04c01f7351ea2035d4c6ed93e5b3fe581b99865555).
 8. Open the live screen, listed in the contract table. It shows receipts and checks them, and its Ask the agent and Try a dispute cards pay from their own Arc testnet wallets.
 
-With a clone (commands below, results from a fresh clone of commit `4ad89eb` on 2026-11-06 between 02:10 and 02:20 UTC, forge 1.8.3):
+With a clone (commands below, results from a clean clone of commit `dc06b0c` on 2026-11-06 between 10:03 and 10:10 UTC, with the packages of `bun.lock`, forge-std 1.16.2, forge 1.8.3 and Bun 1.3.14):
 
-9. `forge test`: 236 tests passed in 19 suites on forge 1.8.3. In the Arc Studio sandbox, forge 1.7.1 passed 246 and failed 0 on the same 19 test files before the deploy.
-10. `bash scripts/test.sh`: 543 tests passed, 0 failed (2026-11-06 05:33 UTC).
-11. `npx bun run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected`.
+9. `forge test`: 236 tests passed, 0 failed, in 19 suites. On my machine the run took 251 s and 303 s in two runs that day. The count in the Arc Studio sandbox, on forge 1.7.1, is in item 9 of [docs/arc-studio-feedback.md](docs/arc-studio-feedback.md).
+10. `bash scripts/test.sh`: 633 tests passed, 0 failed, in 35 files (10:04 UTC).
+11. `npx bun@1.3.14 run scripts/sealed-local-e2e.ts`: every scene ran against the real contract on a local anvil chain, with real signatures and with Gateway replaced by a stand-in. It printed `RESULT: all scenes as expected` (10:05 UTC).
 
 ## Run it
 
@@ -227,13 +233,52 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'4c985dc0-a59d-4674-9e8a-3d5d25def02b'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
 ```
 
-Arc's rulings, the entities the check reads before paying. At 03:15 UTC on 2026-11-06 it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND (pay_to = str('<payTo, lowercase>') OR seller = str('<payTo, lowercase>'))` for one seller. Rulings written since 2026-11-06 carry `pay_to`, and older ones have the address in `seller`.
+Its answer on 2026-11-06 at 10:03:57 UTC held 2 entities. Their attributes, flattened to name and value and trimmed to the ones that tie the two together:
+
+```
+key 0xe7d98e45acb41fa9ddf27208c30985384633fad85a9d5518fa3539ce66ac5f81  expiresAt 0x17ec2a
+  kind payment  seller Seller A  pay_to 0x71f8005ae7757857dc6b7418b9bec75f19546ac3  status accepted
+  amount_micro 0x3e8  response_bytes 0x41  times_received 0x1  gateway_transfer_id 4c985dc0-a59d-4674-9e8a-3d5d25def02b
+key 0xb9e848408d22f4817f1c4cd6d855ce74dcdd7c562fa00676e1b38f1a41f3053c  expiresAt 0x17ec4d
+  kind settlement  seller Seller A  pay_to 0x71f8005ae7757857dc6b7418b9bec75f19546ac3  status settled
+  amount_micro 0x3e8  batch_tx 0xd0b83004e37e87ef7989a1f959eca260d93ec3fe6dd87fa867d0dc5fc6b4e717
+  payment_key 0xe7d98e45acb41fa9ddf27208c30985384633fad85a9d5518fa3539ce66ac5f81
+```
+
+Arc's rulings, the entities the check reads before paying. On 2026-11-06 at 09:59 UTC it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND (pay_to = str('<payTo, lowercase>') OR seller = str('<payTo, lowercase>'))` for one seller. Rulings written since 2026-11-06 carry `pay_to`, and older ones have the address in `seller`.
 
 ```bash
 curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
+
+The same query, read with no key on 2026-11-06 at 09:59:16 UTC, returned these 6, one line each with `createdAt` as an Arkiv block and a few attributes:
+
+```
+createdAt 271815  verdict fraud   seller 0x1401bd7c7fab3fe8a429672fc1c5371456c8445d  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+createdAt 271859  verdict silent  seller 0x2d86121923e9662d4d926d657fe91a2141bd93e8  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+createdAt 271902  verdict silent  seller 0xb9a6f77d9efdfcf165e1259fc650ffa01b06b80d  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+createdAt 272347  verdict fraud   seller 0x1401bd7c7fab3fe8a429672fc1c5371456c8445d  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+createdAt 272391  verdict silent  seller 0x2d86121923e9662d4d926d657fe91a2141bd93e8  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+createdAt 272437  verdict silent  seller 0xb9a6f77d9efdfcf165e1259fc650ffa01b06b80d  contract 0xe9c35ad2caf5d76ca5a5f61ca2256995197c2a4b  chain_id 0x4cef52
+```
+
+The same check in code, from `packages/sealed-delivery`, run with Bun 1.3.14 against the public endpoint with no key. Seller F `0x1401bd7c…445d` has two Fraud rulings, and Seller A `0x71f8005a…6aC3` has none:
+
+```ts
+import { isRuledAgainst } from './packages/sealed-delivery/src/index'
+const writer = '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5'
+console.log(await isRuledAgainst('0x1401bd7c7fab3fe8a429672fc1c5371456c8445d', { writer }))
+console.log(await isRuledAgainst('0x71f8005aE7757857DC6b7418b9beC75F19546aC3', { writer }))
+```
+
+```
+2026-11-06T10:20:40.441Z isRuledAgainst('0x1401bd7c7fab3fe8a429672fc1c5371456c8445d', { writer }) -> true
+2026-11-06T10:20:41.001Z isRuledAgainst('0x71f8005aE7757857DC6b7418b9beC75F19546aC3', { writer }) -> false
+```
+
+The public endpoint gives each caller a query budget. When it answers `ANON_COST_LIMITED`, a key from https://hub.arkiv.network, put at the end of the URL path, runs the same query.
 
 Explorer: https://rabdi.explorer.arkiv.network
 
@@ -280,7 +325,7 @@ For a large hold the browser asks IDKit for `proveSession(...).constraints(all(C
 
 When World App cannot give the selfie check, IDKit reports `credential_unavailable`, and the World ID Simulator does this on staging. The card then reads "Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held." The budget keeps its full room, and a hold of 0.5 USDC or less still goes through with Proof of Human alone.
 
-It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. Those runs came before the budget had its own signal. The budget signal, the running total, the production rules for the demo scenes, the session token and the cross site check were added on 2026-11-06, and I ran that version in production the same day: "Budget set." for a 1.2 USDC budget at 02:10 UTC, "Held 1 USDC for your agent." at 02:10 UTC, Replay test refused with "Not approved: this approval is for another hold." at 02:11 UTC and again on film at 02:59 UTC, Cancel request at 02:11 UTC and on film at 02:59 UTC, and a 0.1 USDC hold approved in World App at 02:18 UTC while the iPhone screen was recorded. The budget then had 0.1 USDC left, so the running total held. The selfie check for holds above 0.5 USDC was added after those runs, on 2026-11-06, and the backend tests cover each of its checks. On the selfie version in production, a budget and a 0.5 USDC hold were approved in World App at 05:05 and 05:06 UTC ("Held 0.5 USDC for your agent."). What World App showed for a 1 USDC hold is item 8 of docs/world-feedback.md. The demo video shows the iPhone approval next to the app. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
+It runs in production with the real World App. On 2026-11-05 at 22:16 UTC I set a budget and approved a hold of 1 USDC with my World App on iOS, verified at an Orb, and the verified result reads environment production, protocol 4.0, proof_of_human. Those runs came before the budget had its own signal. The budget signal, the running total, the production rules for the demo scenes, the session token and the cross site check were added on 2026-11-06, and I ran that version in production the same day: "Budget set." for a 1.2 USDC budget at 02:10 UTC, "Held 1 USDC for your agent." at 02:10 UTC, Replay test refused with "Not approved: this approval is for another hold." at 02:11 UTC and again on film at 02:59 UTC, Cancel request at 02:11 UTC and on film at 02:59 UTC, and a 0.1 USDC hold approved in World App at 02:18 UTC while the iPhone screen was recorded. The budget then had 0.1 USDC left, so the running total held. The selfie check for holds above 0.5 USDC was added after those runs, on 2026-11-06, and the backend tests cover each of its checks. On the selfie version in production, a budget and a 0.5 USDC hold were approved in World App at 05:05 and 05:06 UTC ("Held 0.5 USDC for your agent."). What World App showed for a 1 USDC hold is item 8 of docs/world-feedback.md. The [demo video](https://ethglobal.com/showcase/vet402-ihsyd) shows the iPhone approval next to the app. The integration debrief is in [DEMO.md](DEMO.md#integration-debrief).
 
 Feedback for the sponsors, each with the step, what came back and the date: [Arc Studio](docs/arc-studio-feedback.md), [World ID](docs/world-feedback.md), [Arkiv](arkiv/friction.md).
 
@@ -292,20 +337,20 @@ The buyer side of this goes into vet402's production buyer, which paid through G
 
 I designed the mechanism and made each decision below. Arc Studio and Claude Code wrote the code from my instructions, and every instruction to Arc Studio is in [prompts/](prompts/README.md), with what each turn built.
 
-Arc Studio (session `mumbai`) started the app, and its agent wrote, tested and deployed the first five versions of the contract on testnet. The final testnet contract went through the same Studio sandbox: its source in the code editor, 246 tests passed and 0 failed with forge 1.7.1 in the sandbox terminal, and `forge create` from that terminal on 2026-11-06 at 01:35 UTC. The app's full source, copied into the sandbox, passed `tsc` and 432 tests there. On 2026-11-06 at 02:06 UTC, Studio's Preview ran the published screen from the sandbox, and its Tracing listed the screen's calls to `/api/receipts`, Circle's `/v1/x402/transfers` and Arkiv's `arkiv_query`. Claude Code wrote out my instructions to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents.
+Arc Studio (session `mumbai`) started the app, and its agent wrote, tested and deployed the first five versions of the contract on testnet. The final testnet contract went through the same Studio sandbox: its source in the code editor, every test passed and 0 failed with forge 1.7.1 in the sandbox terminal, and `forge create` from that terminal on 2026-11-06 at 01:35 UTC. The app's full source, copied into the sandbox, passed `tsc` and 432 tests there. On 2026-11-06 at 02:06 UTC, Studio's Preview ran the published screen from the sandbox, and its Tracing listed the screen's calls to `/api/receipts`, Circle's `/v1/x402/transfers` and Arkiv's `arkiv_query`. Claude Code wrote out my instructions to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents.
 
 What I did with my own hands, beside the decisions in the table:
 
 - Set up the World ID app and its signer in World's Developer Portal, and approved budgets and holds in World App on my iPhone in production: 2026-11-05 at 22:16 UTC, and 2026-11-06 at 02:10, 02:18, 05:05 and 05:06 UTC.
 - Ran the Arc mainnet disputes and the seller's withdrawal from my own terminal, each after reading the decoded transaction (2026-11-06, 02:03 to 02:04 and 05:02 UTC).
 - Funded my Bee node's wallet with xDAI and xBZZ, so the node bought and topped up its own postage batch.
-- Recorded every voice line in the demo video.
+- Recorded every voice line in the [demo video](https://ethglobal.com/showcase/vet402-ihsyd).
 
 The table says who wrote each part first, who changed it, and what I decided. Times are 2026-11-05 UTC unless a date is given, with India time (IST) where my design notes give it.
 
 | Part | First written by | Changed by | What I decided |
 |---|---|---|---|
-| `contracts/SealedDelivery.sol` | Arc Studio, turn sd1 at 16:17. Turns sd2 and sd3 keyed claims by claim id and added the double verdict with a burned half, `coverageFor` and `prove` | Claude Code from 17:24: collateral taken at the verdict, token and payment domain as constructor arguments, `DISPUTE_COST`, the payment domain salt, and on 2026-11-06 the claim's own gas repaid in every outcome (`81d1f32`). Arc Studio's agent built, tested and made the first 5 testnet deployments, in turns sd2 and sd4 to sd7. The sixth and final testnet deployment was a `forge create` from the Studio sandbox terminal on 2026-11-06 at 01:35 UTC, after 246 tests passed there. I deployed both mainnet contracts by script | At 15:00 (20:30 IST): a deposit per seller in place of an escrow, and the key handed over after the payment, FairSwap's fair exchange adapted to nanopayments. At 16:25 (21:55 IST): keep every part while time was left, so `prove` stayed, and silence and fraud cost twice the price with half burned, which makes paying itself through a second address a loss for the seller. On 2026-11-06: the buyer's gas repaid at its real cost, at the claim's gas price up to 100 gwei. And the same contract on Arc mainnet |
+| `contracts/SealedDelivery.sol` | Arc Studio, turn sd1 at 16:17. Turns sd2 and sd3 keyed claims by claim id and added the double verdict with a burned half, `coverageFor` and `prove` | Claude Code from 17:24: collateral taken at the verdict, token and payment domain as constructor arguments, `DISPUTE_COST`, the payment domain salt, and on 2026-11-06 the claim's own gas repaid in every outcome (`81d1f32`). Arc Studio's agent built, tested and made the first 5 testnet deployments, in turns sd2 and sd4 to sd7. The sixth and final testnet deployment was a `forge create` from the Studio sandbox terminal on 2026-11-06 at 01:35 UTC, after every test passed there. I deployed both mainnet contracts by script | At 15:00 (20:30 IST): a deposit per seller in place of an escrow, and the key handed over after the payment, FairSwap's fair exchange adapted to nanopayments. At 16:25 (21:55 IST): keep every part while time was left, so `prove` stayed, and silence and fraud cost twice the price with half burned, which makes paying itself through a second address a loss for the seller. On 2026-11-06: the buyer's gas repaid at its real cost, at the claim's gas price up to 100 gwei. And the same contract on Arc mainnet |
 | `contracts/test` | Arc Studio, 14 of the 16 files, in turns sd1 and sd3 | Claude Code added `SealedDelivery.Holes.t.sol` and `SealedDelivery.Collateral.t.sol`, edited the others with each contract change, and turned the gas slope test into a bound (`b7edde7`) | At 15:10 (20:40 IST): the first check runs the buyer's signature against real Gateway signatures from my own payments P4 and P5. On 2026-11-06: the buyer's gas comes back in every outcome, which `test_Economics_BuyerNeverLosesAndNeverGainsFromAnAnswer` checks |
 | `server/sealedDelivery.ts`, `packages/sealed-delivery` | Claude Code at 17:15 (`2a88276`). The package at 21:33 (`7f6a1f5`), from the app's own sealing, ABI and lookout | Claude Code (`aa7720b`, `3a602f1`, `131230d`, and the package's tests and README) | At 16:25 (21:55 IST): the buyer reads `coverageFor(seller, value)` before it pays, so every claim it sends is backed by the seller's deposit |
 | `server/world.ts` | Claude Code at 16:20 (`6262f7b`), from the instruction [prompt-p6w.txt](prompts/studio/prompt-p6w.txt) | Claude Code: production mode (`a8219d0`), and on 2026-11-06 the budget signal and the rule that only an approval moves money to the hold (`bd05f86`) | World ID at one moment, when money enters the agent's hold. Proof of Human as the credential (2026-11-04), with each hold approved by the same person who set the budget. I made the production approvals at 22:16 and 23:25 with my own World App, verified at an Orb |
@@ -313,8 +358,8 @@ The table says who wrote each part first, who changed it, and what I decided. Ti
 | `server/planner.ts` | Arc Studio, turn p3 at 15:43 | Claude Code: the Arkiv delivery check (`7df3fb3`), then on 2026-11-06 BM25 over all 134 listings with every seller and path taken from the catalog (`9dd11ac`) | The Arkiv rule in the row above, applied before the agent pays: a recent delivery, and no ruling of Arc from the last 7 days |
 | `server/tryDispute.ts`, `server/tryJob.ts` | Claude Code (`04bd19d` at 21:34, `9dd11ac` on 2026-11-06 at 01:06) | Claude Code | A public page where anyone can try a real dispute on the Arc contract and a real purchase from a seller in Circle's catalog |
 | `src/lib/swarmBox.ts`, `server/swarm.ts` | Claude Code at 20:55 (`f4d37f7`, `e20cd85`) | Claude Code: uploads with my own postage batch (`2d6d920`) | Each box on a batch my own Bee node bought. I funded the node's wallet with xDAI and xBZZ, and it bought batch `b6455d93…`, which the second run used |
-| `src/` (the screen) | Arc Studio, turns p1 to p5: `App.tsx`, the hold, job, demo and receipt cards and their hooks | Claude Code: the World ID steps, the sealed scenes, the receipts page, the public page with Ask the agent and Try a dispute. `341edd6` removed the template files Arc Studio started with | I kept the Seller B comparison on the screen, labelled "Comparison only. vet402 does not do this.", when a review suggested cutting it (2026-11-05, before the event) |
-| `docs/`, `arkiv/*.md`, README.md, DEMO.md | Claude Code (`352154c`, `50eb76c`, `6aa4ba9`, `620340b`) | Claude Code | I set the order the story follows: the problem, how vet402 fixes it, the case for each sponsor, the promise to ship it after judging, and a closing line (2026-11-05, before the event). On 2026-11-06, that every document leads with what Arc, World, Arkiv and Swarm let vet402 do |
+| `src/` (the screen) | Arc Studio, turns p1 to p5: `App.tsx`, the hold, job, demo and receipt cards and their hooks | Claude Code: the World ID steps, the sealed scenes, the receipts page, the public page with Ask the agent and Try a dispute. `341edd6` removed the template files Arc Studio started with | I kept the Seller B comparison on the screen, labelled "Comparison only. vet402 does not do this.", when a review suggested cutting it (a planning decision on 2026-11-05, made before the event began at 15:30 UTC) |
+| `docs/`, `arkiv/*.md`, README.md, DEMO.md | Claude Code (`352154c`, `50eb76c`, `6aa4ba9`, `620340b`) | Claude Code | I set the order the story follows: the problem, how vet402 fixes it, the case for each sponsor, the promise to ship it after judging, and a closing line (a planning decision on 2026-11-05, made before the event began at 15:30 UTC). On 2026-11-06, that every document leads with what Arc, World, Arkiv and Swarm let vet402 do |
 
 ## License
 

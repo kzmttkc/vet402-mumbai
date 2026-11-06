@@ -4,6 +4,8 @@ A paid x402 answer either arrives with its key, or the seller's deposit pays the
 The seller adds one middleware. The buyer adds one call. Nothing changes in the payment itself.
 The buyer stops paying for answers that never come, and the seller pays a dispute only when it stays silent or lies.
 
+The package is not on npm yet, so use it from this repository: `import { sealedDelivery, openSealed } from './packages/sealed-delivery/src/index'` from the repository root, as `scripts/sdk-example-local.ts` does, in place of `'@vet402/sealed-delivery'` in the examples below.
+
 <!-- readme-example -->
 ```ts
 import { sealedDelivery, openSealed } from '@vet402/sealed-delivery'

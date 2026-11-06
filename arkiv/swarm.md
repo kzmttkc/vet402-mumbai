@@ -114,6 +114,7 @@ Which boxes went which way:
 | 2026-11-05 22:40 to 22:46 UTC, earlier contract `0xa1eff55d…` | The public gateway | The gateway's own batch, through `NULL_STAMP` |
 | 2026-11-05 23:11 to 23:16 UTC, earlier contract `0xa1eff55d…` | My Bee node | `b6455d93…` |
 | 2026-11-06 01:42 to 01:46 UTC and 01:59 to 02:04 UTC, live contract `0xE9C35ad2…` | My Bee node | `b6455d93…`, the only batch on the node |
+| 2026-11-06 04:17 UTC, live contract `0xE9C35ad2…`, the run in the demo video at 3:18: Seller A's claim [`0x91a2b636…`](https://explorer.testnet.arc.io/tx/0x91a2b636d53a27c98c2abdc2360a9ecb35a5b3a4128adf2f8c6f374b9b7f44c7) for claim id `0x0cf117a0…`, answered through Arc Memo in [`0x398f28ee…`](https://explorer.testnet.arc.io/tx/0x398f28ee3970e29fc0255748ce8e845ba6709863d7a78a469080fb190164f5e2) | My Bee node. Its evidence entity `0x3ec3e34c…` holds `swarm_ref` `4a8c0fce…` and `swarm_kept_until` 2026-12-13, which only an upload through my node carries (Arkiv and Arc read on 2026-11-06 at 09:59 UTC) | `b6455d93…` |
 | "Try a dispute yourself" on the public deploy (`api/try-dispute`) | The public gateway | The gateway's own batch, through `NULL_STAMP` |
 
 The public deploy on Vercel puts each claimed box on Swarm through the public gateway with the null stamp, and writes the evidence entity that points to it, with `ARKIV_WRITER_KEY` set on the deploy. A null stamp upload through the gateway answered on 2026-11-06 at 03:03 UTC with reference `c171583664857b5f0dc77e8f5160112169afb16c19022390a70e37368c02874b`, and the gateway returned the same 427 bytes.

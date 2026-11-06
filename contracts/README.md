@@ -9,7 +9,7 @@ This source is the one deployed. It repays the buyer's gas at the price the clai
 | Arc testnet, 5042002 | [`0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B`](https://explorer.testnet.arc.io/address/0xE9C35ad2caF5D76CA5a5F61ca2256995197C2A4B) | 2026-11-06 01:35:22, [`0x38095fb7…`](https://explorer.testnet.arc.io/tx/0x38095fb7894b86e2c57be1d1bb6e367ddbc6fd9fc9276ecacc43ac37701b3733), `forge create` from the terminal of the Arc Studio sandbox | Verified on the Arc testnet explorer (Blockscout) at 01:50 UTC. The verified file has the same sha256 as this one (`93a08889…`) |
 | Arc mainnet, 5042 | [`0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9) | 2026-11-06 02:02:56, [`0x6a276f7a…`](https://explorer.arc.io/tx/0x6a276f7a2ca79260ccdfc28a809b889a2febd95d684e9a5db818ecb2581eabd8), by script | Sourcify `exact_match`, with the same sha256 |
 
-Both take the recommended arguments under [Constructor](#constructor). Mainnet takes Arc mainnet's Gateway Wallet, `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Before the testnet deploy, the source was pasted into the code editor of the Studio sandbox and the tests copied in through its terminal, where forge 1.7.1 passed 246 tests and failed 0. A fresh clone on forge 1.8.3 passes 236 in 19 suites, from the same 19 test files.
+Both take the recommended arguments under [Constructor](#constructor). Mainnet takes Arc mainnet's Gateway Wallet, `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Before the testnet deploy, the source was pasted into the code editor of the Studio sandbox and the tests copied in through its terminal, where every test passed and 0 failed on forge 1.7.1. A clean clone of commit `dc06b0c` passed 236 tests in 19 suites on forge 1.8.3 on 2026-11-06 at 10:10 UTC.
 
 Earlier versions charged a fixed dispute cost in place of the gas each claim paid: `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` on testnet (deployed by Arc Studio on 2026-11-05 at 22:20 UTC, `disputeCost` 0.0105 USDC) and `0xafdb8931eebdce7f714ac3905c65a50293eb6db6` on mainnet (2026-11-05 21:59 UTC, 0.009 USDC). `contract-metadata/SealedDelivery.json` lists deployments of earlier source.
 
@@ -156,7 +156,7 @@ How the parts fit together, and how vet402 runs them.
 - **A dispute opens that one answer to everyone.** `answer` puts the key on chain, and `prove` puts key and ciphertext on chain, so anyone can read that answer. Keys are per request, so every other answer stays sealed.
 - **`prove` decrypts on chain.** Its gas grows with the answer, 148,451 at most for 1 KiB.
 - **Promises and payments are signed by EOAs**, checked with `ecrecover`.
-- **Tested and live.** The tests in `contracts/test` passed on 2026-11-06 between 02:10 and 02:20 UTC on a fresh clone of `main` at `4ad89eb` (236 tests in 19 suites, forge 1.8.3), 246 passed in the Studio sandbox, and the contract runs on Arc testnet and Arc mainnet.
+- **Tested and live.** The tests in `contracts/test` passed on 2026-11-06 at 10:10 UTC on a clean clone of commit `dc06b0c` (236 tests in 19 suites, 0 failed, forge 1.8.3), they passed in the Studio sandbox before the deploy, and the contract runs on Arc testnet and Arc mainnet.
 
 ## Use it with your own x402 seller
 

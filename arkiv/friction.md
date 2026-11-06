@@ -1,6 +1,6 @@
 # Friction
 
-I am the builder of vet402, and I used Arkiv (`@arkiv-network/sdk@1.0.1` on Rabdi) to write one readonly receipt per payment, one seller entity that expires 7 days after the seller's last delivery, one readonly ruling per Arc verdict and one evidence entity per dispute that passes to its buyer, at ETHGlobal Mumbai between 2026-11-05 15:30 UTC and 2026-11-06 04:40 UTC. Each suggestion below says what would make Arkiv even better, with what I expected, what came back and how to reproduce it.
+I am the builder of vet402, and I used Arkiv (`@arkiv-network/sdk@1.0.1` on Rabdi) to write one readonly receipt per payment, one seller entity that expires 7 days after the seller's last delivery, one readonly ruling per Arc verdict and one evidence entity per dispute that passes to its buyer, at ETHGlobal Mumbai. The SDK came in at commit `cc37eb7` (2026-11-05 16:17 UTC), the last Arkiv code change is `792cbb4` (2026-11-06 07:23 UTC), and each run below carries its own time. Each suggestion below says what would make Arkiv even better, with what I expected, what came back and how to reproduce it.
 
 ## What worked well
 

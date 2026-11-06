@@ -1,19 +1,29 @@
 # Reach
 
-Measured from the writer's entities on Rabdi with `arkiv_query`, reading every page of 100, and the writer filter `$owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)`. Each row adds one condition to `arkiv.schema = str('vet402_receipt')` or names another schema.
+Every x402 seller that seals its answers with `packages/sealed-delivery` and deposits into SealedDelivery is under the same rulings. Each Silent or Fraud verdict of the contract becomes a readonly `vet402_verdict` entity on Arkiv, keyed by the seller's payTo address, and any buyer reads it before paying with one `arkiv_query` and no key. A seller joins by naming its payTo in its 402 answer, so the check covers a catalog listing from its first payment, with no list kept by vet402.
 
-| What | Query condition | Count |
-|---|---|---|
-| Payment entities | `kind = str('payment')` | 74 |
-| Settlement entities | `kind = str('settlement')` | 66 |
-| All receipt entities | none | 140 |
+## Counted from Arkiv
+
+Read on 2026-11-06 from 09:59:15 to 09:59:17 UTC, with the query of the README's curl: `arkiv_query` on `https://rpc.rabdi.db-chain.testnet.arkiv.network`, no key, the writer filter `$owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)`, and every page of 100 (`"limit":"0x64"`, then `"offset":"0x64"`, `"0xc8"` and on, until a page holds fewer than 100). Evidence entities are read with `$creator` in place of `$owner`, because each one passes to its buyer.
+
+Payments by who runs the seller, from `arkiv.schema = str('vet402_receipt')` with `kind = str('payment')` and `kind = str('settlement')`, counted by the `seller` attribute:
+
+| Seller | Who runs it | Payment entities | Settlement entities |
+|---|---|---:|---:|
+| Quicknode, Arc Testnet JSON-RPC node | A third party, from Circle's Discovery catalog for Arc testnet | 4 | 4 |
+| BotPay, `/pay` | A third party, from the same catalog | 1 | 1 |
+| Sellers A to F | vet402, one demo seller per path of the contract: A 44, B 9, C 1, D 9, E 9, F 10 payments | 82 | 71 |
+| All | | 87 | 76 |
+
+33 of the 87 payment entities carry `pay_to`, the address the rulings are read by.
+
+| Entity | Query condition | Count |
+|---|---|---:|
 | Seller entities alive | `arkiv.schema = str('vet402_seller')` | 6 |
-| Evidence entities | `arkiv.schema = str('vet402_evidence')`, with `$creator` in place of `$owner` | 30, 9 of them owned by their buyers |
-| Verdict entities | `arkiv.schema = str('vet402_verdict')` | 6 |
+| Evidence entities | `arkiv.schema = str('vet402_evidence')`, by `$creator` | 43, 22 of them owned by the buyers that filed the claims: 15 by the app's hold `0x24ab…6ba7` and 7 by the public page's hold `0xd922…506e` |
+| Verdict entities | `arkiv.schema = str('vet402_verdict') AND kind = str('verdict')` | 6 |
 
-All counts were read together on 2026-11-06 at 06:07 UTC. The 74 payments by seller: Seller A 31, Seller B 9, Seller C 1, Seller D 9, Seller E 9, Seller F 10, Quicknode 4, BotPay 1. 20 of them carry `pay_to`.
-
-The 6 rulings are all Arc's, from the contract `0xe9c35ad2…2a4b` on chain 5042002: 2 Fraud against Seller F (`0x1401…445d`), 2 Silent against Seller E (`0x2d86…93e8`) and 2 Silent against Seller D (`0xb9a6…b80d`). None has the test contract `0x0000…0000` or chain id 0. The live check no longer writes a ruling with the production writer (see [how-you-use-arkiv.md](how-you-use-arkiv.md#checking-it)), so this count holds only Arc's rulings. A ruling refuses for 7 days from its block, so the latest ruling against each one holds them: Seller F until about 2026-11-13 02:01 UTC, Seller E until about 02:02 UTC and Seller D until about 02:04 UTC.
+The 6 rulings are all Arc's, from the contract `0xe9c35ad2…2a4b` on chain 5042002 (`chain_id` 0x4cef52): 2 Fraud against Seller F (`0x1401…445d`), 2 Silent against Seller E (`0x2d86…93e8`) and 2 Silent against Seller D (`0xb9a6…b80d`). A ruling refuses for 7 days from its block, so the latest ruling against each one holds them: Seller F until about 2026-11-13 02:01 UTC, Seller E until about 02:02 UTC and Seller D until about 02:04 UTC.
 
 To list the rulings yourself:
 
@@ -23,7 +33,7 @@ curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
 
-The receipts page reads every page, 100 entities at a time, so all 140 are on screen.
+The receipts page reads every page, 100 entities at a time, so all 163 receipt entities are on screen.
 
 ## Who uses it
 
@@ -39,18 +49,19 @@ The rulings are read before the local agent pays a catalog listing or Seller C, 
 
 Another buyer can use the rulings without vet402. On 2026-11-06 at 04:36 UTC I ran `isRuledAgainst(payTo, { writer: '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5' })` from `packages/sealed-delivery` in a separate script, as any x402 buyer would, with no key: `true` for each of the three sellers Arc ruled against (`0x2d861219…`, `0x1401bd7c…`, `0xb9a6f77d…`) and `false` for an address with no ruling. The 6 rulings it read were 4 Silent and 2 Fraud.
 
-Anyone can ask the same question in a browser. The receipts page has a "Check a seller" box: paste a payTo address and the page reads the rulings straight from Arkiv's public RPC, with no vet402 server. On 2026-11-06 at 05:45 UTC Seller F's address `0x1401bd7c…445d` read "Arc ruled against this seller on 2026-11-06 (Fraud)." with a link to the claim on Arc, and "vet402 does not pay this seller until 2026-11-13." The page is live at https://vet402-mumbai-live.vercel.app/receipts.html and on the Swarm feed below.
+Anyone can ask the same question in a browser. The receipts page has a "Check a seller" box: paste a payTo address and the page reads the rulings straight from Arkiv's public RPC, with no vet402 server. On 2026-11-06 at 05:45 UTC Seller F's address `0x1401bd7c…445d` read "Arc ruled against this seller on 2026-11-06 (Fraud)." with a link to the claim on Arc, and "vet402 does not pay this seller until 2026-11-13." The page is live at https://vet402-mumbai-live.vercel.app/receipts.html and on its Swarm feed in [swarm.md](swarm.md#the-receipts-page-on-swarm-under-one-fixed-url).
 
-On 2026-11-06 at 08:29 UTC, 21 of the 42 evidence entities vet402 created belonged to the buyers that filed their claims: 15 to the app's hold `0x24Ab…6ba7` and 6 to the public page's hold `0xD922…506e`. The other 21 came before the handover was added and stay with the writer.
+On 2026-11-06 at 09:59 UTC, 22 of the 43 evidence entities vet402 created belonged to the buyers that filed their claims: 15 to the app's hold `0x24Ab…6ba7` and 7 to the public page's hold `0xD922…506e`. The other 21 came before the handover was added and stay with the writer.
 
 Each dispute now lands on Arkiv as one transaction. The receipt of Seller A's dispute on 2026-11-06 at 04:25 UTC reads "Arkiv: 1 transaction, 3 entities" and "the evidence entity belongs to the buyer 0x24Ab…6ba7". At 04:26 UTC Arkiv held 25 evidence entities from the writer, 4 of them already owned by their buyers.
 
-## After Mumbai
+## Into vet402's production buyer
 
 The writer keeps running on Rabdi. These are the steps, each with the check that shows it is done.
 
-1. Keep the judged receipts readable. The first receipts expire around 2026-12-05. Before then I extend the entities that README.md and swarm.md link to, with `extendEntity`, and the README query shows the later `expiresAt`.
-2. Wire the payTo address and the rulings into the production buyer, so every new payment, seller and ruling entity carries `pay_to`. In this repo the count is 20 of 74 at 06:07 UTC, and every ruling written from now on carries it too. The check for the production buyer is the same count over its own writer.
-3. Move to an Arkiv mainnet when `@arkiv-network/sdk` ships a mainnet chain next to `rabdi`. The chain is named in three places: `server/arkiv.ts`, `src/arkiv/readArkiv.ts` and `scripts/arkiv-live.ts`. I switch all three, run `scripts/arkiv-live.ts` against the new chain until every step passes, and put the new writer address and RPC URL in README.md. Rabdi receipts stay where they are until they expire.
+1. **Keep the judged receipts readable.** The first receipts expire around 2026-12-05. Before then I extend the entities that README.md and swarm.md link to, with `extendEntity`. Done when the README's receipt query shows the later `expiresAt`.
+2. **Read the rulings before every production payment.** vet402's production buyer, which paid through Gateway on Arc mainnet on 2026-09-28, calls `isRuledAgainst(accept.payTo, { writer })` from `packages/sealed-delivery` before it signs, and skips a seller that reads true. Done when a test payment to Seller F's address `0x1401bd7c7fab3fe8a429672fc1c5371456c8445d` stops before any signature, and one to an address with no ruling goes through.
+3. **Write every production payment with its payTo.** The production buyer writes its payment, settlement, seller and ruling entities through `server/arkiv.ts`, so each carries `pay_to`. Done when the paged count above, run over the production writer's address, shows `pay_to` on every payment entity created after the switch.
+4. **Move to an Arkiv mainnet** when `@arkiv-network/sdk` ships a mainnet chain next to `rabdi`. The chain is named in three places: `server/arkiv.ts`, `src/arkiv/readArkiv.ts` and `scripts/arkiv-live.ts`. Done when `scripts/arkiv-live.ts` passes every step against the new chain, and README.md names the new writer address and RPC URL. Rabdi receipts stay where they are until they expire.
 
 Who else can read this: anybody. The receipts page and the query need no account and no key from vet402.

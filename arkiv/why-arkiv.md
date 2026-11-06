@@ -39,8 +39,8 @@ Everything on Arkiv is public, and every entity is a fact that stays fixed. Arki
 | The response body | The buyer's local receipt only. Arkiv holds its SHA-256 and size | It is the buyer's purchase. The hash is enough to prove which answer came back |
 | The job text the user typed | The backend | It is the user's own words, and nothing a stranger needs to check a receipt |
 | Any address of the user, and any World ID value | The backend | A public receipt must not say who bought what. The seller's address is written, and an evidence entity is owned by the hold that filed the claim, the buyer the claim on Arc already names |
-| The sealed answer itself | Swarm, as a box with no key in it. Arkiv holds the reference | It is bytes, and vet402 uses no bytes columns. Swarm is built for content by reference |
-| The key that opens a sealed answer | Arc, in the `KeyRevealed` event | The contract checks the key against the seller's promise. A copy elsewhere would decide nothing |
+| The sealed answer of a dispute | Swarm, public, as a box with no key in it. Arkiv holds the reference in `swarm_ref` | It is bytes, and vet402 uses no bytes columns. Swarm is built for content by reference |
+| The key that opens a sealed answer | Arc, public in the `KeyRevealed` event once the seller answers a claim. Without a claim the key goes from the seller to the buyer on its own request | The contract checks the key against the seller's promise. A copy elsewhere would decide nothing |
 | The deposit, the claim and the payout | The contract on Arc | Money moves there. Arkiv copies only the ruling, with the contract and claim id to check it by |
 | The hold, the budget and each approval | The backend's own store | They change during a job, and Arkiv entities here never change |
 | A payment's status as one field that moves on | Two entities, payment and settlement | Gateway decides the status. Patching one entity would give up `readonly` |
