@@ -12,6 +12,8 @@ Arkiv gives me that with four things built in.
 
 **Arkiv holds the ruling, not only the receipt.** A seller cannot extend its own record, and only an answer that opens to the seller's promise extends it. Every Silent or Fraud event from the contract becomes a readonly `vet402_verdict` entity with the claim id, the seller's payTo address, the ruling, the claim transaction, the contract and the chain. Before paying, the delivery check reads those entities first and refuses any seller with a ruling in the last 7 days. The seller's standing is what Arkiv says it is, and anybody can read the same entities and check each one against the event on Arc.
 
+**A dispute lands as one fact, and its evidence is the buyer's.** The payment, the seller and the evidence of a dispute go to Arkiv in one `executeBatch` transaction, so all three are on record or none is. In the same transaction the evidence entity passes to the buyer on the claim. Its `$creator` stays vet402 and `readonly` stays set, so the buyer holds the record of its box and nobody can rewrite it. Readers find it by `createdBy`, whoever owns it.
+
 The rest of the check also leans on Arkiv instead of guessing around it. A seller is found by its payTo address when vet402 knows it, so a catalog listing cannot borrow another seller's record by using its name. When Arkiv cannot be read, vet402 does not pay. It says "Arkiv could not be read, so the delivery check did not run. Not paid."
 
 ## Why the rulings are copied to Arkiv, not read from Arc each time
@@ -36,7 +38,7 @@ Everything on Arkiv is public, and every entity is a fact that stays fixed. Arki
 |---|---|---|
 | The response body | The buyer's local receipt only. Arkiv holds its SHA-256 and size | It is the buyer's purchase. The hash is enough to prove which answer came back |
 | The job text the user typed | The backend | It is the user's own words, and nothing a stranger needs to check a receipt |
-| Any address of the user, and any World ID value | The backend | A public receipt must not say who bought what. Only the seller's address is written |
+| Any address of the user, and any World ID value | The backend | A public receipt must not say who bought what. The seller's address is written, and an evidence entity is owned by the hold that filed the claim, the buyer the claim on Arc already names |
 | The sealed answer itself | Swarm, as a box with no key in it. Arkiv holds the reference | It is bytes, and vet402 uses no bytes columns. Swarm is built for content by reference |
 | The key that opens a sealed answer | Arc, in the `KeyRevealed` event | The contract checks the key against the seller's promise. A copy elsewhere would decide nothing |
 | The deposit, the claim and the payout | The contract on Arc | Money moves there. Arkiv copies only the ruling, with the contract and claim id to check it by |

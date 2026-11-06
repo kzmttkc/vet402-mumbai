@@ -6,6 +6,20 @@ The backend holds `ARKIV_WRITER_KEY`. Without it the app runs on local receipts 
 
 `createArkivSink` in `server/arkiv.ts` sits behind the local receipt store. The local row is saved first and the Arkiv write follows from one queue, one at a time, without viem's nonce manager. The screen and the payment never wait for Arkiv. A failed write is caught and logged, the receipt's sentence stays on screen, and a later pass tries again. A retry looks for the entity first, so a write that landed is not written twice.
 
+### One transaction per dispute
+
+Everything one receipt row owes Arkiv goes out as one `executeBatch` transaction. For a dispute that is the payment entity, the seller entity (created, or extended when it exists) and the evidence entity, and also the `vet402_verdict` entity when Arc's ruling on the same claim is waiting in the queue. Arkiv applies the whole batch or none of it, so a dispute is never on record with its payment and without its box. The receipt's Details then reads "Arkiv: 1 transaction, 3 entities". A settlement names its payment entity, so it follows in the next batch once that key is known.
+
+The test `K1: one dispute, one Arkiv transaction` in `server/__tests__/arkivBatch.test.ts` runs the real SDK client against a fake Arkiv node, decodes the one transaction it signs and finds three creates in it. Its second test has the node revert the batch and checks that the row then holds no key at all.
+
+### The evidence belongs to the buyer
+
+In the same transaction, vet402 hands the evidence entity to the buyer on the claim with an ownership change. That is the hold that paid and filed the claim, the address Arc already names as the claim's buyer. Its key is worked out before it exists with `predictEntityKeys`, so the hand over rides in the batch that creates it. When another write from the writer moved that key, the engine refuses the batch, vet402 sends it again without the hand over, and then hands the entity over with `changeOwnership` in a transaction of its own. The receipt's Details reads "Arkiv: the evidence entity belongs to the buyer 0x1234…abcd".
+
+The ruling stays with vet402. Only the evidence entity changes owner, so only vet402 can delete a ruling or hand it on.
+
+The hand over keeps the evidence fixed. `readonly` is a creation flag, set on the create and kept for the entity's whole life, and Arkiv's docs say an entity's `$creator` stays the account that created it. The new owner can extend the entity or delete it. It cannot change a column. Every read of `vet402_evidence` therefore filters on the creator with `createdBy(writer)`, and it finds the entity whoever owns it now. The public try sets the buyer (`TryRecordDeps.buyer`). A sink without one keeps the evidence with the writer.
+
 1. Gateway reports the payment as received: one payment entity with status "accepted".
 2. The answer really arrived and kept its promise: the seller entity is created, or extended if it exists. For a sealed answer that means the key opened it to the seller's promise. A swapped answer extends nothing.
 3. Gateway reports the payment completed: one settlement entity with status "settled", holding the payment entity's key.
@@ -21,7 +35,7 @@ The public deploy writes too, when it holds the writer key. `api/try-dispute` pu
 
 ## Reading before paying
 
-Every path that pays a seller reads Arkiv first, and the reads filter on the writer with `ownedBy`.
+Every path that pays a seller reads Arkiv first, and the reads filter on the writer with `ownedBy`. Receipts, sellers and rulings stay with the writer for life, so the owner is the writer. Evidence is read with `createdBy`, as above.
 
 | Path | Who | What is read | By |
 |---|---|---|---|
@@ -67,6 +81,9 @@ Rows the live check writes have a "live-check-" seller name and expire within mi
 | `extendEntity` | The seller's date moves to 7 days after each delivery that kept its promise |
 | `vet402_verdict` entities | "Arc ruled against this seller on {date}" on that seller's receipts, and no approval card for that seller for 7 days |
 | `ownedBy` queries | Every row comes from one writer, so a stranger cannot add a fake receipt or a fake ruling to the page |
+| `executeBatch` | "Arkiv: 1 transaction, 3 entities" under a receipt's Details. A dispute's payment, seller and evidence land together |
+| `changeOwnership` and `createdBy` | "Arkiv: the evidence entity belongs to the buyer …" under Details, and "Open a sealed answer" still lists that box, read by its creator |
+| An evidence column with the box's postage date | "Kept on Swarm until {date}" under a box my own Bee node uploaded |
 | Indexed `kind`, `pay_to` and paging | Every receipt shows, and a seller's standing follows its address, not a name anyone can copy |
 
 ## Checking it

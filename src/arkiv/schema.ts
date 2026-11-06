@@ -27,12 +27,20 @@ export const SellerSchema = defineSchema('vet402_seller', {
   pay_to: str().indexed().optional(),
 })
 
-/** Points one claim at its box on Swarm. The reference is unencrypted, and the box inside holds no key. */
+/**
+ * Points one claim at its box on Swarm. The reference is unencrypted, and the box inside holds no key.
+ * vet402 writes it and hands it to the buyer on the claim, so it is read by its creator, never its owner.
+ */
 export const EvidenceSchema = defineSchema('vet402_evidence', {
   kind: str().indexed(),
   claim_id: str().indexed(),
   gateway_transfer_id: str().indexed(),
   swarm_ref: str(),
+  /**
+   * Unix seconds the postage batch keeps the box on Swarm, read from vet402's own Bee node when it
+   * uploaded the box. A box the public gateway stamped has no such date, so the column is left out.
+   */
+  swarm_kept_until: u64().optional(),
 })
 
 /** Arc's ruling on one claim, copied from the contract's Silent or Fraud event. `seller` is the payTo address, lowercase. */

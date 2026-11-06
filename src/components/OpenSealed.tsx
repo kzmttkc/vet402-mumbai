@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { KeyRound, Loader2 } from 'lucide-react'
 import type { Hex } from 'viem'
 import { createEvidenceLister, createEvidenceReader } from '@/arkiv/readArkiv'
-import { COULD_NOT_READ_ARKIV_RECORD, COULD_NOT_READ_KEY, openableAnswers, openFromRecord } from '@/lib/openSealed'
-import type { EvidenceEntry, EvidenceSources, OpenResult, PublicSealedAnswer, PublicSealedFile } from '@/lib/openSealed'
+import { COULD_NOT_READ_ARKIV_RECORD, COULD_NOT_READ_KEY, keptOnSwarmLine, openableAnswers, openFromRecord } from '@/lib/openSealed'
+import type { EvidenceEntry, EvidenceSources, OpenableAnswer, OpenResult, PublicSealedFile } from '@/lib/openSealed'
 import { loadSealedFile } from '@/lib/publicData'
 import { createSwarmWire } from '@/lib/swarmBox'
 
@@ -35,12 +35,25 @@ async function listWithRetry(list: () => Promise<EvidenceEntry[]>): Promise<Evid
   return null
 }
 
+/**
+ * The seller's name, and under it how long Swarm keeps the box when vet402's own Bee node stamped it.
+ * The date comes from the box's evidence entity on Arkiv. A box the public gateway stamped shows the name alone.
+ */
+export function AnswerName({ answer }: { answer: OpenableAnswer }) {
+  return (
+    <div className="min-w-0">
+      <span className="text-sm font-semibold">{answer.sellerName}</span>
+      {answer.keptUntil ? <p className="text-xs text-[var(--muted)]">{keptOnSwarmLine(answer.keptUntil)}</p> : null}
+    </div>
+  )
+}
+
 /** Opens a sealed answer in the browser, with the key read straight from the chain. Nothing here can pay. */
 export function OpenSealed() {
   const sources = useMemo(() => publicSources(), [])
   const [file, setFile] = useState<PublicSealedFile>({ contract: null, answers: [] })
   // The list comes from the evidence entities on Arkiv. The exported file only names each claim's seller and key block.
-  const [answers, setAnswers] = useState<PublicSealedAnswer[]>([])
+  const [answers, setAnswers] = useState<OpenableAnswer[]>([])
   const [listError, setListError] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, OpenResult>>({})
   const [opening, setOpening] = useState<string | null>(null)
@@ -92,7 +105,7 @@ export function OpenSealed() {
           return (
             <li key={answer.ref} className="rounded-xl bg-white p-3">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold">{answer.sellerName}</span>
+                <AnswerName answer={answer} />
                 <button type="button" disabled={opening !== null} onClick={() => void open(answer.ref)} className={button}>
                   {opening === answer.ref && <Loader2 size={14} className="animate-spin" aria-hidden />}
                   Open

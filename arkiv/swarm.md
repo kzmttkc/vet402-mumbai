@@ -17,18 +17,41 @@ Everything about Swarm below is new work at ETHGlobal Mumbai, in these commits o
 | `80a0d01` | Tests for all of the above |
 | `2143ad3` | The local end to end run also keeps and opens every box through Swarm |
 | `2d6d920` | Upload through your own Bee API and postage batch with `SWARM_API_URL` and `SWARM_POSTAGE_BATCH_ID`. Merged to `main` from the `swarmstamp` branch |
+| `arkiv3` branch | Each box from my own Bee node pinned there, with its postage date on the evidence entity and on the screen. The receipts page on Swarm under one fixed feed URL (`scripts/swarm-publish.ts`) |
 
 ## What lives where
 
 | Place | What it holds |
 |---|---|
 | Swarm | The box: `ciphertext`, `claimId`, `plaintextHash`, `ciphertextHash`, `contract`, `chainId`, as JSON. No key. |
-| Arkiv | An entity of the new schema `vet402_evidence`: `kind` = "evidence", `claim_id`, `gateway_transfer_id`, `swarm_ref`. |
+| Arkiv | An entity of the new schema `vet402_evidence`: `kind` = "evidence", `claim_id`, `gateway_transfer_id`, `swarm_ref`, and `swarm_kept_until` for a box from my own Bee node. vet402 creates it and the buyer on the claim owns it. |
 | Arc | The claim, and the key once the seller reveals it in the `KeyRevealed` event. |
 
-The Swarm reference is in the field **`swarm_ref`** of the `vet402_evidence` entity. vet402 uses no feed.
+The Swarm reference is in the field **`swarm_ref`** of the `vet402_evidence` entity. Each box is found by that reference directly. The receipts page itself goes on Swarm under a feed, described below.
 
-The evidence entity is new. vet402 never patches an existing entity. It is written from the same single queue as the receipts, without a nonce manager, with `readonly` and `permissionlessExtension`, and it lives 30 days like a receipt.
+The evidence entity is new. vet402 never patches an existing entity. It is written from the same single queue as the receipts, without a nonce manager, with `readonly` and `permissionlessExtension`, and it lives 30 days like a receipt. It goes out in one `executeBatch` transaction with the dispute's payment and seller entities, and in that transaction it passes to the buyer on the claim. Readers find it by `createdBy(writer)`. More in [how-you-use-arkiv.md](how-you-use-arkiv.md#the-evidence-belongs-to-the-buyer).
+
+## Pinned on my node, with the date it is kept until
+
+When the upload goes to my own Bee node (`SWARM_API_URL` with `SWARM_POSTAGE_BATCH_ID`), `createSwarmWire` pins the box on that node with `bee.pin.add` and reads the batch with `bee.stamp.get`. The batch's TTL, counted from the upload, becomes `swarm_kept_until` on the box's evidence entity. "Open a sealed answer" reads it from Arkiv and shows it under the seller's name:
+
+```
+Seller D
+Kept on Swarm until 2026-12-03
+```
+
+The date is the batch's own: Bee works it out from the batch's balance at today's storage price, and a top up moves it later. A box that went through the public gateway shows the seller's name alone, because the gateway stamps with a batch of its own. The tests in `server/__tests__/swarmKeep.test.tsx` cover the pin, the date on the entity and both screens.
+
+## The receipts page on Swarm under one fixed URL
+
+`scripts/swarm-publish.ts` builds `receipts.html` and the files it loads with relative paths, uploads them to my Bee node as one collection with `receipts.html` as its index, and pins it. A feed signed with `SWARM_FEED_KEY` then points at that collection, and the feed manifest is the page's fixed address: `bzz://<manifest>`, and the same page at `https://api.gateway.ethswarm.org/bzz/<manifest>/`. Each later run uploads the new page and moves the feed, and the address stays the same. The page reads Arkiv straight from the browser, so the copy on Swarm shows every receipt with no vet402 server running.
+
+```bash
+npx bun run scripts/swarm-publish.ts --dry-run
+SWARM_API_URL=http://127.0.0.1:1633 SWARM_POSTAGE_BATCH_ID=<your batch id> SWARM_FEED_KEY=<a key for this feed> ARKIV_WRITER_ADDRESS=<writer address> npx bun run scripts/swarm-publish.ts
+```
+
+The first line builds and lists the files. The second prints the collection, the feed owner, the fixed URL and the batch's date.
 
 ### Why the reference is not encrypted
 
@@ -91,16 +114,17 @@ The public deploy on Vercel puts each claimed box on Swarm through the public ga
 
 | File | What it does |
 |---|---|
-| `src/lib/swarmBox.ts` | `createSwarmWire` uploads and downloads with bee-js (`bee.data.upload`, `bee.data.download`). `readBox` only accepts a box for the expected claim, contract and chain whose ciphertext matches its hash. |
+| `src/lib/swarmBox.ts` | `createSwarmWire` uploads and downloads with bee-js (`bee.data.upload`, `bee.data.download`). With my own batch it also pins each box (`bee.pin.add`) and records the batch's date (`bee.stamp.get`). `readBox` only accepts a box for the expected claim, contract and chain whose ciphertext matches its hash. |
 | `server/swarm.ts` | Builds the box from the claim and uploads it. |
 | `server/demo.ts` | Starts the upload right after the claim and puts the reference on the receipt row. A failed upload only logs. |
 | `server/tryDisputeWire.ts` | The public try's uploader and Arkiv writer, built only when the deploy holds `ARKIV_WRITER_KEY`. It always uses the public gateway. |
-| `server/arkiv.ts` | Writes the `vet402_evidence` entity once the payment has its Gateway transfer id. |
+| `server/arkiv.ts` | Writes the `vet402_evidence` entity once the payment has its Gateway transfer id, in one transaction with the payment and the seller, and hands it to the buyer on the claim. |
 | `src/arkiv/schema.ts` | The `vet402_evidence` schema. |
-| `src/arkiv/readArkiv.ts` | `createEvidenceLister` reads every `vet402_evidence` entity of the writer, and `createEvidenceReader` reads `swarm_ref` for one claim, both from Arkiv's public RPC. |
+| `src/arkiv/readArkiv.ts` | `createEvidenceLister` reads every `vet402_evidence` entity the writer created, with its owner and its Swarm date, and `createEvidenceReader` reads `swarm_ref` for one claim, both from Arkiv's public RPC by `createdBy`. |
 | `src/lib/openSealed.ts` | `openableAnswers` builds the list from the evidence entities. `openFromRecord`: Arkiv, then Swarm, then the key from Arc, then the match. There is no fallback. |
-| `src/components/OpenSealed.tsx` | "Open a sealed answer" on the published screen. |
+| `src/components/OpenSealed.tsx` | "Open a sealed answer" on the published screen, with "Kept on Swarm until {date}" under a box from my own Bee node. |
 | `scripts/swarm-live.ts` | One upload and one read on the real network. It reads `SWARM_API_URL` and `SWARM_POSTAGE_BATCH_ID` as the server does. |
+| `scripts/swarm-publish.ts` | The receipts page as one collection on my Bee node, behind a feed manifest that keeps one bzz URL. |
 
 ## Run one upload and one read yourself
 
