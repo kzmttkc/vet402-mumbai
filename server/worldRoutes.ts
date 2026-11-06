@@ -98,6 +98,7 @@ export function createWorld({ env, dataDir, createHold, fetchImpl, token }: Opti
     appId: config.appId,
     rpId: config.rpId,
     environment: config.environment,
+    selfieAbove: config.selfieAbove,
     ports: createWorldPorts(config, createHold, fetchImpl),
     store: createWorldStore(dataDir, config.environment),
   })
@@ -122,7 +123,9 @@ export function createWorld({ env, dataDir, createHold, fetchImpl, token }: Opti
     app.post('/world/requests/:id/complete', guarded, route((req) =>
       service.complete(String(req.params.id), (req.body as { result?: unknown })?.result),
     ))
-    app.post('/world/requests/:id/cancel', guarded, route((req) => service.cancel(String(req.params.id))))
+    app.post('/world/requests/:id/cancel', guarded, route((req) =>
+      service.cancel(String(req.params.id), (req.body as { reason?: unknown } | undefined)?.reason),
+    ))
     app.post('/world/requests/:id/use-last-approval', guarded, route((req) => service.useLastApproval(String(req.params.id))))
   }
 

@@ -14,6 +14,8 @@ export interface WorldRequest {
   state: WorldRequestState
   /** The sentence the screen reads. */
   message: string
+  /** True when this hold also asks for a selfie check. Missing in a request saved before the selfie check. */
+  selfie?: boolean
 }
 
 /** A budget set with its own World ID proof. Amounts are raw USDC units as strings. */
@@ -32,7 +34,10 @@ export interface WorldRecord {
   /** A file written before budgets had their own proof holds only amount and sessionId. Such a budget counts as unset. */
   budget: WorldBudget | null
   request: WorldRequest | null
-  /** Every accepted session nullifier, budget proofs and hold proofs alike, as lowercase hex of the 256-bit integer. */
+  /**
+   * Every accepted session nullifier, budget proofs and hold proofs alike, as lowercase hex of the 256-bit integer.
+   * A hold with a selfie check adds two: Proof of Human's, then the selfie check's.
+   */
   nullifiers: string[]
   /** The last accepted hold proof. Only "Use the last approval" reads it. */
   lastApproval: unknown

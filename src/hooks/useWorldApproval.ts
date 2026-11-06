@@ -6,6 +6,8 @@ export interface WorldRequestView {
   kind: 'budget' | 'hold'
   state: 'waiting' | 'creating' | 'done' | 'closed'
   message: string
+  /** True when this hold also asks for a selfie check. */
+  selfie?: boolean
 }
 
 interface WorldStatus {
@@ -15,6 +17,8 @@ interface WorldStatus {
   /** What the budget can still approve, in USDC. */
   budgetLeft?: string | null
   hasLastApproval?: boolean
+  /** Holds above this many USDC also ask for a selfie check. */
+  selfieAbove?: string
   request?: WorldRequestView | null
 }
 
@@ -24,6 +28,8 @@ interface IdkitParams {
   rp_context: { rp_id: string; nonce: string; created_at: number; expires_at: number; signature: string }
   session_id?: `session_${string}`
   signal?: string
+  /** What the backend asks World App for. Proof of Human always, and a selfie check for a large hold. */
+  credentials: Array<'proof_of_human' | 'selfie'>
 }
 
 interface Started {
@@ -74,14 +80,15 @@ async function send<T>(route: string, body: unknown = {}, retried = false): Prom
 
 // Loaded only when a request starts, so the plain hold never pulls IDKit in.
 async function openIdkitRequest(idkit: IdkitParams) {
-  const { IDKit, CredentialRequest } = await import('@worldcoin/idkit-core')
+  const { IDKit, CredentialRequest, all } = await import('@worldcoin/idkit-core')
   const config = { app_id: idkit.app_id, rp_context: idkit.rp_context, environment: idkit.environment }
+  // Every credential carries the same signal, and World App must give all of them in one approval.
+  const asked = idkit.credentials.map((credential) => CredentialRequest(credential, { signal: idkit.signal }))
+  const constraints = asked.length === 1 ? asked[0] : all(...asked)
   return idkit.session_id
-    ? IDKit.proveSession(idkit.session_id, config).constraints(
-        CredentialRequest('proof_of_human', { signal: idkit.signal }),
-      )
+    ? IDKit.proveSession(idkit.session_id, config).constraints(constraints)
     : // The budget's own proof carries its amount as the signal, so the backend saves only the amount approved.
-      IDKit.createSession(config).constraints(CredentialRequest('proof_of_human', { signal: idkit.signal }))
+      IDKit.createSession(config).constraints(constraints)
 }
 
 /** Passes IDKit's result to the backend and shows what the backend returns. The browser never decides. */
@@ -119,6 +126,8 @@ export function useWorldApproval(onDone: () => Promise<void>) {
       const mine = ++loop.current
       let proof: unknown = null
       let told = false
+      // Why World App ended the request, as IDKit says it. The backend picks the sentence.
+      let reason: string | undefined
 
       while (loop.current === mine) {
         try {
@@ -126,7 +135,10 @@ export function useWorldApproval(onDone: () => Promise<void>) {
           if (request && proof === null && !told) {
             const seen = await request.pollOnce()
             if (seen.type === 'confirmed' && seen.result) proof = seen.result
-            if (seen.type === 'failed') told = true
+            if (seen.type === 'failed') {
+              told = true
+              reason = seen.error
+            }
           }
           if (proof !== null) {
             // Making the hold takes a while. Keep reading the backend so the screen moves on from waiting.
@@ -137,7 +149,7 @@ export function useWorldApproval(onDone: () => Promise<void>) {
               clearInterval(reading)
             }
           } else if (told) {
-            await send(`requests/${id}/cancel`)
+            await send(`requests/${id}/cancel`, { reason })
           }
 
           const latest = await load()
@@ -226,6 +238,7 @@ export function useWorldApproval(onDone: () => Promise<void>) {
     budgetSet: status?.budgetSet ?? false,
     budgetLeft: status?.budgetLeft ?? null,
     hasLastApproval: status?.hasLastApproval ?? false,
+    selfieAbove: status?.selfieAbove ?? null,
     request: status?.request ?? null,
     canCopy,
     qr,

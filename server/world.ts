@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hashSignal } from '@worldcoin/idkit-core/hashing'
 import { signRequest } from '@worldcoin/idkit-core/signing'
-import { formatUsdc } from '../src/onchain-money'
+import { AmountError, formatUsdc, parseUsdc } from '../src/onchain-money'
 import type { Address, Hex } from 'viem'
 import { HoldError } from './hold'
 import type { WorldBudget, WorldRecord, WorldRequest, WorldRequestKind, WorldRequestState, WorldStore } from './worldStore'
@@ -11,12 +11,19 @@ export const ANOTHER_HOLD = 'Not approved: this approval is for another hold.'
 export const OVER_BUDGET = 'Not approved: this is more than the budget has left.'
 export const WAITING = 'Waiting for approval in World ID.'
 export const BUDGET_SET = 'Budget set.'
+/** A hold above the selfie line came back without a passing selfie check. */
+export const SELFIE_NEEDED = 'Not approved: this hold needs a selfie check. Nothing was held.'
+/** World App said the selfie check cannot be done right now, for example in the Simulator. */
+export const SELFIE_UNAVAILABLE =
+  'Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held.'
 const SETUP_FAILED = 'The hold could not be set up. Please try again.'
 
 const REQUEST_TTL_SECONDS = 120
 const VERIFY_URL = 'https://developer.world.org/api/v4/verify'
 const VERIFY_TIMEOUT_MS = 20_000
 const UINT256_MAX = (1n << 256n) - 1n
+/** Holds above this many USDC also ask for a selfie check. WORLD_SELFIE_ABOVE changes it. */
+export const DEFAULT_SELFIE_ABOVE = '0.5'
 
 /** "staging" is the World ID Simulator. "production" is the real World App on a phone. */
 export type WorldEnvironment = 'staging' | 'production'
@@ -27,6 +34,19 @@ export interface WorldConfig {
   rpId: string
   signerKey: string
   environment: WorldEnvironment
+  /** Raw USDC units. A hold above this also asks for a selfie check. */
+  selfieAbove: bigint
+}
+
+/** Unset means 0.5 USDC. Anything that is not an amount refuses to start, so a typo cannot drop the selfie check. */
+function readSelfieAbove(raw: string | undefined): bigint {
+  try {
+    const amount = parseUsdc(raw || DEFAULT_SELFIE_ABOVE)
+    if (amount >= 0n) return amount
+  } catch (error) {
+    if (!(error instanceof AmountError)) throw error
+  }
+  throw new Error('WORLD_SELFIE_ABOVE must be an amount in USDC, such as "0.5".')
 }
 
 /** Returns null when none of the three is set. One or two of them is a mistake, and it must not turn the approval off quietly. */
@@ -38,7 +58,8 @@ export function readWorldConfig(env: Record<string, string | undefined>): WorldC
   // Unset means the Simulator, as before. A typo must not quietly fall back to the other environment.
   const environment = (env.WORLD_ENVIRONMENT || 'staging') as WorldEnvironment
   if (!ENVIRONMENTS.includes(environment)) throw new Error('WORLD_ENVIRONMENT must be "staging" or "production".')
-  return { appId: env.WORLD_APP_ID!, rpId: env.WORLD_RP_ID!, signerKey: env.WORLD_SIGNER_KEY!, environment }
+  const selfieAbove = readSelfieAbove(env.WORLD_SELFIE_ABOVE)
+  return { appId: env.WORLD_APP_ID!, rpId: env.WORLD_RP_ID!, signerKey: env.WORLD_SIGNER_KEY!, environment, selfieAbove }
 }
 
 export interface SignedRequest {
@@ -48,9 +69,17 @@ export interface SignedRequest {
   expiresAt: number
 }
 
+/** One line of World's answer per proof. World says success when at least one proof passed, so each line counts. */
+export interface VerifyResult {
+  identifier: unknown
+  success: unknown
+}
+
 export interface VerifyAnswer {
   success: boolean
   environment: unknown
+  /** Missing when World sent none. */
+  results?: VerifyResult[]
 }
 
 /** Everything the approval needs from the outside world. */
@@ -77,8 +106,15 @@ export function createWorldPorts(
         body: JSON.stringify(result),
         signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
       })
-      const body = (await res.json().catch(() => null)) as { success?: unknown; environment?: unknown } | null
-      return { success: res.ok && body?.success === true, environment: body?.environment }
+      const body = (await res.json().catch(() => null)) as { success?: unknown; environment?: unknown; results?: unknown } | null
+      const answer: VerifyAnswer = { success: res.ok && body?.success === true, environment: body?.environment }
+      if (Array.isArray(body?.results)) {
+        answer.results = body.results.map((line: { identifier?: unknown; success?: unknown } | null) => ({
+          identifier: line?.identifier,
+          success: line?.success,
+        }))
+      }
+      return answer
     },
     createHold,
   }
@@ -100,6 +136,8 @@ export interface WorldRequestView {
   kind: WorldRequestKind
   state: WorldRequestState
   message: string
+  /** True when this hold also asks for a selfie check. */
+  selfie: boolean
 }
 
 export interface WorldStatus {
@@ -109,6 +147,8 @@ export interface WorldStatus {
   /** What the budget can still approve, in USDC. Null without a budget. */
   budgetLeft: string | null
   hasLastApproval: boolean
+  /** Holds above this many USDC also ask for a selfie check. */
+  selfieAbove: string
   request: WorldRequestView | null
 }
 
@@ -119,6 +159,8 @@ export interface IdkitParams {
   rp_context: { rp_id: string; nonce: string; created_at: number; expires_at: number; signature: string }
   session_id?: string
   signal?: string
+  /** The credentials IDKit asks for, all of them together, each with the same signal. */
+  credentials: Credential[]
 }
 
 interface IdkitResult {
@@ -126,12 +168,20 @@ interface IdkitResult {
   environment?: unknown
   nonce?: unknown
   session_id?: unknown
-  responses?: Array<{ identifier?: unknown; signal_hash?: unknown; session_nullifier?: unknown } | null>
+  responses?: Array<{ identifier?: unknown; signal_hash?: unknown; session_nullifier?: unknown; issuer_schema_id?: unknown } | null>
 }
 
-/** The only proof this app asks for. A session proof of World ID 4.0 for Proof of Human. */
+/**
+ * A session proof of World ID 4.0. Every request asks for Proof of Human, which says a unique person approved.
+ * A hold above the selfie line also asks for a selfie check, which says that person is at the phone right now.
+ */
 const PROTOCOL_VERSION = '4.0'
-const CREDENTIAL = 'proof_of_human'
+export type Credential = 'proof_of_human' | 'selfie'
+const PROOF_OF_HUMAN: Credential[] = ['proof_of_human']
+const WITH_SELFIE: Credential[] = ['proof_of_human', 'selfie']
+/** World's issuer id for the selfie check credential. */
+const SELFIE_SCHEMA_ID = 11
+const credentialsOf = (request: Pick<WorldRequest, 'selfie'>): Credential[] => [...(request.selfie ? WITH_SELFIE : PROOF_OF_HUMAN)]
 
 /** IDKit gives the session nullifier as [nullifier, action]. A bare string is taken as the nullifier itself. */
 function sessionNullifierOf(raw: unknown): bigint | null {
@@ -150,7 +200,13 @@ const holdSignal = (request: Pick<WorldRequest, 'id' | 'amount'>) => `${request.
 /** The budget proof carries its amount, so the amount saved is the amount the person approved. */
 const budgetSignal = (request: Pick<WorldRequest, 'id' | 'amount'>) => `budget:${formatUsdc(BigInt(request.amount))}:${request.id}`
 const signalFor = (request: WorldRequest) => (request.kind === 'budget' ? budgetSignal(request) : holdSignal(request))
-const viewOf = ({ id, kind, state, message }: WorldRequest): WorldRequestView => ({ id, kind, state, message })
+const viewOf = ({ id, kind, state, message, selfie }: WorldRequest): WorldRequestView => ({
+  id,
+  kind,
+  state,
+  message,
+  selfie: selfie === true,
+})
 
 /** Only a budget set with its own proof counts. One saved before that, with no id or nullifier, is treated as unset. */
 function budgetOf(record: WorldRecord): WorldBudget | null {
@@ -169,6 +225,8 @@ interface Options {
   store: WorldStore
   /** Both the verify answer and the IDKit result must name this environment. */
   environment?: WorldEnvironment
+  /** Raw USDC units. A hold above this also asks for a selfie check. */
+  selfieAbove?: bigint
   now?: () => number
   ttlMs?: number
 }
@@ -179,6 +237,7 @@ export function createWorldService({
   ports,
   store,
   environment = 'staging',
+  selfieAbove = parseUsdc(DEFAULT_SELFIE_ABOVE),
   now = Date.now,
   ttlMs = REQUEST_TTL_SECONDS * 1000,
 }: Options) {
@@ -214,7 +273,7 @@ export function createWorldService({
     timer.unref?.()
   }
 
-  function begin(record: WorldRecord, kind: WorldRequestKind, amount: bigint) {
+  function begin(record: WorldRecord, kind: WorldRequestKind, amount: bigint, selfie = false) {
     if (record.request?.state === 'creating') throw new WorldError(409, 'A hold is already being set up.')
 
     const signed = ports.sign()
@@ -226,6 +285,8 @@ export function createWorldService({
       expiresAt: now() + ttlMs,
       state: 'waiting',
       message: WAITING,
+      // Decided once, when the request starts, so the check that runs later is the one the screen announced.
+      selfie,
     }
     // Starting again replaces any earlier waiting request, so the earlier one can never be approved.
     record.request = request
@@ -242,6 +303,7 @@ export function createWorldService({
         expires_at: signed.expiresAt,
         signature: signed.sig,
       },
+      credentials: credentialsOf(request),
     }
     return { request, idkit }
   }
@@ -264,7 +326,8 @@ export function createWorldService({
     if (!budget) throw new WorldError(403, NOT_APPROVED)
     if (amount > leftOf(budget)) throw new WorldError(403, OVER_BUDGET)
     // The hold is the agent's spending limit. Jobs are planned after it and several are paid from one hold.
-    const { request, idkit } = begin(record, 'hold', amount)
+    // The check grows with the amount. A small hold needs a unique person. A large one also needs that person present.
+    const { request, idkit } = begin(record, 'hold', amount, amount > selfieAbove)
     return { request: viewOf(request), idkit: { ...idkit, session_id: budget.sessionId, signal: holdSignal(request) } }
   }
 
@@ -294,17 +357,28 @@ export function createWorldService({
     id: string,
     result: IdkitResult,
     sessionId: (record: WorldRecord) => string | null,
-    commit: (record: WorldRecord, request: WorldRequest, nullifier: string) => T,
+    commit: (record: WorldRecord, request: WorldRequest, nullifiers: string[]) => T,
   ): Promise<{ ok: true; value: T } | { ok: false; view: WorldRequestView }> {
     const first = live(id)
-    const proof = Array.isArray(result.responses) ? result.responses[0] : null
+    const proofs = Array.isArray(result.responses) ? result.responses : []
     const wrongSignal = first.request.kind === 'hold' ? ANOTHER_HOLD : NOT_APPROVED
+    const refuse = (message: string, reason: string) => ({ ok: false as const, view: close(first.record, first.request, message, reason) })
 
-    const signalHash = toUint256(proof?.signal_hash)
-    if (signalHash === null) return { ok: false, view: close(first.record, first.request, NOT_APPROVED, 'no signal') }
-    if (signalHash !== toUint256(hashSignal(signalFor(first.request)))) {
-      return { ok: false, view: close(first.record, first.request, wrongSignal, 'signal') }
-    }
+    // Every proof carries this request's signal. One made for another request is refused for that, whatever else is wrong.
+    const expectedSignal = toUint256(hashSignal(signalFor(first.request)))
+    const signalHashes = proofs.map((proof) => toUint256(proof?.signal_hash))
+    if (signalHashes.length === 0 || signalHashes.includes(null)) return refuse(NOT_APPROVED, 'no signal')
+    if (signalHashes.some((hash) => hash !== expectedSignal)) return refuse(wrongSignal, 'signal')
+
+    // Exactly the credentials this request asked for, each once. A hold above the selfie line without one is refused.
+    const wanted = credentialsOf(first.request)
+    const given = proofs.map((proof) => proof?.identifier)
+    const missingSelfie = wanted.includes('selfie') && !given.includes('selfie')
+    if (missingSelfie) return refuse(SELFIE_NEEDED, 'no selfie')
+    const exact = given.length === wanted.length && wanted.every((credential) => given.filter((g) => g === credential).length === 1)
+    if (!exact) return refuse(NOT_APPROVED, 'credential')
+    const selfieProof = proofs.find((proof) => proof?.identifier === 'selfie')
+    if (selfieProof && selfieProof.issuer_schema_id !== SELFIE_SCHEMA_ID) return refuse(SELFIE_NEEDED, 'selfie schema')
 
     const answer = await askWorld(result)
     const { record, request } = live(id)
@@ -315,16 +389,27 @@ export function createWorldService({
     if (result.environment !== environment) return fail('result environment')
     if (result.nonce !== request.nonce) return fail('nonce')
     if (result.protocol_version !== PROTOCOL_VERSION) return fail('protocol version')
-    if (proof?.identifier !== CREDENTIAL) return fail('credential')
+    // World answers success when at least one proof passed. Any proof World turned down refuses the whole request,
+    // and the selfie check must be one World passed, by name.
+    const results = Array.isArray(answer.results) ? answer.results : []
+    if (wanted.includes('selfie') && !results.some((line) => line?.identifier === 'selfie' && line.success === true)) {
+      return { ok: false, view: close(record, request, SELFIE_NEEDED, 'selfie not verified') }
+    }
+    if (results.some((line) => line?.success !== true)) return fail('a proof failed at World')
     // World accepts a changed tail of the session id and echoes it back. Only the whole saved string counts.
     const expected = sessionId(record)
     if (typeof result.session_id !== 'string' || !result.session_id) return fail('no session')
     if (expected !== null && result.session_id !== expected) return fail('session')
-    const nullifier = sessionNullifierOf(proof?.session_nullifier)
-    if (nullifier === null) return fail('no nullifier')
-    const key = nullifier.toString(16)
-    if (record.nullifiers.includes(key)) return fail('nullifier reused')
-    return { ok: true, value: commit(record, request, key) }
+    // Each proof has its own nullifier, and none may have been accepted before. Proof of Human's comes first.
+    const keys: string[] = []
+    for (const credential of wanted) {
+      const nullifier = sessionNullifierOf(proofs.find((proof) => proof?.identifier === credential)?.session_nullifier)
+      if (nullifier === null) return fail('no nullifier')
+      keys.push(nullifier.toString(16))
+    }
+    if (new Set(keys).size !== keys.length) return fail('nullifier repeated')
+    if (keys.some((key) => record.nullifiers.includes(key))) return fail('nullifier reused')
+    return { ok: true, value: commit(record, request, keys) }
   }
 
   async function completeBudget(id: string, result: IdkitResult): Promise<WorldRequestView> {
@@ -334,8 +419,9 @@ export function createWorldService({
       id,
       result,
       (record) => budgetOf(record)?.sessionId ?? null,
-      (record, request, nullifier) => {
-        record.nullifiers.push(nullifier)
+      (record, request, nullifiers) => {
+        record.nullifiers.push(...nullifiers)
+        const [nullifier] = nullifiers
         record.budget = { id: request.id, amount: request.amount, sessionId: result.session_id as string, used: '0', nullifier }
         request.state = 'done'
         request.message = BUDGET_SET
@@ -351,7 +437,7 @@ export function createWorldService({
       id,
       result,
       (record) => budgetOf(record)?.sessionId ?? '',
-      (record, request, nullifier) => {
+      (record, request, nullifiers) => {
         const budget = budgetOf(record)
         const amount = BigInt(request.amount)
         // Gas may have been taken from the budget while the person was approving.
@@ -359,7 +445,7 @@ export function createWorldService({
         if (amount > leftOf(budget)) return { go: false as const, view: close(record, request, OVER_BUDGET, 'over budget') }
         // One write: the nullifier is taken, the budget is charged and the request leaves "waiting" together,
         // before any money moves. A crash after this leaves no hold and a spent nullifier, so nothing can be replayed.
-        record.nullifiers.push(nullifier)
+        record.nullifiers.push(...nullifiers)
         budget.used = (BigInt(budget.used) + amount).toString()
         record.lastApproval = result
         request.state = 'creating'
@@ -400,9 +486,16 @@ export function createWorldService({
     return request.kind === 'budget' ? completeBudget(id, body) : completeHold(id, body)
   }
 
-  function cancel(id: string): WorldRequestView {
+  /**
+   * Ends a waiting request. The browser may pass the reason IDKit gave. It can only pick which refusal is read:
+   * a hold that asked for a selfie check World App could not give says so in plain words.
+   */
+  function cancel(id: string, reason?: unknown): WorldRequestView {
     const { record, request } = live(id)
     if (request.state !== 'waiting') return viewOf(request)
+    if (request.selfie && reason === 'credential_unavailable') {
+      return close(record, request, SELFIE_UNAVAILABLE, 'selfie unavailable')
+    }
     return close(record, request, NOT_APPROVED, 'cancelled')
   }
 
@@ -437,6 +530,7 @@ export function createWorldService({
       budgetSet: budget !== null,
       budgetLeft: budget ? formatUsdc(leftOf(budget)) : null,
       hasLastApproval: record.lastApproval !== null,
+      selfieAbove: formatUsdc(selfieAbove),
       request: record.request ? viewOf(record.request) : null,
     }
   }

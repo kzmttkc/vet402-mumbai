@@ -21,6 +21,8 @@ import {
   NOT_APPROVED,
   OVER_BUDGET,
   readWorldConfig,
+  SELFIE_NEEDED,
+  SELFIE_UNAVAILABLE,
   WAITING,
   WorldError,
 } from '../world'
@@ -45,6 +47,19 @@ afterEach(() => {
 })
 
 const TOKEN = 'test-session-token'
+
+type Proofs = { responses?: Array<{ identifier?: unknown } | null> }
+
+/** World's answer when every proof in the result passed: one line per proof, named as IDKit named it. */
+function passed(result: unknown, environment: unknown = 'staging'): VerifyAnswer {
+  const proofs = (result as Proofs | null)?.responses ?? []
+  return { success: true, environment, results: proofs.map((proof) => ({ identifier: proof?.identifier, success: true })) }
+}
+
+/** A stand-in for developer.world.org that passes every proof it is sent. */
+const passingFetch = (environment: string) =>
+  ((_url: string, init?: RequestInit) =>
+    Promise.resolve(new Response(JSON.stringify(passed(JSON.parse(String(init?.body ?? '{}')), environment))))) as unknown as typeof fetch
 const SESSION = `session_${'ab'.repeat(32)}${'cd'.repeat(32)}`
 const usdc = (value: number) => BigInt(Math.round(value * 1_000_000))
 
@@ -78,8 +93,8 @@ function setup(options: { ttlMs?: number; environment?: WorldEnvironment } = {})
   const hold = fakeHoldPorts()
   const holds = createHoldService(hold.ports, createHoldStore(dir))
   const verifyCalls: unknown[] = []
-  const verifyAnswer: { current: () => Promise<VerifyAnswer> } = {
-    current: () => Promise.resolve({ success: true, environment: options.environment ?? 'staging' }),
+  const verifyAnswer: { current: (result: unknown) => Promise<VerifyAnswer> } = {
+    current: (result) => Promise.resolve(passed(result, options.environment ?? 'staging')),
   }
   let signs = 0
   const store = createWorldStore(dir)
@@ -97,7 +112,7 @@ function setup(options: { ttlMs?: number; environment?: WorldEnvironment } = {})
       },
       verify: (result) => {
         verifyCalls.push(result)
-        return verifyAnswer.current()
+        return verifyAnswer.current(result)
       },
       createHold: (amount) => holds.start(amount),
     },
@@ -130,6 +145,29 @@ function sessionResult(started: Started, sessionId = SESSION, nullifier = String
   }
 }
 
+/** The selfie check's own nullifier, kept apart from the Proof of Human one the test picks. */
+function selfieNullifierFor(nullifier: string): string {
+  try {
+    return (BigInt(nullifier) + 10n ** 40n).toString()
+  } catch {
+    return nullifier
+  }
+}
+
+/** The selfie check World App adds for a hold above the selfie line. */
+function selfieProof(started: Started, nullifier: string) {
+  return {
+    identifier: 'selfie',
+    signal_hash: hashSignal(started.idkit.signal as string),
+    proof: ['1', '2', '3', '4', '5'],
+    session_nullifier: [selfieNullifierFor(nullifier), '777'],
+    issuer_schema_id: 11,
+    expires_at_min: 1,
+    sybil_score: 0,
+  }
+}
+
+/** What IDKit returns for proveSession: Proof of Human, plus the selfie check when the backend asked for one. */
 function proofFor(started: Started, nullifier: string, change: Record<string, unknown> = {}) {
   return {
     protocol_version: '4.0',
@@ -145,6 +183,7 @@ function proofFor(started: Started, nullifier: string, change: Record<string, un
         issuer_schema_id: 1,
         expires_at_min: 1,
       },
+      ...(started.idkit.credentials?.includes('selfie') ? [selfieProof(started, nullifier)] : []),
     ],
     ...change,
   }
@@ -464,8 +503,9 @@ describe('the path that goes through', () => {
 
     expect(view).toMatchObject({ state: 'done', message: 'Held 1.5 USDC for your agent.' })
     expect(hold.deposits).toEqual([usdc(1.5)])
-    expect(store.read().nullifiers.at(-1)).toBe((99).toString(16))
-    expect(store.read().nullifiers).toHaveLength(2)
+    // 1.5 USDC is above the selfie line, so the hold spends two nullifiers: Proof of Human's, then the selfie check's.
+    expect(store.read().nullifiers.slice(-2)).toEqual([(99).toString(16), BigInt(selfieNullifierFor('99')).toString(16)])
+    expect(store.read().nullifiers).toHaveLength(3)
   })
 
   test('the same person approves a second hold with a new nullifier', async () => {
@@ -489,7 +529,7 @@ describe('the path that goes through', () => {
     const view = await world.complete(started.request.id, proofFor(started, '7'))
 
     expect(view).toMatchObject({ state: 'closed', message: 'The hold could not be set up. Please try again.' })
-    expect(store.read().nullifiers.at(-1)).toBe('7')
+    expect(store.read().nullifiers.at(-2)).toBe('7')
     // The deposit may have reached the chain, so the budget stays charged.
     expect(store.read().budget?.used).toBe(usdc(1).toString())
   })
@@ -502,7 +542,7 @@ describe('the path that goes through', () => {
       store: ctx.store,
       ports: {
         sign: () => ({ sig: 's', nonce: `0x${randomBytes(4).toString('hex')}`, createdAt: 1, expiresAt: 121 }),
-        verify: () => Promise.resolve({ success: true, environment: 'staging' }),
+        verify: (result) => Promise.resolve(passed(result, 'staging')),
         createHold: () => Promise.reject(new HoldError('NOT_ENOUGH_BALANCE', 'Your balance is too low for this hold.')),
       },
     })
@@ -526,7 +566,7 @@ describe('the path that goes through', () => {
       store,
       ports: {
         sign: () => ({ sig: 's', nonce: 'n', createdAt: 1, expiresAt: 121 }),
-        verify: () => Promise.resolve({ success: true, environment: 'staging' }),
+        verify: (result) => Promise.resolve(passed(result, 'staging')),
         createHold: () => Promise.resolve(),
       },
     })
@@ -612,7 +652,7 @@ describe('the join with the rest of the app', () => {
     for (const server of servers.splice(0)) server.close()
   })
 
-  async function listen(env: Record<string, string | undefined>, verifyBody: unknown = { success: true, environment: 'staging' }) {
+  async function listen(env: Record<string, string | undefined>, verifyBody?: unknown) {
     const hold = fakeHoldPorts()
     const holds = createHoldService(hold.ports, createHoldStore(dir))
     const app = express()
@@ -622,7 +662,7 @@ describe('the join with the rest of the app', () => {
       dataDir: dir,
       token: TOKEN,
       createHold: (amount) => holds.start(amount),
-      fetchImpl: (() => Promise.resolve(new Response(JSON.stringify(verifyBody)))) as unknown as typeof fetch,
+      fetchImpl: verifyBody === undefined ? passingFetch('staging') : ((() => Promise.resolve(new Response(JSON.stringify(verifyBody)))) as unknown as typeof fetch),
     })
     // The same plain route as server/index.ts, added after the World routes in the same order.
     app.post('/hold', (req, res) => {
@@ -824,7 +864,7 @@ describe('production keeps its own record', () => {
       appId: 'app_x',
       rpId: 'rp_x',
       store: createWorldStore(dir),
-      ports: { sign: () => ({ sig: 's', nonce: '0x1', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'staging' }), createHold: () => Promise.resolve() },
+      ports: { sign: () => ({ sig: 's', nonce: '0x1', createdAt: 1, expiresAt: 2 }), verify: (result) => Promise.resolve(passed(result, 'staging')), createHold: () => Promise.resolve() },
     })
     const budget = staging.startBudget(usdc(5))
     await staging.complete(budget.request.id, sessionResult(budget))
@@ -835,7 +875,7 @@ describe('production keeps its own record', () => {
       rpId: 'rp_x',
       environment: 'production',
       store: createWorldStore(dir, 'production'),
-      ports: { sign: () => ({ sig: 's', nonce: '0x2', createdAt: 1, expiresAt: 2 }), verify: () => Promise.resolve({ success: true, environment: 'production' }), createHold: () => Promise.resolve() },
+      ports: { sign: () => ({ sig: 's', nonce: '0x2', createdAt: 1, expiresAt: 2 }), verify: (result) => Promise.resolve(passed(result, 'production')), createHold: () => Promise.resolve() },
     })
     expect(production.status().budgetSet).toBe(false)
     const fresh = production.startBudget(usdc(5))
@@ -897,7 +937,7 @@ describe('production: no way grows the hold without an approval', () => {
       dataDir: dir,
       token: TOKEN,
       createHold: (amount) => holds.start(amount),
-      fetchImpl: (() => Promise.resolve(new Response(JSON.stringify({ success: true, environment: 'production' })))) as unknown as typeof fetch,
+      fetchImpl: passingFetch('production'),
     })
     app.post('/hold', (_req, res) => void holds.start(usdc(1)).then(() => res.json({ ok: true })))
     const server = await new Promise<Server>((resolve) => {
@@ -1047,7 +1087,7 @@ describe('the budget is a real budget', () => {
       store: ctx.store,
       ports: {
         sign: () => ({ sig: 's', nonce: `0x${randomBytes(4).toString('hex')}`, createdAt: 1, expiresAt: 121 }),
-        verify: () => Promise.resolve({ success: true, environment: 'staging' }),
+        verify: (result) => Promise.resolve(passed(result, 'staging')),
         createHold: () => Promise.reject(new HoldError('NOT_ENOUGH_BALANCE', 'Your balance is too low for this hold.')),
       },
     })
@@ -1229,7 +1269,7 @@ describe('what the verified result must be', () => {
     const proof = proofFor(first, '1') as ReturnType<typeof proofFor> & { responses: Array<Record<string, unknown>> }
     proof.responses[0].session_nullifier = '0xabc'
     expect((await world.complete(first.request.id, proof)).state).toBe('done')
-    expect(store.read().nullifiers.at(-1)).toBe('abc')
+    expect(store.read().nullifiers.at(-2)).toBe('abc')
 
     const second = world.startHold(usdc(1))
     expect((await world.complete(second.request.id, proofFor(second, String(0xabc)))).message).toBe(NOT_APPROVED)
@@ -1242,7 +1282,7 @@ describe('found in review', () => {
     const { world, hold, store, verifyAnswer } = await withBudget({}, usdc(1))
     const started = world.startHold(usdc(1))
     const waiting: Array<() => void> = []
-    verifyAnswer.current = () => new Promise((resolve) => waiting.push(() => resolve({ success: true, environment: 'staging' })))
+    verifyAnswer.current = (result) => new Promise((resolve) => waiting.push(() => resolve(passed(result))))
 
     const both = Promise.all([
       world.complete(started.request.id, proofFor(started, '1')),
@@ -1279,6 +1319,218 @@ describe('found in review', () => {
       expect((await fetch(`${base}/balances`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(200)
     } finally {
       server.close()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------
+// The selfie check: the check grows with the amount. A small hold needs a unique person. A large one also needs
+// that person at the phone right now.
+
+type Built = ReturnType<typeof proofFor> & { responses: Array<Record<string, unknown>> }
+
+describe('the selfie check grows with the amount', () => {
+  test('at or below 0.5 USDC only Proof of Human is asked for, and it is enough to hold', async () => {
+    const { world, hold, verifyCalls } = await withBudget()
+    expect(world.status().selfieAbove).toBe('0.5')
+    for (const [amount, nullifier] of [[usdc(0.5), '61'], [usdc(0.1), '62']] as const) {
+      const started = world.startHold(amount)
+      expect(started.idkit.credentials).toEqual(['proof_of_human'])
+      expect(started.request).toMatchObject({ selfie: false })
+      const proof = proofFor(started, nullifier)
+      expect(proof.responses.map((r) => r.identifier)).toEqual(['proof_of_human'])
+      expect(await world.complete(started.request.id, proof)).toMatchObject({ state: 'done', selfie: false })
+    }
+    // The first hold's leftover covers the second, so only the first is deposited. Both were charged to the budget.
+    expect(hold.deposits).toEqual([usdc(0.5)])
+    expect(world.status().budgetLeft).toBe('9.4')
+    expect(verifyCalls).toHaveLength(2)
+  })
+
+  test('above 0.5 USDC Proof of Human and the selfie check are both asked for, each with the hold signal', async () => {
+    const { world, hold, store } = await withBudget()
+    const started = world.startHold(usdc(0.51))
+    expect(started.idkit.credentials).toEqual(['proof_of_human', 'selfie'])
+    expect(started.idkit.signal).toBe(`${started.request.id}:0.51`)
+    expect(started.request).toMatchObject({ selfie: true, message: WAITING })
+    expect(world.status().request).toMatchObject({ selfie: true })
+    expect(store.read().request).toMatchObject({ selfie: true })
+
+    const view = await world.complete(started.request.id, proofFor(started, '63'))
+    expect(view).toMatchObject({ state: 'done', message: 'Held 0.51 USDC for your agent.', selfie: true })
+    expect(hold.deposits).toEqual([usdc(0.51)])
+  })
+
+  test('above the line, an approval with Proof of Human only is refused before World is asked, and nothing is held', async () => {
+    const { world, hold, verifyCalls, store } = await withBudget()
+    const started = world.startHold(usdc(1))
+    const proof = proofFor(started, '64') as Built
+    proof.responses = proof.responses.filter((r) => r.identifier !== 'selfie')
+    expect(await world.complete(started.request.id, proof)).toMatchObject({ state: 'closed', message: SELFIE_NEEDED })
+    expect(verifyCalls).toEqual([])
+    expect(hold.deposits).toEqual([])
+    expect(store.read().budget?.used).toBe('0')
+    expect(store.read().nullifiers).not.toContain((64).toString(16))
+  })
+
+  test('above the line, World must name the selfie check as passed, whatever its overall success says', async () => {
+    const answers: Array<[string, (result: unknown) => VerifyAnswer]> = [
+      ['the selfie line failed', () => ({ success: true, environment: 'staging', results: [{ identifier: 'proof_of_human', success: true }, { identifier: 'selfie', success: false }] })],
+      ['no selfie line at all', () => ({ success: true, environment: 'staging', results: [{ identifier: 'proof_of_human', success: true }] })],
+      ['no lines at all', () => ({ success: true, environment: 'staging' })],
+    ]
+    for (const [name, answer] of answers) {
+      const { world, hold, verifyAnswer } = await withBudget()
+      verifyAnswer.current = (result) => Promise.resolve(answer(result))
+      const started = world.startHold(usdc(1))
+      const view = await world.complete(started.request.id, proofFor(started, '65'))
+      expect({ name, message: view.message }).toEqual({ name, message: SELFIE_NEEDED })
+      expect(hold.deposits).toEqual([])
+    }
+  })
+
+  test('a Proof of Human World turned down refuses the hold, even next to a passing selfie check', async () => {
+    const { world, hold, verifyAnswer } = await withBudget()
+    verifyAnswer.current = () =>
+      Promise.resolve({ success: true, environment: 'staging', results: [{ identifier: 'proof_of_human', success: false }, { identifier: 'selfie', success: true }] })
+    const started = world.startHold(usdc(1))
+    expect((await world.complete(started.request.id, proofFor(started, '66'))).message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('a selfie check from another issuer, a second copy of a credential or an extra one is refused', async () => {
+    const { world, hold } = await withBudget()
+    const wrongIssuer = world.startHold(usdc(1))
+    const proof = proofFor(wrongIssuer, '67') as Built
+    proof.responses[1].issuer_schema_id = 1
+    expect((await world.complete(wrongIssuer.request.id, proof)).message).toBe(SELFIE_NEEDED)
+
+    const twice = world.startHold(usdc(1))
+    const doubled = proofFor(twice, '68') as Built
+    doubled.responses.push({ ...doubled.responses[0], session_nullifier: ['69', '777'] })
+    expect((await world.complete(twice.request.id, doubled)).message).toBe(NOT_APPROVED)
+
+    const small = world.startHold(usdc(0.2))
+    const extra = proofFor(small, '70') as Built
+    extra.responses.push(selfieProof(small, '70'))
+    expect((await world.complete(small.request.id, extra)).message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('the selfie check spends its own nullifier, so it cannot be used again under a new Proof of Human', async () => {
+    const { world, hold, store } = await withBudget()
+    const first = world.startHold(usdc(1))
+    expect((await world.complete(first.request.id, proofFor(first, '71'))).state).toBe('done')
+    expect(store.read().nullifiers.slice(-2)).toEqual([(71).toString(16), BigInt(selfieNullifierFor('71')).toString(16)])
+
+    const second = world.startHold(usdc(2))
+    const reused = proofFor(second, '72') as Built
+    reused.responses[1].session_nullifier = [selfieNullifierFor('71'), '777']
+    expect((await world.complete(second.request.id, reused)).message).toBe(NOT_APPROVED)
+
+    const same = world.startHold(usdc(2))
+    const oneForBoth = proofFor(same, '73') as Built
+    oneForBoth.responses[1].session_nullifier = ['73', '777']
+    expect((await world.complete(same.request.id, oneForBoth)).message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([usdc(1)])
+  })
+
+  test('the replay test still reads its own sentence when the new hold asks for a selfie check', async () => {
+    const { world, hold } = await withBudget()
+    const small = world.startHold(usdc(0.3))
+    expect((await world.complete(small.request.id, proofFor(small, '74'))).state).toBe('done')
+    const large = world.startHold(usdc(1))
+    expect(await world.useLastApproval(large.request.id)).toMatchObject({ state: 'closed', message: ANOTHER_HOLD })
+    expect(hold.deposits).toEqual([usdc(0.3)])
+  })
+
+  test('credential_unavailable: nothing is held, the budget is untouched and the screen says why in plain words', async () => {
+    const { world, hold, store } = await withBudget()
+    const started = world.startHold(usdc(1))
+    const view = world.cancel(started.request.id, 'credential_unavailable')
+    expect(view).toMatchObject({ state: 'closed', message: SELFIE_UNAVAILABLE })
+    expect(SELFIE_UNAVAILABLE).toBe(
+      'Not approved: this hold needs a selfie check, which World App could not give right now. Nothing was held.',
+    )
+    expect(world.status().request).toMatchObject({ state: 'closed', message: SELFIE_UNAVAILABLE })
+    // A late approval for the closed request changes nothing.
+    expect((await world.complete(started.request.id, proofFor(started, '75'))).message).toBe(SELFIE_UNAVAILABLE)
+    expect(hold.deposits).toEqual([])
+    expect(store.read().budget?.used).toBe('0')
+    expect(world.status().budgetLeft).toBe('10')
+  })
+
+  test('credential_unavailable on a small hold, or any other reason, reads the usual refusal', async () => {
+    const { world, hold } = await withBudget()
+    const small = world.startHold(usdc(0.2))
+    expect(world.cancel(small.request.id, 'credential_unavailable').message).toBe(NOT_APPROVED)
+    const large = world.startHold(usdc(1))
+    expect(world.cancel(large.request.id, 'user_rejected').message).toBe(NOT_APPROVED)
+    expect(hold.deposits).toEqual([])
+  })
+
+  test('WORLD_SELFIE_ABOVE moves the line, unset is 0.5 USDC, and anything that is not an amount refuses to start', () => {
+    const base = { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: '0x01' }
+    expect(readWorldConfig(base)?.selfieAbove).toBe(usdc(0.5))
+    expect(readWorldConfig({ ...base, WORLD_SELFIE_ABOVE: '' })?.selfieAbove).toBe(usdc(0.5))
+    expect(readWorldConfig({ ...base, WORLD_SELFIE_ABOVE: '2.25' })?.selfieAbove).toBe(usdc(2.25))
+    expect(readWorldConfig({ ...base, WORLD_SELFIE_ABOVE: '0' })?.selfieAbove).toBe(0n)
+    for (const wrong of ['abc', '-1', '0.5 USDC', '1.0000001']) {
+      expect(() => readWorldConfig({ ...base, WORLD_SELFIE_ABOVE: wrong })).toThrow('WORLD_SELFIE_ABOVE')
+    }
+  })
+
+  test('over HTTP: the line from the environment picks the credentials, and the cancel reason reaches the backend', async () => {
+    const servers: Server[] = []
+    try {
+      const open = async (extra: Record<string, string>) => {
+        const app = express()
+        app.use(express.json())
+        const hold = fakeHoldPorts()
+        const holds = createHoldService(hold.ports, createHoldStore(dir))
+        mountWorld(app, {
+          env: { WORLD_APP_ID: 'app_x', WORLD_RP_ID: 'rp_x', WORLD_SIGNER_KEY: `0x${randomBytes(32).toString('hex')}`, ...extra },
+          dataDir: mkdtempSync(path.join(dir, 'selfie-')),
+          token: TOKEN,
+          createHold: (amount) => holds.start(amount),
+          fetchImpl: passingFetch('staging'),
+        })
+        const server = await new Promise<Server>((resolve) => {
+          const s = app.listen(0, '127.0.0.1', () => resolve(s))
+        })
+        servers.push(server)
+        const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+        const post = async (route: string, body: unknown = {}) =>
+          (await fetch(`${base}${route}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', [SESSION_HEADER]: TOKEN },
+            body: JSON.stringify(body),
+          })).json()
+        const budget = (await post('/world/budget', { amount: '5' })) as Started
+        expect(await post(`/world/requests/${budget.request.id}/complete`, { result: sessionResult(budget) })).toMatchObject({ message: BUDGET_SET })
+        return { post, hold, base }
+      }
+
+      const usual = await open({})
+      expect(await (await fetch(`${usual.base}/world/status`)).json()).toMatchObject({ selfieAbove: '0.5' })
+      const large = (await usual.post('/world/hold', { amount: '1.5' })) as Started
+      expect(large.idkit.credentials).toEqual(['proof_of_human', 'selfie'])
+      expect(await usual.post(`/world/requests/${large.request.id}/cancel`, { reason: 'credential_unavailable' })).toMatchObject({
+        state: 'closed',
+        message: SELFIE_UNAVAILABLE,
+      })
+      const again = (await usual.post('/world/hold', { amount: '1.5' })) as Started
+      expect(await usual.post(`/world/requests/${again.request.id}/complete`, { result: proofFor(again, '76') })).toMatchObject({
+        state: 'done',
+        message: 'Held 1.5 USDC for your agent.',
+      })
+      expect(usual.hold.deposits).toEqual([usdc(1.5)])
+
+      const raised = await open({ WORLD_SELFIE_ABOVE: '2' })
+      const below = (await raised.post('/world/hold', { amount: '1.5' })) as Started
+      expect(below.idkit.credentials).toEqual(['proof_of_human'])
+    } finally {
+      for (const server of servers) server.close()
     }
   })
 })
