@@ -71,8 +71,10 @@ export type VerdictKind = 'silent' | 'fraud'
 export interface VerdictValues {
   kind: 'verdict'
   claim_id: string
-  /** The payTo address, lowercase. */
+  /** The payTo address, lowercase. Kept beside `pay_to`, so readers of older entities still match. */
   seller: string
+  /** The payTo address, lowercase, under the name the receipt and seller schemas give it. Every ruling of Arc carries it. */
+  pay_to?: string
   verdict: VerdictKind
   claim_tx?: string
   contract: string
@@ -615,6 +617,7 @@ export function createArkivSink({
     kind: 'verdict',
     claim_id: record.claimId,
     seller: addressColumn(record.payTo),
+    pay_to: addressColumn(record.payTo),
     verdict: record.verdict,
     ...(record.claimTx ? { claim_tx: record.claimTx } : {}),
     contract: addressColumn(record.contract),

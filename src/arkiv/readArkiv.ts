@@ -1,11 +1,12 @@
 import { createPublicClient } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
-import { asc, eq } from '@arkiv-network/sdk/query'
+import { asc, eq, or } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
+import type { RulingsRead } from './sellerCheck'
 import type { RawRead } from './receiptsFeed'
 import { PAGE_SIZE, readAllPages } from './pages'
-import { EvidenceSchema, ReceiptSchema, SellerSchema, VerdictSchema } from './schema'
+import { addressColumn, EvidenceSchema, ReceiptSchema, SellerSchema, VerdictSchema } from './schema'
 
 const RECEIPT_FIELDS = {
   $key: true,
@@ -21,6 +22,9 @@ const RECEIPT_FIELDS = {
   payment_key: true,
   pay_to: true,
 } as const
+
+/** The address a ruling is against: `pay_to` when the entity has it, `seller` on entities written before it. */
+const verdictAddress = (row: { seller: { value: string }; pay_to?: { value: string } }) => row.pay_to?.value ?? row.seller.value
 
 /**
  * Reads the public endpoint with the writer filter. No key is involved. Payments and settlements are
@@ -59,7 +63,7 @@ export function createArkivReader(writer: Hex, transport: Transport = http(undef
       ),
       readAllPages((offset) =>
         client
-          .select({ $key: true, $createdAt: true, seller: true, verdict: true })
+          .select({ $key: true, $createdAt: true, seller: true, pay_to: true, verdict: true })
           .from(VerdictSchema)
           .where(eq('kind', 'verdict'))
           .ownedBy(writer)
@@ -92,7 +96,7 @@ export function createArkivReader(writer: Hex, transport: Transport = http(undef
         expiresAt: row.$expiresAt ?? 0n,
       })),
       verdicts: verdicts.map((row) => ({
-        seller: row.seller.value,
+        seller: verdictAddress(row),
         verdict: row.verdict.value,
         createdAt: row.$createdAt ?? 0n,
       })),
@@ -169,5 +173,44 @@ export function createEvidenceLister(writer: Hex, transport: Transport = http(un
         ...(row.$owner ? { owner: row.$owner } : {}),
       }
     })
+  }
+}
+
+/**
+ * Every ruling this writer recorded against one payTo address, with the block timing to date them.
+ * The filter matches either address column, and a row is kept only when its own address is the one
+ * asked for, so an entity with `pay_to` is judged by `pay_to`. No key and no backend are involved.
+ */
+export function createRulingsReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
+  const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
+
+  return async function readRulings(payTo: string): Promise<RulingsRead> {
+    const address = addressColumn(payTo)
+    const [rows, timing] = await Promise.all([
+      readAllPages((offset) =>
+        client
+          .select({ $key: true, $createdAt: true, claim_id: true, claim_tx: true, seller: true, pay_to: true, verdict: true })
+          .from(VerdictSchema)
+          .where(eq('kind', 'verdict'))
+          .where(or(eq('pay_to', address), eq('seller', address)))
+          .ownedBy(writer)
+          .orderBy(asc('$key'))
+          .limit(PAGE_SIZE)
+          .offset(offset)
+          .fetch(),
+      ),
+      client.getBlockTiming(),
+    ])
+    return {
+      rulings: rows
+        .filter((row) => verdictAddress(row) === address)
+        .map((row) => ({
+          verdict: row.verdict.value,
+          claimId: row.claim_id.value,
+          claimTx: row.claim_tx?.value ?? null,
+          createdAt: row.$createdAt ?? 0n,
+        })),
+      timing,
+    }
   }
 }

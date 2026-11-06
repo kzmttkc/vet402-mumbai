@@ -43,12 +43,17 @@ export const EvidenceSchema = defineSchema('vet402_evidence', {
   swarm_kept_until: u64().optional(),
 })
 
-/** Arc's ruling on one claim, copied from the contract's Silent or Fraud event. `seller` is the payTo address, lowercase. */
+/**
+ * Arc's ruling on one claim, copied from the contract's Silent or Fraud event. `pay_to` and `seller`
+ * both hold the payTo address, lowercase. Entities written before `pay_to` existed carry `seller` alone,
+ * so a reader takes `pay_to` when it is there and `seller` otherwise.
+ */
 export const VerdictSchema = defineSchema('vet402_verdict', {
   kind: str().indexed(),
   claim_id: str().indexed(),
   seller: str().indexed(),
-  verdict: str(),
+  pay_to: str().indexed().optional(),
+  verdict: str().indexed(),
   claim_tx: str().optional(),
   contract: str(),
   chain_id: u64(),

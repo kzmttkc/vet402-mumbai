@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Receipt as ReceiptIcon } from 'lucide-react'
 import { receiptStatusLine } from '@/lib/receiptStatus'
-import { createArkivReader } from './readArkiv'
+import { CheckSeller } from './CheckSeller'
+import { createArkivReader, createRulingsReader } from './readArkiv'
 import { BUSY_LINE, createReceiptsFeed, READ_EVERY_MS } from './receiptsFeed'
 import type { FeedRow, FeedState } from './receiptsFeed'
 import type { Hex } from 'viem'
@@ -42,13 +43,16 @@ const short = (value: string, keep = 10) => (value.length > keep ? `${value.slic
 
 export function ReceiptsPage() {
   const [state, setState] = useState<FeedState>(() => ({ rows: savedRows.load(), busy: false }))
+  const [writer, setWriter] = useState<Hex | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const readRulings = useMemo(() => (writer ? createRulingsReader(writer) : null), [writer])
 
   useEffect(() => {
     const life = new AbortController()
 
     void findWriter().then((writer) => {
       if (life.signal.aborted || !writer) return
+      setWriter(writer)
       const feed = createReceiptsFeed(createArkivReader(writer), savedRows)
       const tick = async () => {
         const next = await feed.refresh()
@@ -67,6 +71,7 @@ export function ReceiptsPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-10">
+      <CheckSeller read={readRulings} />
       <section className="rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_8px_32px_rgba(18,45,69,0.06)] backdrop-blur-xl">
         <h1 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Receipts</h1>
 
