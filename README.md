@@ -16,6 +16,21 @@ Proof on Arc testnet, 2026-11-05 22:40 to 22:46 UTC, on the final contract, each
 | D | Tried a wrong key, then said nothing | "Wrong key rejected by the contract." "The seller stayed silent. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0xf011ece9…`](https://explorer.testnet.arc.io/tx/0xf011ece93a231868a637ac2a881411d1150af78230a920f4f4b07bdb7a12ac26), reverted answer [`0x66112b6d…`](https://explorer.testnet.arc.io/tx/0x66112b6d4e17ffc01e84a3fde32eb6d3a6fc65a3e20140df14238355f3d1f100), finalize [`0xcf628ca2…`](https://explorer.testnet.arc.io/tx/0xcf628ca23d50eb6e9197c0bfc1882d2d5fda81c73f3018fb1ca9f161d7a053a5) |
 | F | Swapped the answer, then gave its key | "The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back." Deposit 0.077 USDC | Claim [`0xb9214a10…`](https://explorer.testnet.arc.io/tx/0xb9214a1089666e9b82106c425095b94e2da39f968ea71056d6fbdc7afd1d8db1), answer [`0x211a089a…`](https://explorer.testnet.arc.io/tx/0x211a089a2bd47d5a549accd135fa84ae36d6e49d20a9dbbb34a9d06cb590ec49), prove [`0xe72c3f4c…`](https://explorer.testnet.arc.io/tx/0xe72c3f4cb07caf1c19757c1b1029749fc89f8c19e31004aa338547b30af3d46b) |
 
+## Why this matters
+
+x402 is turning into the common way software pays for software. The Linux Foundation launched the x402 Foundation on 2026-07-14 with 40 members, and Visa, Mastercard, Google, AWS, Stripe, Cloudflare, Circle and Coinbase are among its premier members ([announcement](https://www.linuxfoundation.org/press/linux-foundation-announces-operational-launch-of-x402-foundation-to-standardize-internet-native-payments-for-ai-agents-and-applications)). Chainalysis counted more than 100 million x402 payments on Base through the first quarter of 2026 ([Chainalysis, 2026-06-03](https://www.chainalysis.com/blog/x402-agentic-payments-adoption/)). Cloudflare's Monetization Gateway post lists "zero chargebacks" ([Cloudflare, 2026-07-01](https://blog.cloudflare.com/monetization-gateway/)). A buyer whose answer never came has nowhere to go. A CoinDesk column of 2026-10-28 puts it in one line: "Payment finality is not commercial finality" ([CoinDesk](https://www.coindesk.com/coindesk-indices/2026/10/28/crypto-long-and-short-what-happens-when-an-ai-agent-pays-for-the-wrong-thing)).
+
+Other fixes put every payment through an escrow or a job contract. vet402 leaves a normal payment as it is and touches the chain only in a dispute.
+
+| | [x402r](https://docs.x402r.org) | [authCapture](https://github.com/x402-foundation/x402/pull/1425) | [x402B](https://github.com/bosonprotocol/x402b) | [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) | vet402 |
+|---|---|---|---|---|---|
+| Escrow or job contract calls on a payment with no dispute | 1 or more. The buyer pays into escrow and the merchant captures | 1 or more. Authorize then capture on `AuthCaptureEscrow`, or one call when it captures at once | 1 or more. The money goes into Boson's escrow at commit | 4: `createJob`, `fund`, `submit`, `complete` | 0 to SealedDelivery, measured with Seller A on 2026-11-05 at 22:42 UTC ([Architecture](#architecture)) |
+| Buyer signatures per payment | Not stated in the docs | 1, an ERC-3009 or Permit2 signature | 2 or more, a meta transaction and a token authorization | 2 or more transactions, `createJob` and `fund` | 1, the EIP-3009 signature x402 already asks for |
+| Works with Circle Gateway batched payments | Not stated. The docs list Base and Base Sepolia | Not stated | Not stated | Not stated | Yes. The contract checks the buyer's `GatewayWalletBatched` signature, and every payment of the [runs on the live contract](DEMO.md#runs-on-the-live-contract) settled in a Gateway batch |
+| What a seller adds | Not measured | Not measured | Not measured | Not measured | One middleware and its route, 2 lines in the [package README](packages/sealed-delivery/README.md) that `test/readme.test.ts` runs. The package source is 692 lines |
+
+ERC-8183 also says it has "No dispute resolution or arbitration". In a dispute vet402 sends one claim, and a seller that stays silent or lies pays the buyer from its deposit.
+
 ## Architecture
 
 ![vet402 architecture: a normal payment sends 0 transactions to SealedDelivery, and a claim appears only in a dispute](docs/architecture.png)
@@ -210,7 +225,21 @@ The buyer side of this goes into vet402's production buyer, which paid through G
 
 ## How I used AI
 
-Arc Studio started the app and the contract (session `mumbai`). After `arc-studio pull`, Claude Code wrote code and these documents while I set the scope and made the decisions.
+Two AI tools wrote the code. Arc Studio (session `mumbai`) started the app and wrote, tested and deployed the contract. Claude Code wrote the instructions sent to Arc Studio, pulled its files with `arc-studio pull`, and wrote the rest of the code and these documents. Every instruction sent to Arc Studio is in [prompts/](prompts/README.md), with what each turn built. The table says who wrote each part first, who changed it, and what I decided. Times are 2026-11-05 UTC unless a date is given. "None recorded" means no decision of mine about that part is written down anywhere.
+
+| Part | First written by | Changed by | What I decided |
+|---|---|---|---|
+| `contracts/SealedDelivery.sol` | Arc Studio, turn sd1 at 16:17. Turns sd2 and sd3 keyed claims by claim id and added the double verdict with a burned half, `coverageFor` and `prove` | Claude Code from 17:24: collateral taken at the verdict, token and payment domain as constructor arguments, `DISPUTE_COST`, the payment domain salt, and on 2026-11-06 the claim's own gas repaid in every outcome (`81d1f32`). Arc Studio built, tested and made all 5 testnet deployments, in turns sd2 and sd4 to sd7 | A deposit per seller, in place of money held for each payment. At about 16:25 I asked why the plan gave up limits first while time was left. The plan written under that question kept `prove` and made silence and fraud cost twice, with half burned, so a seller paying itself through a second address loses money |
+| `contracts/test` | Arc Studio, 14 of the 16 files, in turns sd1 and sd3 | Claude Code added `SealedDelivery.Holes.t.sol` and `SealedDelivery.Collateral.t.sol`, edited the others with each contract change, and turned the gas slope test into a bound (`b7edde7`) | None recorded |
+| `server/sealedDelivery.ts` | Claude Code at 17:15 (`2a88276`) | Claude Code (`aa7720b`, `3a602f1`, `131230d`) | None recorded beyond the deposit rule in the first row |
+| `server/world.ts` | Claude Code at 16:20 (`6262f7b`), from the instruction [prompt-p6w.txt](prompts/studio/prompt-p6w.txt). Arc Studio never ran it | Claude Code: production mode (`a8219d0`), and on 2026-11-06 the budget signal and the rule that only an approval moves money to the hold (`bd05f86`) | Proof of Human as the credential, not Selfie Check (2026-11-04). I made the production approvals at 22:16 and 23:25 with my own World App, verified at an Orb |
+| `server/arkiv.ts` | Claude Code at 16:21 (`7df3fb3`), from the instruction [prompt-p6a.txt](prompts/studio/prompt-p6a.txt). Arc Studio never ran it | Claude Code: the evidence entity that points to the Swarm box (`4ce7a5b`), and on 2026-11-06 the verdict entity and the seller's standing (`c4b0dfe`) | None recorded |
+| `server/planner.ts` | Arc Studio, turn p3 at 15:43 | Claude Code: the Arkiv delivery check (`7df3fb3`), then on 2026-11-06 BM25 over all 134 listings with no seller or path written into the code (`9dd11ac`) | None recorded |
+| `server/tryDispute.ts`, `server/tryJob.ts` | Claude Code (`04bd19d` at 21:34, `9dd11ac` on 2026-11-06 at 01:06) | Claude Code | None recorded |
+| `src/lib/swarmBox.ts`, `server/swarm.ts` | Claude Code at 20:55 (`f4d37f7`, `e20cd85`) | Claude Code: uploads with my own postage batch (`2d6d920`) | I funded the wallet of my Bee node with xDAI and xBZZ, and that node bought batch `b6455d93…`, which the second run used |
+| `src/` (the screen) | Arc Studio, turns p1 to p5: `App.tsx`, the hold, job, demo and receipt cards and their hooks | Claude Code: the World ID steps, the sealed scenes, the receipts page, the public page with Ask the agent and Try a dispute. `341edd6` removed the template files Arc Studio started with | I kept the Seller B comparison on the screen, labelled "Comparison only. vet402 does not do this.", when a review suggested cutting it (2026-11-05, before the event) |
+| `packages/sealed-delivery` | Claude Code at 21:33 (`7f6a1f5`), from the app's own sealing, ABI and lookout | Claude Code (tests and README) | None recorded |
+| `docs/`, `arkiv/*.md`, README.md, DEMO.md | Claude Code (`352154c`, `50eb76c`, `6aa4ba9`, `620340b`) | Claude Code | I set the order the story follows: the problem, how vet402 fixes it, the case for each sponsor, the promise to ship it after judging, and a closing line (2026-11-05, before the event) |
 
 ## License
 
