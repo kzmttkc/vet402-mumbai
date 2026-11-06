@@ -26,24 +26,63 @@ export interface SwarmWire {
   /** Uploads unencrypted, and returns the 64-character reference. */
   upload(data: Uint8Array): Promise<string>
   download(reference: string): Promise<Uint8Array>
+  /**
+   * Your own Bee node only: pins the box on that node and returns when the postage batch that stamped
+   * it runs out, in Unix seconds. The public gateway's batch is the gateway's own, so its wire has no keep.
+   */
+  keep?(reference: string): Promise<number | null>
 }
 
 /**
- * bee-js against a Bee API. With the gateway the null stamp stands in for a batch the gateway owns.
- * With your own Bee node, pass the postage batch that node bought.
+ * When each box from vet402's own Bee node stays on Swarm until, in Unix seconds, by reference. The
+ * upload fills it, and the Arkiv sink copies it to the box's evidence entity, so the published screen
+ * can read it from Arkiv.
  */
-export function createSwarmWire(url: string = SWARM_GATEWAY, timeout = SWARM_TIMEOUT_MS, batchId: BatchId | string = NULL_STAMP): SwarmWire {
-  const bee = new Bee(url, { timeout })
+export const swarmKeptUntil = new Map<string, number>()
+
+/** The parts of bee-js the wire uses. Tests pass a fake. */
+export type BeeApi = Pick<Bee, 'data' | 'pin' | 'stamp'>
+
+const isNullStamp = (batchId: BatchId | string) =>
+  (typeof batchId === 'string' ? batchId : batchId.toHex()).replace(/^0x/, '') === NULL_STAMP.toHex()
+
+/**
+ * bee-js against a Bee API. With the gateway the null stamp stands in for a batch the gateway owns.
+ * With your own Bee node, pass the postage batch that node bought: each box is then pinned on the
+ * node, and the batch's time to live says how long it stays.
+ */
+export function createSwarmWire(
+  url: string = SWARM_GATEWAY,
+  timeout = SWARM_TIMEOUT_MS,
+  batchId: BatchId | string = NULL_STAMP,
+  { bee = new Bee(url, { timeout }), now = Date.now }: { bee?: BeeApi; now?: () => number } = {},
+): SwarmWire {
+  const own = !isNullStamp(batchId)
+
+  async function keep(reference: string): Promise<number | null> {
+    await bee.pin.add(reference)
+    // The batch's TTL is Bee's estimate at today's storage price, counted from now.
+    const seconds = (await bee.stamp.get(batchId)).duration.toSeconds()
+    return seconds > 0 ? Math.floor(now() / 1000) + Math.floor(seconds) : null
+  }
+
   return {
     async upload(data) {
       // No encrypt option: an encrypted reference carries its key, and this one is written to a public entity.
       const result = await bee.data.upload(batchId, data)
-      return result.reference.toHex()
+      const reference = result.reference.toHex()
+      if (own) {
+        // The box is on Swarm either way. A failed pin or batch read only leaves the date out.
+        const until = await keep(reference).catch(() => null)
+        if (until) swarmKeptUntil.set(reference, until)
+      }
+      return reference
     },
     async download(reference) {
       if (!REFERENCE.test(reference)) throw new Error('Not a plain Swarm reference')
       return (await bee.data.download(reference)).toUint8Array()
     },
+    ...(own ? { keep } : {}),
   }
 }
 

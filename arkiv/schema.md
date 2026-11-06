@@ -1,6 +1,6 @@
 # Arkiv schema
 
-vet402 writes to Arkiv's Rabdi testnet (chain id 7794095) with `@arkiv-network/sdk@1.0.1`. One key writes everything, and every query filters on that key's address with `ownedBy`.
+vet402 writes to Arkiv's Rabdi testnet (chain id 7794095) with `@arkiv-network/sdk@1.0.1`. One key writes everything. Every query filters on that key's address: with `ownedBy` for receipts, sellers and rulings, which stay with the writer, and with `createdBy` for evidence, which the writer hands to the buyer on the claim.
 
 The definitions live in `src/arkiv/schema.ts`.
 
@@ -57,10 +57,13 @@ One per claim. It points the claim at its box on Swarm. More in [swarm.md](swarm
 | claim_id | str | yes | The claim id on Arc | `createEvidenceLister`, which gives "Open a sealed answer" its list, `createEvidenceReader`, which it opens each one with, and `findEvidenceKey` |
 | gateway_transfer_id | str | yes | The Gateway transfer id of the claimed payment | The hand query in swarm.md, the README query with `vet402_evidence` in place of `vet402_receipt` |
 | swarm_ref | str | no | The plain 32 byte Swarm reference of the box, as hex | Read by `createEvidenceReader`. The published screen has no other copy of the box |
+| swarm_kept_until | u64 | no | Unix seconds the postage batch keeps the box on Swarm, when my own Bee node uploaded it and pinned it. Optional | Read by `createEvidenceLister`. "Open a sealed answer" shows "Kept on Swarm until {date}" from it |
 
 Flags: `readonly` and `permissionlessExtension`, like a receipt. All 11 evidence entities read back with flags `raw: 3` on 2026-11-06 at 01:01 UTC.
 
-Lifetime: 30 days.
+Owner: the buyer on the claim, the hold that paid and filed it. vet402 creates the entity and hands it over in the same `executeBatch` transaction, so `$creator` is the writer and `$owner` is the buyer. Every read filters on `$creator`. The buyer can extend the entity or delete it, and the creation flags keep every column as vet402 wrote it.
+
+Lifetime: 30 days. A dispute's payment, seller and evidence entities are written together in one transaction, so all three land or none does.
 
 ## vet402_verdict
 
@@ -76,7 +79,7 @@ One per ruling. When the contract on Arc emits Silent (after `finalize`) or Frau
 | contract | str | no | The contract that ruled, lowercase | Read by hand, to check the Silent or Fraud event for `claim_id` |
 | chain_id | u64 | no | The chain of that contract, 5042002 for Arc testnet | Read by hand, with `contract` |
 
-Flags: `readonly` and `permissionlessExtension`. Nobody can soften a ruling, and anybody can keep one visible.
+Flags: `readonly` and `permissionlessExtension`. Nobody can soften a ruling, and anybody can keep one visible. A ruling stays with the writer for life: vet402 hands over evidence, never a ruling. When the ruling arrives while its claim's row is still waiting for Arkiv, it rides in that row's transaction as a fourth entity.
 
 Lifetime: 30 days. A ruling stops payment for 7 days, counted from the block it was written in (`$createdAt`). Extending it keeps it readable and does not stretch those 7 days.
 
@@ -94,4 +97,4 @@ At 03:17 UTC on 2026-11-06 it returned 2 Fraud rulings, from the contract `0xe9c
 
 ## What is never written
 
-The response body, the job text the user typed, any World ID value, and any address of the user. No bytes columns are used, and no entity is ever patched.
+The response body, the job text the user typed, any World ID value, and any address of the user. The one buyer address on Arkiv is the owner of an evidence entity: the hold that paid, which the claim on Arc already names as its buyer. No bytes columns are used, and no entity is ever patched.

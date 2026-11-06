@@ -161,6 +161,11 @@ export interface TryRecordDeps {
   sealedAddress: Address
   /** The try seller's address. Its seller entity on Arkiv is found by it. */
   seller: Address
+  /**
+   * The buyer on the claim: the hold, which pays and files the claim from its own address. Each
+   * evidence entity is handed to it, so the record of the box is the buyer's.
+   */
+  buyer?: Address
   findTransfer: (nonce: string) => Promise<TransferInfo | null>
   /** Tests pass fakes. The real ones are Rabdi and the public Swarm gateway. */
   arkivWire?: ArkivWire
@@ -179,12 +184,21 @@ export function tryRecordFromEnv(env: Env, deps: TryRecordDeps): { record: TryRe
   const accessKey = env.ARKIV_ACCESS_KEY ?? ''
   const log = deps.log ?? ((message: string) => console.error(message))
   const scrub = createScrubber([accessKey, writerKey])
-  const wire = deps.arkivWire ?? createArkivWire({ writerKey, accessKey }).wire
+  const made = deps.arkivWire ? { wire: deps.arkivWire, writer: undefined } : createArkivWire({ writerKey, accessKey })
   const payToOf = payToByName({ 'Seller A': deps.seller })
   return {
     record: {
       wrap(store) {
-        const sink = createArkivSink({ wire, store, sellerTtlSeconds: SELLER_SECONDS, log, scrub, payToOf })
+        const sink = createArkivSink({
+          wire: made.wire,
+          store,
+          sellerTtlSeconds: SELLER_SECONDS,
+          log,
+          scrub,
+          payToOf,
+          evidenceOwner: deps.buyer ?? null,
+          ...(made.writer ? { writer: made.writer } : {}),
+        })
         return { store: sink.store, idle: sink.idle }
       },
       findTransfer: deps.findTransfer,
@@ -212,6 +226,7 @@ export function tryDisputeFromEnv(env: Env = process.env): TryDispute | null {
   const kept = tryRecordFromEnv(env, {
     sealedAddress,
     seller: sellerAddress,
+    buyer: privateKeyToAccount(hold).address,
     async findTransfer(nonce) {
       const found = (await holdClient.searchTransfers({ nonce: nonce as Hex })).transfers[0]
       return found ? toInfo(found) : null

@@ -61,21 +61,34 @@ export interface EvidenceSources {
 export interface EvidenceEntry {
   claimId: string
   swarmRef: string
+  /** Unix seconds the postage batch keeps the box on Swarm. Only a box from vet402's own Bee node has it. */
+  keptUntil?: number
+  /** Who owns the entity now: the buyer on the claim, once vet402 handed it over. */
+  owner?: string
 }
+
+/** A claim the screen offers to open, with the date its box is kept until when Arkiv recorded one. */
+export interface OpenableAnswer extends PublicSealedAnswer {
+  keptUntil?: number
+}
+
+/** The line under a box from vet402's own Bee node: the last day its postage batch is paid for, in UTC. */
+export const keptOnSwarmLine = (unixSeconds: number): string =>
+  `Kept on Swarm until ${new Date(unixSeconds * 1000).toISOString().slice(0, 10)}`
 
 /**
  * What the screen offers to open: the claims that have a `vet402_evidence` entity on Arkiv, in the
  * order Arkiv returned them. The exported file only adds the seller's name and the key's block.
  */
-export function openableAnswers(file: PublicSealedFile, evidence: readonly EvidenceEntry[]): PublicSealedAnswer[] {
+export function openableAnswers(file: PublicSealedFile, evidence: readonly EvidenceEntry[]): OpenableAnswer[] {
   const byClaim = new Map(file.answers.map((answer) => [answer.claimId.toLowerCase(), answer]))
   const seen = new Set<string>()
-  return evidence.flatMap(({ claimId }) => {
+  return evidence.flatMap(({ claimId, keptUntil }) => {
     const id = claimId.toLowerCase()
     const answer = byClaim.get(id)
     if (!answer || seen.has(id)) return []
     seen.add(id)
-    return [answer]
+    return [keptUntil && keptUntil > 0 ? { ...answer, keptUntil } : answer]
   })
 }
 

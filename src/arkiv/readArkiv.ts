@@ -121,7 +121,10 @@ export function createArkivCounter(writer: Hex, transport: Transport = http(unde
   }
 }
 
-/** The Swarm reference this writer recorded for one claim, or null when it recorded none. */
+/**
+ * The Swarm reference this writer recorded for one claim, or null when it recorded none. Read by
+ * creator: the entity belongs to the buyer once vet402 hands it over, and only vet402 can be its creator.
+ */
 export function createEvidenceReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
   const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
 
@@ -131,29 +134,40 @@ export function createEvidenceReader(writer: Hex, transport: Transport = http(un
       .from(EvidenceSchema)
       .where(eq('kind', 'evidence'))
       .where(eq('claim_id', claimId))
-      .ownedBy(writer)
+      .createdBy(writer)
       .limit(1)
       .fetch()
     return entities[0]?.swarm_ref.value ?? null
   }
 }
 
-/** Every `vet402_evidence` entity this writer recorded: each claim and the Swarm reference of its box, read to the last page. */
+/**
+ * Every `vet402_evidence` entity this writer created: each claim, the Swarm reference of its box, the
+ * date its postage batch keeps it until when vet402's own Bee node stamped it, and who owns the entity now.
+ */
 export function createEvidenceLister(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
   const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
 
-  return async function listEvidence(): Promise<{ claimId: string; swarmRef: string }[]> {
+  return async function listEvidence(): Promise<{ claimId: string; swarmRef: string; keptUntil?: number; owner?: string }[]> {
     const rows = await readAllPages((offset) =>
       client
-        .select({ $key: true, claim_id: true, swarm_ref: true })
+        .select({ $key: true, $owner: true, claim_id: true, swarm_ref: true, swarm_kept_until: true })
         .from(EvidenceSchema)
         .where(eq('kind', 'evidence'))
-        .ownedBy(writer)
+        .createdBy(writer)
         .orderBy(asc('$key'))
         .limit(PAGE_SIZE)
         .offset(offset)
         .fetch(),
     )
-    return rows.map((row) => ({ claimId: row.claim_id.value, swarmRef: row.swarm_ref.value }))
+    return rows.map((row) => {
+      const keptUntil = row.swarm_kept_until?.value
+      return {
+        claimId: row.claim_id.value,
+        swarmRef: row.swarm_ref.value,
+        ...(keptUntil ? { keptUntil: Number(keptUntil) } : {}),
+        ...(row.$owner ? { owner: row.$owner } : {}),
+      }
+    })
   }
 }
