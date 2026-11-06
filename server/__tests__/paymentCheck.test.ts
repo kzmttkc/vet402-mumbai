@@ -78,6 +78,17 @@ describe('vet402 Payment Check, the listing', () => {
   test('the answer says plainly where the last payment stands on Circle’s record', () => {
     const to = '0xf46394addda95a3d5bcc1124605e3d15d204623c'
     expect(describeLastPayment([])).toBe("Circle's record shows no payments from your agent yet.")
+    // The check's own payment is left out, so the answer is about the payment before it.
+    const self = '0x00000000000000000000000000000000000000c4'
+    expect(
+      describeLastPayment(
+        [
+          { status: 'received', amount: '1000', toAddress: self.toUpperCase().replace('0X', '0x'), createdAt: '2026-11-06T03:00:00Z' },
+          { status: 'completed', amount: '100', toAddress: '0x00000000000000000000000000000000000000d5', createdAt: '2026-11-06T02:00:00Z' },
+        ],
+        self,
+      ),
+    ).toBe("Yes, your agent's last payment went through. It paid 0.0001 USDC to 0x0000…00d5, and Arc has settled it.")
     expect(
       describeLastPayment([
         { status: 'received', amount: '1000', toAddress: to, createdAt: '2026-11-06T01:00:00Z' },

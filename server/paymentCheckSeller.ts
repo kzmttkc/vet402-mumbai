@@ -74,9 +74,15 @@ interface Row {
   createdAt?: unknown
 }
 
-/** The answer in plain words, from the payer's newest transfer on Circle's record. */
-export function describeLastPayment(transfers: Row[]): string {
-  const newest = [...transfers].sort((a, b) => Date.parse(String(b.createdAt ?? '')) - Date.parse(String(a.createdAt ?? '')))[0]
+/**
+ * The answer in plain words, from the payer's newest transfer on Circle's record. Payments to `skipTo`, this seller,
+ * are left out, so the answer is about the payment before the check and not the check itself.
+ */
+export function describeLastPayment(transfers: Row[], skipTo?: string): string {
+  const skip = skipTo?.toLowerCase()
+  const newest = transfers
+    .filter((t) => !skip || typeof t.toAddress !== 'string' || t.toAddress.toLowerCase() !== skip)
+    .sort((a, b) => Date.parse(String(b.createdAt ?? '')) - Date.parse(String(a.createdAt ?? '')))[0]
   if (!newest) return "Circle's record shows no payments from your agent yet."
   const amount = typeof newest.amount === 'string' && /^\d+$/.test(newest.amount) ? `${formatUsdc(BigInt(newest.amount))} USDC` : 'a payment'
   const to = typeof newest.toAddress === 'string' ? ` to ${short(newest.toAddress)}` : ''
@@ -86,9 +92,9 @@ export function describeLastPayment(transfers: Row[]): string {
 }
 
 /** Reads the payer's newest transfers from Circle's record and answers. */
-export async function lastPaymentFromCircle(payer: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function lastPaymentFromCircle(payer: string, fetchImpl: typeof fetch = fetch, skipTo?: string): Promise<string> {
   const transfers = await fetchTransfers(`from=${encodeURIComponent(payer)}&network=${ARC_CAIP2}&pageSize=20`, fetchImpl)
-  return describeLastPayment(transfers as Row[])
+  return describeLastPayment(transfers as Row[], skipTo)
 }
 
 /** What the agent gets from vet402 Payment Check: the payment as usual, the answer as text, and the receipt's lines. */
@@ -151,7 +157,7 @@ export function createPaymentCheck(options: PaymentCheckOptions) {
   const log = options.log ?? ((message: string) => console.error(message))
   const seller = privateKeyToAccount(keys.seller).address
   const candidate = paymentCheckCandidate(seller, options.sealedAddress)
-  const lastPayment = options.lastPayment ?? ((payer: string) => lastPaymentFromCircle(payer))
+  const lastPayment = options.lastPayment ?? ((payer: string) => lastPaymentFromCircle(payer, fetch, seller))
   const sealer = createSealer(client, keys.seller)
 
   /** The seller and its lookout, on 127.0.0.1, for one purchase. */
