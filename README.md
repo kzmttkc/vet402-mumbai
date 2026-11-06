@@ -95,7 +95,7 @@ The public agent pays from a fixed Arc testnet wallet of its own, `TRY_JOB_HOLD_
 | Arc mainnet | [`0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9`](https://explorer.arc.io/address/0xf3e2a77e1a93eeb791ae1016f411e5bb8a05e6d9), chain id 5042, the same source and arguments with Arc mainnet's Gateway Wallet `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`. Deployed by script at 2026-11-06 02:02:56 UTC, [`0x6a276f7a…`](https://explorer.arc.io/tx/0x6a276f7a2ca79260ccdfc28a809b889a2febd95d684e9a5db818ecb2581eabd8). Sourcify `exact_match` |
 | Earlier versions | On testnet, five deployments by Arc Studio's agent, all from earlier source. The last of them, `0xa1eff55da9f1cee94d608e2570bda89f8f2ce5b5` (2026-11-05 22:20 UTC), charged a fixed `disputeCost` of 0.0105 USDC in place of the gas each claim paid. On mainnet, the earlier version `0xafdb8931eebdce7f714ac3905c65a50293eb6db6` (2026-11-05 21:59 UTC) charged a fixed 0.009 USDC. Their runs are under [Earlier runs](DEMO.md#earlier-runs). The final version replaced them |
 | Arc Studio | App id `f6f547d3-78ad-4550-9805-8fc08ac65425`, [workspace](https://studio.arc.io/app/f6f547d3-78ad-4550-9805-8fc08ac65425) |
-| Share link | https://studio.arc.io/app/f6f547d3-78ad-4550-9805-8fc08ac65425 (the Studio project, app id f6f547d3-78ad-4550-9805-8fc08ac65425) |
+| Share link | https://studio.arc.io/share/arc-testnet-batch-payment-mobile-darg2ucc42, made with Studio's Share on 2026-11-06 at 16:20 UTC. Its Netlify build is the front end alone, and the full app with its backend runs at https://vet402-mumbai-live.vercel.app |
 | Live screen | https://vet402-mumbai-live.vercel.app, whose Try a dispute claims on `0xE9C35ad2…` since 2026-11-06 01:38 UTC |
 
 The two mainnet rounds, all status 1, at 20.001 to 20.00115 gwei:
