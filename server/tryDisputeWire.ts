@@ -7,9 +7,16 @@ import type { Address, Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { ARC_GATEWAY_API } from '../src/existing/arc-gateway'
 import { formatUsdc, parseUsdc } from '../src/onchain-money'
+import { createSwarmWire, SWARM_GATEWAY } from '../src/lib/swarmBox'
+import type { SwarmWire } from '../src/lib/swarmBox'
+import { createArkivSink, createArkivWire, createScrubber, payToByName, SELLER_SECONDS } from './arkiv'
+import type { ArkivWire } from './arkiv'
 import { fetchTransfers, readOnePayment } from './circleRecord'
 import type { DemoPorts } from './demo'
 import { createDemoPorts } from './demoPorts'
+import type { TransferInfo } from './jobs'
+import { TRANSFER_STATUSES } from './receiptStore'
+import type { TransferStatus } from './receiptStore'
 import {
   ANSWER_GAS,
   ARC_NET,
@@ -23,8 +30,9 @@ import {
 import type { SealedNet } from './sealedDelivery'
 import { createSeller, DEMO_PRICE } from './sellers'
 import type { SellerFacilitator } from './sellers'
+import { createEvidenceUploader } from './swarm'
 import { createTryDispute, parseDailyLimit } from './tryDispute'
-import type { TryDispute, TryPorts } from './tryDispute'
+import type { TryDispute, TryPorts, TryRecord } from './tryDispute'
 
 /** The hold is refilled from the buyer when it falls under this, by this much. */
 export const REFILL_BELOW = parseUsdc('0.005')
@@ -49,6 +57,9 @@ export interface TryWireOptions {
   watchMs?: number
   /** How often the agent reads the chain for the key. */
   pollMs?: number
+  /** The public record: Arkiv behind the try's receipts, and the claimed box on Swarm. Absent without the writer key. */
+  record?: TryRecord
+  evidence?: DemoPorts['evidence']
   log?: (message: string) => void
 }
 
@@ -65,7 +76,8 @@ export function createTryPorts(options: TryWireOptions): TryPorts {
 
   return {
     contract: options.sealedAddress,
-    demo: { ...options.demo, sealed, sealedPollMs: options.pollMs ?? 1000 },
+    demo: { ...options.demo, sealed, sealedPollMs: options.pollMs ?? 1000, ...(options.evidence ? { evidence: options.evidence } : {}) },
+    ...(options.record ? { record: options.record } : {}),
     log,
 
     async openSeller() {
@@ -139,6 +151,48 @@ export async function recentPaymentTimes(hold: Address, seller: Address, fetchIm
 
 type Env = Record<string, string | undefined>
 
+const toInfo = (t: { id: string; status: string; txHash?: unknown }): TransferInfo => ({
+  id: t.id,
+  status: TRANSFER_STATUSES.includes(t.status as TransferStatus) ? (t.status as TransferStatus) : 'received',
+  txHash: typeof t.txHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(t.txHash) ? t.txHash : null,
+})
+
+export interface TryRecordDeps {
+  sealedAddress: Address
+  /** The try seller's address. Its seller entity on Arkiv is found by it. */
+  seller: Address
+  findTransfer: (nonce: string) => Promise<TransferInfo | null>
+  /** Tests pass fakes. The real ones are Rabdi and the public Swarm gateway. */
+  arkivWire?: ArkivWire
+  swarm?: SwarmWire
+  log?: (message: string) => void
+}
+
+/**
+ * The public try's record, from ARKIV_WRITER_KEY (and ARKIV_ACCESS_KEY when there is one). Null
+ * without the key, and the try then writes nothing. The box goes to Swarm through the public
+ * gateway with bee-js's null stamp, because the deploy cannot reach a Bee node of its own.
+ */
+export function tryRecordFromEnv(env: Env, deps: TryRecordDeps): { record: TryRecord; evidence: NonNullable<DemoPorts['evidence']> } | null {
+  const writerKey = env.ARKIV_WRITER_KEY
+  if (!isKey(writerKey)) return null
+  const accessKey = env.ARKIV_ACCESS_KEY ?? ''
+  const log = deps.log ?? ((message: string) => console.error(message))
+  const scrub = createScrubber([accessKey, writerKey])
+  const wire = deps.arkivWire ?? createArkivWire({ writerKey, accessKey }).wire
+  const payToOf = payToByName({ 'Seller A': deps.seller })
+  return {
+    record: {
+      wrap(store) {
+        const sink = createArkivSink({ wire, store, sellerTtlSeconds: SELLER_SECONDS, log, scrub, payToOf })
+        return { store: sink.store, idle: sink.idle }
+      },
+      findTransfer: deps.findTransfer,
+    },
+    evidence: createEvidenceUploader({ swarm: deps.swarm ?? createSwarmWire(SWARM_GATEWAY), contract: deps.sealedAddress, chainId: ARC_NET.chain.id }),
+  }
+}
+
 /**
  * The real try, from environment variables only. Null when one is missing, and the page then says the demo is resting.
  * The keys are read here and passed on, never logged.
@@ -155,8 +209,17 @@ export function tryDisputeFromEnv(env: Env = process.env): TryDispute | null {
   const holdClient = new GatewayClient({ chain: 'arcTestnet', privateKey: hold, rpcUrl: RPC_URL })
   const buyerClient = new GatewayClient({ chain: 'arcTestnet', privateKey: buyer, rpcUrl: RPC_URL })
   const sellerAddress = privateKeyToAccount(sellerKey).address
+  const kept = tryRecordFromEnv(env, {
+    sealedAddress,
+    seller: sellerAddress,
+    async findTransfer(nonce) {
+      const found = (await holdClient.searchTransfers({ nonce: nonce as Hex })).transfers[0]
+      return found ? toInfo(found) : null
+    },
+  })
 
   const ports = createTryPorts({
+    ...(kept ?? {}),
     sealedAddress,
     keys: { hold, seller: sellerKey, buyer },
     facilitator: new BatchFacilitatorClient({ url: new URL(ARC_GATEWAY_API).origin }),

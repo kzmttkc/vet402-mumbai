@@ -10,8 +10,12 @@ import type { SealedBox, SealedPorts } from '../sealedDelivery'
 import { DEMO_PRICE } from '../sellers'
 import { createEvidenceUploader } from '../swarm'
 import {
+  BOX_NOT_FOUND,
   BOX_NOT_THIS_CLAIM,
   CLAIMS_ABI,
+  COULD_NOT_READ_ARKIV_RECORD,
+  NO_ARKIV_RECORD,
+  openableAnswers,
   DOES_NOT_MATCH_PROMISE,
   FROM_ARC,
   FROM_ARKIV,
@@ -279,14 +283,7 @@ describe('the demo keeps the claimed box on Swarm', () => {
 })
 
 describe('the published screen opens the answer from Arkiv, Swarm and Arc', () => {
-  const answer: PublicSealedAnswer = {
-    ref: 'r0',
-    sellerName: 'Seller A',
-    ciphertext: sealed.ciphertext,
-    claimId: CLAIM_ID,
-    plaintextHash: sealed.plaintextHash,
-    keyBlock: '255',
-  }
+  const answer: PublicSealedAnswer = { ref: 'r0', sellerName: 'Seller A', claimId: CLAIM_ID, keyBlock: '255' }
   const keyLog = (key: Hex) => {
     const data = `0x${'0'.repeat(62)}20${(key.length / 2 - 1).toString(16).padStart(64, '0')}${key.slice(2).padEnd(64, '0')}`
     return [{ data }]
@@ -321,7 +318,7 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
   test('reads Arkiv, then Swarm, then Arc, and says so one line each', async () => {
     const order: string[] = []
     const result = await openFromRecord(
-      { ...answer, ciphertext: '0x00' },
+      answer,
       CONTRACT,
       {
         readEvidence: (claimId) => {
@@ -377,63 +374,65 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
     expect(lied).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE })
   })
 
-  test('the exported file is held to the same record on Arc', async () => {
-    const noRecord = { readEvidence: () => Promise.resolve(null) }
-    // A forged file box, with every hash in it agreeing.
-    const forged = sealResponse('{"answer":"Forged in the file."}', sealed.key)
-    const forgedFile = await openFromRecord(
-      { ...answer, ciphertext: forged.ciphertext, plaintextHash: forged.plaintextHash },
-      CONTRACT,
-      noRecord,
-      { fetchImpl: arc(sealed.key) },
-    )
-    expect(forgedFile).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [] })
-
-    // A file that relabels a lying seller's box as kept: the hash on Arc still says it was not.
-    const lie = sealResponse('This is not what the seller promised.')
-    const relabelled = await openFromRecord(
-      { ...answer, ciphertext: lie.ciphertext, plaintextHash: keccak256(new TextEncoder().encode('This is not what the seller promised.')) },
-      CONTRACT,
-      noRecord,
-      { fetchImpl: arc(lie.key, { plaintextHash: sealed.plaintextHash, ciphertextHash: lie.ciphertextHash }) },
-    )
-    expect(relabelled).toMatchObject({ ok: true, matches: false, line: DOES_NOT_MATCH_PROMISE, read: [FROM_ARC] })
-
-    // A Swarm failure falls back to the file, and the file is checked the same way.
-    const swarmDown = await openFromRecord(
-      { ...answer, ciphertext: forged.ciphertext, plaintextHash: forged.plaintextHash },
-      CONTRACT,
-      { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.reject(new Error('404')) },
-      { fetchImpl: arc(sealed.key) },
-    )
-    expect(swarmDown).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [FROM_ARKIV] })
-  })
-
-  test('no Arkiv record, a Swarm failure or a wrong box fall back to the exported file', async () => {
-    const none = await openFromRecord(answer, CONTRACT, { readEvidence: () => Promise.resolve(null) }, { fetchImpl: arc(sealed.key) })
-    expect(none).toMatchObject({ ok: true, matches: true, read: [FROM_ARC] })
-
-    const arkivDown = await openFromRecord(answer, CONTRACT, { readEvidence: () => Promise.reject(new Error('rpc')) }, { fetchImpl: arc(sealed.key) })
-    expect(arkivDown).toMatchObject({ ok: true, matches: true, read: [FROM_ARC] })
-
+  test('Swarm is required: when it fails the answer does not open, and there is no copy to open instead', async () => {
     const swarmDown = await openFromRecord(
       answer,
       CONTRACT,
       { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.reject(new Error('404')) },
       { fetchImpl: arc(sealed.key) },
     )
-    expect(swarmDown).toMatchObject({ ok: true, matches: true, read: [FROM_ARKIV, FROM_ARC] })
+    expect(swarmDown).toEqual({ ok: false, line: BOX_NOT_FOUND, read: [FROM_ARKIV] })
+    expect(BOX_NOT_FOUND).toBe('Box not found on Swarm.')
+
+    // An exported row with a box in it is not used: only the box from Swarm is opened.
+    const smuggled = { ...answer, ciphertext: sealed.ciphertext, plaintextHash: sealed.plaintextHash }
+    const stillDown = await openFromRecord(
+      smuggled,
+      CONTRACT,
+      { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.reject(new Error('404')) },
+      { fetchImpl: arc(sealed.key) },
+    )
+    expect(stillDown).toEqual({ ok: false, line: BOX_NOT_FOUND, read: [FROM_ARKIV] })
+  })
+
+  test('no Arkiv record, an Arkiv failure, a wrong box or no sources: nothing opens, and the line says why', async () => {
+    const calls: string[] = []
+    const none = await openFromRecord(answer, CONTRACT, { readEvidence: () => Promise.resolve(null), downloadBox: () => Promise.resolve(swarmBox()) }, { fetchImpl: arc(sealed.key, HONEST, calls) })
+    expect(none).toEqual({ ok: false, line: NO_ARKIV_RECORD, read: [] })
+
+    const arkivDown = await openFromRecord(answer, CONTRACT, { readEvidence: () => Promise.reject(new Error('rpc')), downloadBox: () => Promise.resolve(swarmBox()) }, { fetchImpl: arc(sealed.key, HONEST, calls) })
+    expect(arkivDown).toEqual({ ok: false, line: COULD_NOT_READ_ARKIV_RECORD, read: [] })
 
     const wrongBox = await openFromRecord(
       answer,
       CONTRACT,
       { readEvidence: () => Promise.resolve(REF), downloadBox: () => Promise.resolve(swarmBox({ chainId: 1 })) },
-      { fetchImpl: arc(sealed.key) },
+      { fetchImpl: arc(sealed.key, HONEST, calls) },
     )
-    expect(wrongBox).toMatchObject({ ok: true, matches: true, read: [FROM_ARKIV, FROM_ARC] })
+    expect(wrongBox).toEqual({ ok: false, line: BOX_NOT_THIS_CLAIM, read: [FROM_ARKIV] })
 
-    const noSources = await openFromRecord(answer, CONTRACT, {}, { fetchImpl: arc(sealed.key) })
-    expect(noSources).toMatchObject({ ok: true, matches: true, read: [FROM_ARC] })
+    const noSources = await openFromRecord(answer, CONTRACT, {}, { fetchImpl: arc(sealed.key, HONEST, calls) })
+    expect(noSources).toEqual({ ok: false, line: COULD_NOT_READ_ARKIV_RECORD, read: [] })
+    // Arc is never asked, because there is no box to check against it.
+    expect(calls).toEqual([])
+  })
+
+  test('the list to open comes from the evidence entities on Arkiv, joined to the exported claim ids', () => {
+    const file = {
+      contract: CONTRACT,
+      answers: [
+        { ref: 'r0', sellerName: 'Seller A', claimId: CLAIM_ID, keyBlock: '255' },
+        { ref: 'r1', sellerName: 'Seller F', claimId: `0x${'d4'.repeat(32)}`, keyBlock: '300' },
+      ],
+    }
+    // The second claim has no entity on Arkiv, so it is not offered. An entity with no exported row has no key block, so it is not either.
+    const listed = openableAnswers(file, [
+      { claimId: CLAIM_ID.toUpperCase().replace('0X', '0x'), swarmRef: REF },
+      { claimId: `0x${'e5'.repeat(32)}`, swarmRef: REF },
+      { claimId: CLAIM_ID, swarmRef: REF },
+    ])
+    expect(listed.map((a) => a.ref)).toEqual(['r0'])
+    expect(openableAnswers(file, [])).toEqual([])
   })
 
   test('no key on Arc ends as before, with the lines that were read', async () => {
@@ -447,6 +446,6 @@ describe('the published screen opens the answer from Arkiv, Swarm and Arc', () =
   })
 
   test('the lines use no semicolons or dashes', () => {
-    for (const line of [FROM_ARKIV, FROM_SWARM, FROM_ARC]) expect(line).not.toMatch(/[;–—-]/)
+    for (const line of [FROM_ARKIV, FROM_SWARM, FROM_ARC, BOX_NOT_FOUND, NO_ARKIV_RECORD, COULD_NOT_READ_ARKIV_RECORD]) expect(line).not.toMatch(/[;–—-]/)
   })
 })

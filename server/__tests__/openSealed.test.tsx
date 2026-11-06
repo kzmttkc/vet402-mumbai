@@ -9,7 +9,7 @@ import { OpenSealed } from '../../src/components/OpenSealed'
 import { DemoCard } from '../../src/components/DemoCard'
 import type { DemoRun } from '../../src/hooks/useDemo'
 import { CLAIMS_ABI, DOES_NOT_MATCH_PROMISE, MATCHES_PROMISE, openSealedAnswer, PUBLIC_RPC } from '../../src/lib/openSealed'
-import type { PublicSealedAnswer } from '../../src/lib/openSealed'
+import type { SealedBoxToOpen } from '../../src/lib/openSealed'
 import { loadSealedFile, STATIC_PATHS } from '../../src/lib/publicData'
 import { sealResponse } from '../../src/lib/sealed'
 
@@ -21,12 +21,11 @@ const CONTRACT = `0x${'c1'.repeat(20)}`
 const CLAIM = `0x${'c2'.repeat(32)}`
 const TEXT = '{"answer":"Here is the answer you paid for."}'
 const sealed = sealResponse(TEXT)
-const answer: PublicSealedAnswer = {
+const answer: SealedBoxToOpen = {
   ref: 'r0',
   sellerName: 'Seller A',
   ciphertext: sealed.ciphertext,
   claimId: CLAIM,
-  plaintextHash: sealed.plaintextHash,
   keyBlock: '255',
 }
 
@@ -176,8 +175,16 @@ describe('the export of sealed answers', () => {
   test('writes the named fields only, and rows with no key on the chain stay out', () => {
     const file = run([row({ sealed: SEALED, key: sealed.key }), row()])
     expect(file.contract).toBe(CONTRACT)
-    expect(file.answers).toEqual([{ ref: 'r0', sellerName: 'Seller A', ...SEALED }])
+    expect(file.answers).toEqual([{ ref: 'r0', sellerName: 'Seller A', claimId: CLAIM, keyBlock: '255' }])
     expect(JSON.stringify(file)).not.toContain(sealed.key)
+  })
+
+  test('the box is not in the file: no ciphertext and no plaintext hash, so the page cannot open a copy of its own', () => {
+    const text = JSON.stringify(run([row({ sealed: SEALED })]))
+    expect(text).not.toContain('ciphertext')
+    expect(text).not.toContain('plaintextHash')
+    expect(text).not.toContain(sealed.ciphertext.slice(2))
+    expect(text).not.toContain(sealed.plaintextHash.slice(2))
   })
 
   test('no contract address still writes a file the screen can read', () => {
@@ -195,7 +202,9 @@ describe('the export of sealed answers', () => {
   test('an address in a sealed answer stops the export', () => {
     const dataDir = tempDir()
     const outDir = tempDir()
-    writeFileSync(path.join(dataDir, 'receipts.json'), JSON.stringify([row({ sealed: { ...SEALED, ciphertext: `0x${'ab'.repeat(20)}` } })]))
-    expect(() => exportPublic({ dataDir, outDir, sealedContract: CONTRACT })).toThrow('would hold an address')
+    // The seller's name is the one free field of a sealed answer.
+    writeFileSync(path.join(dataDir, 'receipts.json'), JSON.stringify([row({ sellerName: `Seller 0x${'ab'.repeat(20)}`, sealed: SEALED })]))
+    expect(() => exportPublic({ dataDir, outDir, sealedContract: CONTRACT })).toThrow('long hex')
+    expect(existsSync(path.join(outDir, 'sealed.json'))).toBe(false)
   })
 })

@@ -167,11 +167,11 @@ The sellers close the connection on purpose, apart from the "line stays up" butt
 |---|---|
 | `WORLD_APP_ID`, `WORLD_RP_ID`, `WORLD_SIGNER_KEY` | The World ID approval before a hold. Set all three or none |
 | `WORLD_ENVIRONMENT` | `staging` (default, the World ID Simulator) or `production` (the real World App, shown as a QR code) |
-| `ARKIV_WRITER_KEY`, `ARKIV_ACCESS_KEY` | The Arkiv receipts. Without them the app runs on local receipts alone |
+| `ARKIV_WRITER_KEY`, `ARKIV_ACCESS_KEY` | The Arkiv receipts, and the check of Arc's rulings before each payment, including the demo buttons. Without them the app runs on local receipts alone |
 | `SWARM_API_URL`, `SWARM_POSTAGE_BATCH_ID` | Upload each dispute box through your own Bee API, stamped with your own postage batch. Without them the box goes through the public Swarm gateway. `SWARM_UPLOAD=off` keeps boxes off Swarm |
 | `PORT`, `DATA_DIR` | The backend port, 3001 by default, and its data folder |
 
-`npx vite build` makes the published screen. Its only paying routes are the two Vercel functions, `api/try-dispute.ts` and `api/try-job.ts`, each on a fixed Arc testnet wallet.
+`npx vite build` makes the published screen. Its only paying routes are the two Vercel functions, `api/try-dispute.ts` and `api/try-job.ts`, each on a fixed Arc testnet wallet. With `ARKIV_WRITER_ADDRESS` (or `ARKIV_WRITER_KEY`) on the deploy, `api/try-job` reads Arkiv before it picks, with no key. With `ARKIV_WRITER_KEY`, `api/try-dispute` also writes its receipt and evidence entities to Arkiv and puts the claimed box on Swarm through the public gateway. Without it, the try writes nothing.
 
 ## Boundary
 
@@ -199,18 +199,26 @@ Built at ETHGlobal Mumbai:
 
 vet402 keeps each receipt on Arkiv's Rabdi testnet, so a receipt stays readable when this app is down. The receipts page reads Arkiv directly from the browser, every page of it.
 
-Arkiv is also where a seller's standing lives. Each Silent or Fraud ruling from the contract becomes a readonly `vet402_verdict` entity, and before paying, vet402 refuses any seller with a ruling in the last 7 days, a seller whose record has expired, and any seller it cannot read on Arkiv. Sellers are found by their payTo address when vet402 knows it. Only an answer that kept the seller's promise extends the seller's record.
+Arkiv is also where a seller's standing lives. Each Silent or Fraud ruling from the contract becomes a readonly `vet402_verdict` entity, and before paying, vet402 refuses any seller with a ruling in the last 7 days, a seller whose record has expired, and any seller it cannot read on Arkiv. Rulings are read by the address that would be paid: for a catalog listing the payTo it names, for my own Sellers A to F the address they are paid at. So after Arc's Fraud ruling on Seller F, **Try Seller F** answers "Seller F: Arc ruled against this seller in the last 7 days. Not paid." and pays nothing. The public agent (`api/try-job`) runs the same check, read only. Only an answer that kept the seller's promise extends the seller's record. Another x402 buyer can ask the same question with `isRuledAgainst(payTo, { writer })` from `packages/sealed-delivery`.
 
 Writer address: `0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5`
 
 Print it with `npx bun run scripts/arkiv-address.ts`. The script derives the address from `ARKIV_WRITER_KEY` and never prints the key.
 
-One query you can run. It returns the payment entity and the settlement entity for one transfer. Receipts live 30 days, so this one expires around 2026-12-05 unless somebody extends it. After that, put a transfer id from the receipts page in place of the id.
+One query you can run. It returns the payment entity and the settlement entity for transfer `4c985dc0-a59d-4674-9e8a-3d5d25def02b`, Seller A at 01:42 UTC on 2026-11-06, the one in step 5 of "How to check this". Receipts live 30 days, so this one expires around 2026-12-06 unless somebody extends it. After that, put a transfer id from the receipts page in place of the id.
 
 ```bash
 curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'2db76ef8-52a2-4548-bbb6-3bdbc943aad9'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_receipt'"'"') AND gateway_transfer_id = str('"'"'4c985dc0-a59d-4674-9e8a-3d5d25def02b'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"expiresAt":true,"attributes":true}}]}'
+```
+
+Arc's rulings, the entities the check reads before paying. At 03:15 UTC on 2026-11-06 it returned 6: 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, all from the live contract on chain 5042002. Add `AND seller = str('<payTo, lowercase>')` for one seller.
+
+```bash
+curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
 ```
 
 Explorer: https://rabdi.explorer.arkiv.network

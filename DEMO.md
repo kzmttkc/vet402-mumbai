@@ -338,3 +338,15 @@ The full debrief, with the step, what came back and the date of each item, is in
 - **Friction:** the Simulator's Cancel does not reach the app, so the app has its own Cancel request. Pasting the request URL opens the confirmation screen without a press on Continue, and one more press closes it and uses up the request. Signing in to the Developer Portal with World App opened an empty "Anonymous user" team, and "Verification" in its menu is the World App listing, not World ID.
 - **Missing capability or documentation:** Selfie Check returned `credential_unavailable` on staging (2026-10-28 UTC), and the IDKit README shows no signal on a session proof.
 - **The one improvement with the greatest impact:** send the Simulator's Cancel back to the app.
+
+## Arkiv and Swarm
+
+### A ruling stops the next purchase
+
+Arc's rulings on the live contract are on Arkiv: at 03:15 UTC on 2026-11-06, 2 Fraud against Seller F and 2 Silent each against Seller D and Seller E, written from the runs above. From the `arkiv2` branch on, every demo button reads these rulings by the address that seller is paid at before anything is paid. So within 7 days of a ruling, **Try Seller F** (and D and E) shows "Seller F: Arc ruled against this seller in the last 7 days. Not paid." and the hold is not touched. With the rulings above that lasts until about 2026-11-13 02:01 UTC for Seller F, 02:02 UTC for Seller E and 02:04 UTC for Seller D. Seller A and Seller B have no ruling and run as before.
+
+To see it, start the backend with `ARKIV_WRITER_KEY`, `ARKIV_ACCESS_KEY` and `SEALED_DELIVERY_ADDRESS`, open `/?demo` and press **Try Seller F**. The refusal comes before the payment step, so the receipts list gets no new row. The catalog flow, the Seller C scene and the public agent read the same rulings, by the payTo each listing names.
+
+### The box comes only from Swarm
+
+"Open a sealed answer" lists the claims that have a `vet402_evidence` entity on Arkiv and opens each box from Swarm. The exported file no longer holds a ciphertext or a plaintext hash, so when Swarm does not return the box the screen shows "Box not found on Swarm." and opens nothing. Details in [arkiv/swarm.md](arkiv/swarm.md#run-one-upload-and-one-read-yourself).

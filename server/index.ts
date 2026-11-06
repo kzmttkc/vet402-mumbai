@@ -18,7 +18,7 @@ import type { DemoAction, DemoKind } from './demo'
 import { createDemoPorts } from './demoPorts'
 import { createSeller, DEMO_PRICE, SELLER_C_NAME } from './sellers'
 import { ARC_NET, createSealedDelivery, createSealedPorts, createSealedScene, parseSealedAddress } from './sealedDelivery'
-import { createArkivSink, createArkivWire, createScrubber, createSellerCheck, parseSellerTtl, payToByName, verdictToArkiv } from './arkiv'
+import { createArkivSink, createArkivWire, createRulingGate, createScrubber, createSellerCheck, parseSellerTtl, payToByName, verdictToArkiv } from './arkiv'
 import { createEvidenceUploader } from './swarm'
 import { createSwarmWire, SWARM_GATEWAY } from '../src/lib/swarmBox'
 import type { Plan } from './planner'
@@ -72,7 +72,8 @@ const sealedSellerAddress = sealedKeys
     }
   : null
 
-// Our own sellers are found on Arkiv by the address they are paid at. Catalog sellers by name.
+// vet402's own sellers are found on Arkiv by the address they are paid at. A catalog seller's delivery record by name,
+// and Arc's rulings by the address its listing names (Candidate.payTo, passed by the job flow).
 const payToOf = payToByName({
   'Seller A': sellerAddress.a,
   'Seller B': sellerAddress.b,
@@ -102,6 +103,9 @@ const arkivSink = arkiv
     })
   : null
 const receiptStore = arkivSink?.store ?? localReceipts
+// Before a demo pays one of vet402's own sellers, Arc's rulings against the address it is paid at are read from Arkiv.
+// Seller F after a Fraud, or D and E after a Silent, is refused for 7 days, with the reason on screen.
+const demoRulingGate = arkiv ? createRulingGate(arkiv.wire, arkivLog, arkivScrub, payToOf) : null
 
 const sellerCPlan: Plan = {
   kind: 'lookup',
@@ -337,11 +341,17 @@ function startDemo(kind: DemoKind, res: express.Response) {
   }
 }
 
-app.post('/demo/run', (req, res) => {
+app.post('/demo/run', async (req, res) => {
   const seller = (req.body as { seller?: unknown })?.seller
   const sealedOnly = seller === 'd' || seller === 'e' || seller === 'f'
   if (seller !== 'a' && seller !== 'b' && !(sealedOnly && sealedScene)) {
     res.status(400).json({ error: 'Pick Seller A or Seller B.' })
+    return
+  }
+  // Nothing is paid until Arkiv says Arc has not ruled against this seller in the last 7 days.
+  const refused = demoRulingGate ? await demoRulingGate(`Seller ${seller.toUpperCase()}`) : null
+  if (refused) {
+    res.status(409).json({ error: refused })
     return
   }
   lineStaysUp = (req.body as { lineUp?: unknown }).lineUp === true

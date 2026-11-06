@@ -1,5 +1,6 @@
 import { createDemoService } from './demo'
 import type { DemoPorts, DemoSeller, StepName } from './demo'
+import type { TransferInfo } from './jobs'
 import type { ReceiptRow, ReceiptStore } from './receiptStore'
 import type { SealedPorts } from './sealedDelivery'
 
@@ -15,6 +16,11 @@ export const DAY_MS = 86_400_000
 export const DEFAULT_DAILY_LIMIT = 40
 /** The function may run 60 s. Past this the run stops waiting for the key and says so. */
 export const ANSWER_WAIT_MS = 40_000
+/** The public record is written after the result, and given up this long after the start, inside the 60 s. */
+export const RECORD_BY_MS = 55_000
+/** The Swarm upload is waited for at most this long, and never into the last 10 s, which the transfer and the writes need. */
+const EVIDENCE_WAIT_MS = 20_000
+const WRITES_NEED_MS = 10_000
 const STEP_POLL_MS = 100
 
 export const EXPLORER_TX = 'https://explorer.testnet.arc.io/tx/'
@@ -91,12 +97,25 @@ export interface TryPorts {
   ready(): Promise<boolean>
   /** Runs after a try. A failure only logs. */
   afterRun?(): Promise<void>
+  /**
+   * Keeps the try on the public record: the receipt and evidence entities on Arkiv, beside the box the
+   * claim put on Swarm. Present only when the deploy holds the Arkiv writer key. Without it nothing is written.
+   */
+  record?: TryRecord
   log?: (message: string) => void
+}
+
+export interface TryRecord {
+  /** Puts Arkiv behind the try's own receipt store. `idle` resolves when every queued write was tried. */
+  wrap(store: ReceiptStore): { store: ReceiptStore; idle(): Promise<void> }
+  /** Gateway's transfer for one payment nonce, or null while Gateway does not show it yet. */
+  findTransfer(nonce: string): Promise<TransferInfo | null>
 }
 
 export interface TryOptions {
   dailyLimit?: number
   answerWaitMs?: number
+  recordByMs?: number
   now?: () => number
 }
 
@@ -127,7 +146,44 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
   const now = options.now ?? Date.now
   const dailyLimit = options.dailyLimit ?? DEFAULT_DAILY_LIMIT
   const answerWaitMs = options.answerWaitMs ?? ANSWER_WAIT_MS
+  const recordByMs = options.recordByMs ?? RECORD_BY_MS
   const log = ports.log ?? ((message: string) => console.error(message))
+
+  /**
+   * After the result: waits for the claimed box's Swarm reference, then for Gateway's transfer id, and
+   * hands both to the Arkiv queue, which writes the payment, the seller and the evidence entities.
+   * Everything stops at the record deadline. A failure only logs.
+   */
+  async function keepOnRecord(
+    record: TryRecord,
+    local: ReceiptStore,
+    kept: { store: ReceiptStore; idle(): Promise<void> },
+    claimed: boolean,
+    until: number,
+  ): Promise<void> {
+    const first = local.list()[0]
+    if (!first?.nonce) return
+    const nonce = first.nonce
+    const latest = () => local.list().find((row) => row.id === first.id)
+    // A failed upload leaves no reference, so the wait has its own limit and the receipt is still written without it.
+    const evidenceBy = Math.min(now() + EVIDENCE_WAIT_MS, until - WRITES_NEED_MS)
+    while (claimed && !latest()?.evidence && now() < evidenceBy) await sleep(STEP_POLL_MS * 2)
+    let transfer: TransferInfo | null = null
+    while (!transfer && now() < until) {
+      transfer = await record.findTransfer(nonce).catch((error: unknown) => {
+        log(`try-dispute transfer lookup failed: ${messageOf(error)}`)
+        return null
+      })
+      if (!transfer) await sleep(STEP_POLL_MS * 10)
+    }
+    if (!transfer) {
+      log('try-dispute: Gateway did not show the transfer in time, so nothing was written to Arkiv')
+      return
+    }
+    kept.store.update(first.id, { transferId: transfer.id, status: transfer.status, batchTx: transfer.txHash })
+    const left = until - now()
+    if (left > 0) await Promise.race([kept.idle(), sleep(left)])
+  }
 
   // These live in one instance only. The shared limits come from Circle's record below.
   let busy = false
@@ -201,8 +257,11 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
       return
     }
 
+    const local = memoryReceipts()
+    // With the writer key, every row also goes to Arkiv. Without it the try keeps its rows in memory only.
+    const kept = ports.record?.wrap(local) ?? null
     try {
-      const receipts = memoryReceipts()
+      const receipts = kept?.store ?? local
       // A fresh service per try, so a run that outlives its wait never blocks the next one.
       const demos = createDemoService({ ...ports.demo, sealed: watched }, { a: opened.seller, b: opened.seller }, receipts, now)
       const run = demos.start('a')
@@ -255,6 +314,11 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
     } catch (error) {
       log(`try-dispute run failed: ${messageOf(error)}`)
       fail(TRY_MESSAGES.UNREACHABLE)
+    }
+    try {
+      if (ports.record && kept) await keepOnRecord(ports.record, local, kept, tx.claim !== null, startedAt + recordByMs)
+    } catch (error) {
+      log(`try-dispute record failed: ${messageOf(error)}`)
     } finally {
       await opened.close().catch((error: unknown) => log(`try-dispute close failed: ${messageOf(error)}`))
       await ports.afterRun?.().catch((error: unknown) => log(`try-dispute after-run failed: ${messageOf(error)}`))

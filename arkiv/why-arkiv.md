@@ -14,6 +14,18 @@ Arkiv gives me that with four things a plain database does not.
 
 The rest of the check also leans on Arkiv instead of guessing around it. A seller is found by its payTo address when vet402 knows it, so a catalog listing cannot borrow another seller's record by using its name. When Arkiv cannot be read, vet402 does not pay. It says "Arkiv could not be read, so the delivery check did not run. Not paid."
 
+## Why the rulings are copied to Arkiv, not read from Arc each time
+
+Arc's events are the truth, and every `vet402_verdict` entity carries the contract, the chain and the claim id to check it against them. I still copy each ruling to Arkiv, for three reasons I measured.
+
+**One query instead of a scan.** Silent and Fraud index the seller, so Arc can filter by address, but only over a short window. On 2026-11-06 at 03:16 UTC, Arc testnet's public node answered `eth_getLogs` over 10,000 blocks and refused 10,001 ("requested range too large"), and refused the whole history ("max block range 100000"). 10,000 blocks were 5,066 seconds there, so 7 days of rulings for one seller is about 120 calls. On Arkiv it is one `arkiv_query` by the seller's address and the writer, plus one `arkiv_getBlockTiming` for the 7 days.
+
+**Any buyer can use the same answer.** The query needs no key and no Arc node. `isRuledAgainst(payTo, { writer })` in `packages/sealed-delivery` sends it as plain JSON-RPC, so another x402 buyer reads vet402's rulings before it pays. On 2026-11-06 at 03:11 UTC it answered true for Seller F's address and false for an address with no ruling, against the public endpoint.
+
+**The window is the entity's own block.** A ruling stops payment for 7 days from the Arkiv block it was written in. The check needs that block and the current one, and both come with the query. The receipts page shows "Arc ruled against this seller on {date}" from the same entities, read in the browser, with no backend and no Arc node.
+
+The cost is that the copy is only as complete as vet402's writer. The writer copies a ruling right after `finalize` or `prove` returns, from one queue that retries and looks for the claim id first. A ruling the writer missed is still on Arc, and the check would not see it.
+
 What each Arkiv feature changes on screen is in [how-you-use-arkiv.md](how-you-use-arkiv.md#what-each-arkiv-feature-changes-on-screen).
 
 ## What I did not put on Arkiv, and why

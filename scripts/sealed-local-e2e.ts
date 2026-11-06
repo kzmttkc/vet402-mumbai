@@ -15,7 +15,7 @@ import type { Address, Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
 import { ARC_GATEWAY_DOMAIN_NAME, ARC_GATEWAY_DOMAIN_VERSION, ARC_GATEWAY_WALLET, ARC_USDC } from '../src/existing/arc-gateway'
-import { FROM_ARC, FROM_ARKIV, FROM_SWARM, openFromRecord, openSealedAnswer } from '../src/lib/openSealed'
+import { BOX_NOT_FOUND, FROM_ARC, FROM_ARKIV, FROM_SWARM, openableAnswers, openFromRecord } from '../src/lib/openSealed'
 import type { SwarmWire } from '../src/lib/swarmBox'
 import { createEvidenceUploader } from '../server/swarm'
 import type { PublicSealedFile } from '../src/lib/openSealed'
@@ -455,32 +455,32 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     }
     check('buttons', 'a second press is refused', again, 'UNAVAILABLE')
 
-    // The published screen's own code: the exported file, the key straight from the node, no backend.
+    // The published screen's own code: the exported file names the claims, Arkiv's evidence points at the box
+    // (the receipt rows stand in for Arkiv), the box comes from Swarm and the key from the node. No backend.
     const outDir = path.join(tmp, 'static')
     exportPublic({ dataDir, outDir, sealedContract: address })
     const file = JSON.parse(readFileSync(path.join(outDir, 'sealed.json'), 'utf8')) as PublicSealedFile
-    check('published screen', 'file holds no key', Object.keys(file.answers[0] ?? {}).sort(), ['ciphertext', 'claimId', 'keyBlock', 'plaintextHash', 'ref', 'sellerName'])
-    const opened = await Promise.all(file.answers.map(async (answer) => ({ answer, result: await openSealedAnswer(answer, address, { rpcUrl }) })))
+    check('published screen', 'file holds no key and no box', Object.keys(file.answers[0] ?? {}).sort(), ['claimId', 'keyBlock', 'ref', 'sellerName'])
+    const rows = receipts.list()
+    const evidence = rows.flatMap((r) => (r.evidence ? [{ claimId: r.evidence.claimId, swarmRef: r.evidence.swarmRef }] : []))
+    const readEvidence = (claimId: string) =>
+      Promise.resolve(evidence.find((e) => e.claimId.toLowerCase() === claimId.toLowerCase())?.swarmRef ?? null)
+    const listed = openableAnswers(file, evidence)
+    check('published screen', 'every exported answer is listed from the evidence entities', listed.length, file.answers.length)
+    const opened = await Promise.all(
+      listed.map(async (answer) => ({ answer, result: await openFromRecord(answer, address, { readEvidence, downloadBox: localSwarm.download }, { rpcUrl }) })),
+    )
     const aOpen = opened.filter((o) => o.answer.sellerName === 'Seller A')
     const fOpen = opened.filter((o) => o.answer.sellerName === 'Seller F')
     check('published screen', 'Seller A answers found', aOpen.length, 2)
     for (const { result } of aOpen) check('published screen', 'Seller A opens', result.line, "Matches the seller's promise.")
     check('published screen', 'Seller A text', aOpen[0]?.result.ok ? aOpen[0].result.text : null, JSON.stringify({ seller: 'Seller A', answer: 'Here is the answer you paid for.' }))
     check('published screen', 'Seller F opens and does not match', fOpen[0]?.result.line, "Does not match the seller's promise.")
+    check('swarm', 'every sealed answer has its box on Swarm', opened.map((o) => o.result.read), listed.map(() => [FROM_ARKIV, FROM_SWARM, FROM_ARC]))
 
-    // The same answers through the record: Arkiv's evidence (the receipt rows stand in), the box from Swarm, the key from the chain.
-    const rows = receipts.list()
-    const readEvidence = (claimId: string) =>
-      Promise.resolve(rows.find((r) => r.evidence?.claimId.toLowerCase() === claimId.toLowerCase())?.evidence?.swarmRef ?? null)
-    const recorded = await Promise.all(
-      file.answers.map(async (answer) => ({
-        answer,
-        result: await openFromRecord({ ...answer, ciphertext: '0x' }, address, { readEvidence, downloadBox: localSwarm.download }, { rpcUrl }),
-      })),
-    )
-    check('swarm', 'every sealed answer has its box on Swarm', recorded.map((o) => o.result.read), file.answers.map(() => [FROM_ARKIV, FROM_SWARM, FROM_ARC]))
-    check('swarm', 'Seller A opens from Swarm', recorded.filter((o) => o.answer.sellerName === 'Seller A').map((o) => o.result.line), ["Matches the seller's promise.", "Matches the seller's promise."])
-    check('swarm', 'Seller F opens from Swarm and does not match', recorded.find((o) => o.answer.sellerName === 'Seller F')?.result.line, "Does not match the seller's promise.")
+    // With Swarm down there is no copy to open instead.
+    const swarmDown = await openFromRecord(listed[0]!, address, { readEvidence, downloadBox: () => Promise.reject(new Error('down')) }, { rpcUrl })
+    check('swarm', 'a box Swarm cannot return does not open', [swarmDown.ok, swarmDown.line], [false, BOX_NOT_FOUND])
     const silent = rows.filter((r) => r.sellerName === 'Seller E' && r.evidence)
     check('swarm', 'a claim with no key still has its box on Swarm', silent.length > 0, true)
 

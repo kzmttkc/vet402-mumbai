@@ -50,8 +50,7 @@ export interface Exported {
 const HASH32 = /^0x[0-9a-fA-F]{64}$/
 
 function assertSealed(ref: string, row: NonNullable<ReceiptRow['sealed']>) {
-  if (!HASH32.test(row.claimId) || !HASH32.test(row.plaintextHash)) throw new Error(`${ref}: a sealed hash is malformed. Nothing was written.`)
-  if (!/^0x[0-9a-fA-F]*$/.test(row.ciphertext)) throw new Error(`${ref}: the ciphertext is malformed. Nothing was written.`)
+  if (!HASH32.test(row.claimId)) throw new Error(`${ref}: a sealed hash is malformed. Nothing was written.`)
   if (!/^[0-9]+$/.test(row.keyBlock)) throw new Error(`${ref}: the key block is malformed. Nothing was written.`)
 }
 
@@ -79,13 +78,12 @@ export function toPublic(rows: ReceiptRow[], sealedContract: string | null = nul
     statuses.statuses[ref] = { status: row.status, batchTx: row.batchTx }
     if (row.sealed) {
       assertSealed(ref, row.sealed)
-      // Only these fields, named one by one. The key is not among them: it is read from the chain.
+      // Only these fields, named one by one. The box is not among them: the screen fetches it from Swarm
+      // through the reference on Arkiv, so the answer cannot open from a copy on the page. The key is read from Arc.
       sealed.answers.push({
         ref,
         sellerName: row.sellerName,
-        ciphertext: row.sealed.ciphertext,
         claimId: row.sealed.claimId,
-        plaintextHash: row.sealed.plaintextHash,
         keyBlock: row.sealed.keyBlock,
       })
     }
