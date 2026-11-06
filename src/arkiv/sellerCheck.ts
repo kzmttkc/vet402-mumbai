@@ -55,7 +55,7 @@ export type SellerAnswer =
       writtenBy?: string
     }
 
-export const verdictLabel = (verdict: string) => (verdict ? verdict[0]!.toUpperCase() + verdict.slice(1) : verdict)
+export const verdictLabel = (verdict: string) => (verdict ? verdict[0].toUpperCase() + verdict.slice(1) : verdict)
 
 export const shortClaim = (claimId: string) => (claimId.length > 10 ? `${claimId.slice(0, 10)}…` : claimId)
 

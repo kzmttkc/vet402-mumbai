@@ -6,10 +6,13 @@ const StudioLogo = () => (
   </svg>
 )
 
-// Studio watermark component - links back to Studio. Inline, it sits at the end of the page instead of over the content.
+/** Where the badge links. The one place to change it, for example to the project's shared Studio link. */
+export const STUDIO_LINK = 'https://studio.arc.io/'
+
+// Studio watermark component, linking back to Studio. Inline, it sits at the end of the page, below every card, so it never covers one.
 export const StudioWatermark = ({ inline = false }: { inline?: boolean }) => (
   <a
-    href="https://studio.arc.io/"
+    href={STUDIO_LINK}
     target="_blank"
     rel="noopener noreferrer"
     style={{

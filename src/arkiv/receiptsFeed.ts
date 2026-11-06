@@ -67,6 +67,8 @@ export interface FeedRow {
   responseBytes: number
   timesReceived: number
   transferId: string
+  /** The seller's payTo address, lowercase, as the payment entity carries it. Absent on rows saved before it was kept. */
+  payTo?: string | null
 }
 
 export interface FeedState {
@@ -113,6 +115,7 @@ export function buildRows({ receipts, sellers, verdicts = [], timing }: RawRead)
         responseBytes: Number(payment.responseBytes),
         timesReceived: Number(payment.timesReceived),
         transferId: payment.transferId,
+        payTo: payment.payTo,
       }
     })
 }

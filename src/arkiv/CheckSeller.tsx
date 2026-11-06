@@ -46,7 +46,20 @@ export function SellerAnswerView({ answer }: { answer: SellerAnswer }) {
  * Anyone can ask Arkiv about a seller from here, before paying it. The browser reads the public
  * endpoint itself, so the answer does not depend on vet402's backend.
  */
-export function CheckSeller({ read }: { read: ((payTo: string) => Promise<RulingsRead>) | null }) {
+/** A seller to try the check on, with its payTo address as the receipts on Arkiv carry it. */
+export interface SellerSample {
+  name: string
+  payTo: string
+}
+
+export function CheckSeller({
+  read,
+  sample = null,
+}: {
+  read: ((payTo: string) => Promise<RulingsRead>) | null
+  /** Fills the field with this seller's address. Absent until a receipt from it has been read. */
+  sample?: SellerSample | null
+}) {
   const [input, setInput] = useState('')
   const [answer, setAnswer] = useState<SellerAnswer | null>(null)
   const [busy, setBusy] = useState(false)
@@ -85,6 +98,19 @@ export function CheckSeller({ read }: { read: ((payTo: string) => Promise<Ruling
           >
             Check
           </button>
+          {sample && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setInput(sample.payTo)
+                setAnswer(null)
+              }}
+              className="flex min-h-11 items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 text-sm font-semibold hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40"
+            >
+              Try {sample.name}
+            </button>
+          )}
         </div>
         <div aria-live="polite" className="mt-3 space-y-1 text-sm text-pretty">
           {answer && <SellerAnswerView answer={answer} />}

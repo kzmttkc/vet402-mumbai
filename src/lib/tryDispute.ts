@@ -8,6 +8,8 @@ export interface TryStep {
   label: string
   /** Milliseconds since the try started. */
   atMs: number
+  /** The step's name as the server sends it, such as 'delivered'. */
+  name?: string
 }
 
 export interface TryBox {
@@ -26,8 +28,16 @@ type Line = ({ type: 'step' } & TryStep) | ({ type: 'result' } & TryResult)
 
 const COULD_NOT_START = 'The demo could not start just now. Please try again in a minute.'
 
-/** Starts a try and calls back for each step. Resolves with the result, or a failed one with the sentence to show. */
-export async function startTry(onStep: (step: TryStep) => void, fetchImpl: typeof fetch = fetch): Promise<TryResult> {
+/**
+ * Starts a try and calls back for each step. `onResult` fires as soon as the result line arrives. The stream stays
+ * open after it while the server keeps the try on the public record, and the promise resolves only when the stream
+ * ends, with the result, or a failed one with the sentence to show.
+ */
+export async function startTry(
+  onStep: (step: TryStep) => void,
+  fetchImpl: typeof fetch = fetch,
+  onResult?: (result: TryResult) => void,
+): Promise<TryResult> {
   let res: Response
   try {
     res = await fetchImpl(TRY_URL, { method: 'POST' })
@@ -51,10 +61,11 @@ export async function startTry(onStep: (step: TryStep) => void, fetchImpl: typeo
     } catch {
       return
     }
-    if (line.type === 'step') onStep({ label: line.label, atMs: line.atMs })
+    if (line.type === 'step') onStep({ label: line.label, atMs: line.atMs, ...(line.name ? { name: line.name } : {}) })
     else if (line.type === 'result') {
       const { type: _type, ...rest } = line
-      result = rest as TryResult
+      result = rest
+      onResult?.(result)
     }
   }
   try {

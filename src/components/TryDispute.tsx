@@ -11,36 +11,82 @@ const primary =
   'flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ink)] px-4 text-sm font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
 const link = 'inline-flex items-center gap-1 text-sm font-semibold underline underline-offset-2'
 
-/** One press runs a real dispute on Arc. The browser opens the box with the key it reads from Arc. The body reads in plain words; the transactions sit under Details. */
+/** Where a try stands. `finishing` means the outcome is known and only the follow-up work is still running. */
+type Phase = 'idle' | 'running' | 'finishing'
+
+/** One small line for work that is still going on after the outcome is known. */
+function Pending({ children }: { children: string }) {
+  return (
+    <p className="mt-2 flex items-center gap-2 text-xs text-[var(--muted)]">
+      <Loader2 size={12} className="shrink-0 animate-spin" aria-hidden />
+      <span>{children}</span>
+    </p>
+  )
+}
+
+/**
+ * One press runs a real dispute on Arc. The browser opens the box with the key it reads from Arc. The body reads in
+ * plain words, with a link to the dispute on Arc, and the rest sits under Details.
+ *
+ * The server sends the result as soon as the run ends, then keeps the stream open while it writes the try to the
+ * public record on Arkiv. The button stops at "Delivered" or at the result, whichever comes first, and the work that
+ * is still running gets its own small line.
+ */
 export function TryDispute() {
-  const [running, setRunning] = useState(false)
+  const [phase, setPhase] = useState<Phase>('idle')
   const [steps, setSteps] = useState<TryStep[]>([])
   const [result, setResult] = useState<TryResult | null>(null)
   const [opened, setOpened] = useState<OpenResult | null>(null)
+  const [opening, setOpening] = useState(false)
+  const [recording, setRecording] = useState(false)
   const startedAt = useRef(0)
 
+  const delivered = steps.some((step) => step.name === 'delivered')
+
+  const open = async (done: Extract<TryResult, { ok: true }>) => {
+    setOpening(true)
+    const answer = { ref: 'try', sellerName: 'Seller A', ...done.box }
+    const read = await openSealedAnswer(answer, done.box.contract)
+    setSteps((current) => [
+      ...current,
+      { label: 'Your browser opened the box with the key from Arc', atMs: performance.now() - startedAt.current },
+    ])
+    setOpened(read)
+    setOpening(false)
+  }
+
   const run = async () => {
-    setRunning(true)
+    setPhase('running')
     setSteps([])
     setResult(null)
     setOpened(null)
+    setOpening(false)
+    setRecording(false)
     startedAt.current = performance.now()
-    const done = await startTry((step) => setSteps((current) => [...current, step]))
-    setResult(done)
-    if (done.ok) {
-      const answer = { ref: 'try', sellerName: 'Seller A', ...done.box }
-      const read = await openSealedAnswer(answer, done.box.contract)
-      setSteps((current) => [
-        ...current,
-        { label: 'Your browser opened the box with the key from Arc', atMs: performance.now() - startedAt.current },
-      ])
-      setOpened(read)
-    }
-    setRunning(false)
+    // Filled from the callback, so it is an object and not a narrowed local.
+    const seen: { result: TryResult | null; opens: Promise<void> | null } = { result: null, opens: null }
+    const final = await startTry(
+      (step) => {
+        setSteps((current) => [...current, step])
+        if (step.name === 'delivered') setPhase('finishing')
+      },
+      fetch,
+      (done) => {
+        seen.result = done
+        setResult(done)
+        setPhase('finishing')
+        setRecording(true)
+        if (done.ok) seen.opens = open(done)
+      },
+    )
+    if (!seen.result) setResult(final)
+    setRecording(false)
+    await seen.opens
+    setPhase('idle')
   }
 
   return (
-    <div className="mb-4 rounded-2xl bg-[var(--surface-muted)] p-4">
+    <div id="try-dispute" className="mb-4 scroll-mt-4 rounded-2xl bg-[var(--surface-muted)] p-4">
       <div className="flex items-center gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[var(--ink)]">
           <Scale size={20} aria-hidden />
@@ -53,11 +99,23 @@ export function TryDispute() {
         </div>
       </div>
 
-      <button type="button" disabled={running} onClick={() => void run()} className={`${primary} mt-4`}>
-        {running && <Loader2 size={16} className="animate-spin" aria-hidden />}
-        {running ? 'Running on Arc' : 'Start a dispute'}
+      <button type="button" disabled={phase !== 'idle'} onClick={() => void run()} className={`${primary} mt-4`}>
+        {phase === 'running' && <Loader2 size={16} className="animate-spin" aria-hidden />}
+        {phase === 'running' ? 'Running on Arc' : phase === 'finishing' ? 'Done on Arc' : 'Start a dispute'}
       </button>
       <p className="mt-2 text-xs text-[var(--muted)]">It takes about 5 seconds. The payment is test money.</p>
+
+      {result && !result.ok && (
+        <p className="mt-3 text-sm font-semibold text-[var(--danger)]" role="status">
+          {result.message}
+        </p>
+      )}
+
+      {result?.ok && <TryOutcome result={result} opened={opened} />}
+
+      {delivered && !result && <Pending>Checking Circle’s record of the payment</Pending>}
+      {opening && <Pending>Your browser is opening the box with the key from Arc</Pending>}
+      {recording && <Pending>Writing this try to the public record on Arkiv</Pending>}
 
       {steps.length > 0 && (
         <ol className="mt-4 space-y-1" aria-live="polite">
@@ -69,30 +127,27 @@ export function TryDispute() {
           ))}
         </ol>
       )}
-
-      {result && !result.ok && (
-        <p className="mt-3 text-sm font-semibold text-[var(--danger)]" role="status">
-          {result.message}
-        </p>
-      )}
-
-      {result?.ok && <TryOutcome result={result} opened={opened} />}
     </div>
   )
 }
 
-/** The plain lines first. What a judge checks (the gas, the claim and both transactions) is one tap away. */
+/** The plain lines and the link to the dispute on Arc first. What a judge checks (the gas, the claim and both transactions) is one tap away. */
 export function TryOutcome({ result, opened }: { result: Extract<TryResult, { ok: true }>; opened: OpenResult | null }) {
   const { plain, details } = splitLines(result.lines)
   return (
     <div className="mt-4 rounded-xl bg-white p-3" role="status">
-      {opened?.ok && <p className="break-words text-sm">{readable(opened.text)}</p>}
-      {opened && <p className={`mt-1 text-sm ${opened.ok && opened.matches ? '' : 'text-[var(--danger)]'}`}>{opened.line}</p>}
-      {plain.map((line) => (
-        <p key={line} className="mt-2 text-sm font-semibold">
+      {plain.map((line, i) => (
+        <p key={line} className={`${i > 0 ? 'mt-2 ' : ''}text-sm font-semibold`}>
           {line}
         </p>
       ))}
+      {result.claimTx && (
+        <a className={`${link} mt-2`} href={`${EXPLORER_TX}${result.claimTx}`} target="_blank" rel="noreferrer">
+          The dispute on Arc <ExternalLink size={14} aria-hidden />
+        </a>
+      )}
+      {opened?.ok && <p className="mt-3 break-words text-sm">{readable(opened.text)}</p>}
+      {opened && <p className={`mt-1 text-sm ${opened.ok && opened.matches ? '' : 'text-[var(--danger)]'}`}>{opened.line}</p>}
       {(details.length > 0 || result.claimTx || result.answerTx) && (
         <details className="mt-3 text-xs text-[var(--muted)]">
           <summary className="cursor-pointer select-none font-semibold">Details</summary>
