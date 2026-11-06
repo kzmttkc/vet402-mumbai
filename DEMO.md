@@ -112,7 +112,7 @@ Buyer net per dispute in the 01:59 run, in USDC: what came back, less the price 
 | E, silent | 0.011413 | +0.001731 |
 | D, wrong key, then silent | 0.012142 | +0.001863 |
 
-The buyer also sent each `flushBurn`, which anyone can send and which sits outside the dispute cost. With it, E and D still end +0.000557 and +0.000690.
+In these runs the buyer also sent each `flushBurn`, which anyone can send and which sits outside the dispute cost. Since 2026-11-06 at 05:40 UTC vet402's buyer leaves `flushBurn` to anyone who wants to send it, so the nets above are what the buyer keeps.
 
 ## What each scene shows
 

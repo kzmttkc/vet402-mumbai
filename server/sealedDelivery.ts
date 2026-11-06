@@ -140,7 +140,6 @@ const GAS_UNITS_PER_USDC_UNIT = 10n ** 12n
 
 const TX_TIMEOUT_MS = 60_000
 const REFUSED_ANSWER_GAS = 120_000n
-const FLUSH_GAS = 80_000n
 
 export interface SealedPromise {
   seller: Address
@@ -895,15 +894,6 @@ export function createSealedPorts({
   /** Refunds that came back to the hold wallet and have not gone into Gateway yet. */
   let waiting = 0n
   const DEPOSIT_GAS_ALL = APPROVE_GAS + GATEWAY_DEPOSIT_GAS
-  // The burned half waits in the contract until someone sends it. A failure here costs the buyer nothing.
-  const flushBurned = async () => {
-    try {
-      await fill(FLUSH_GAS)
-      await client.flushBurn(holdKey)
-    } catch (error) {
-      console.error('could not send the burned half:', error instanceof Error ? error.message.split('\n')[0] : error)
-    }
-  }
 
   return {
     coverageFor: (seller, value) => client.coverageFor(seller as Address, value),
@@ -953,16 +943,13 @@ export function createSealedPorts({
 
     async finalize(claimId) {
       await fill(FINALIZE_GAS)
-      const paid = await client.finalize(holdKey, claimId)
-      await flushBurned()
-      return paid
+      // The burned half waits in the contract. flushBurn is open to anyone, so the buyer's dispute never pays for it.
+      return client.finalize(holdKey, claimId)
     },
 
     async prove(claimId, ciphertext, key) {
       await fill(PROVE_GAS)
-      const paid = await client.prove(holdKey, claimId, ciphertext, key)
-      await flushBurned()
-      return paid
+      return client.prove(holdKey, claimId, ciphertext, key)
     },
 
     async withdraw() {
