@@ -14,7 +14,7 @@ export interface ContractRef {
   chain?: SealedChain
 }
 
-/** True when the seller's free deposit covers a dispute over this price: 2 * (value + DISPUTE_COST). Read it before paying. */
+/** True when the seller's free deposit covers the most a dispute over this price can cost: 2 * (value + MAX_DISPUTE_COST). Read it before paying. */
 export function coverageFor(ref: ContractRef, seller: Address, value: bigint): Promise<boolean> {
   return (ref.chain ?? createSealedChain(ref)).coverageFor(seller, value)
 }

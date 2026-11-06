@@ -8,7 +8,11 @@ import { ANSWER_GAS, APPROVE_GAS, ARC_NET, createSealedDelivery, DEPOSIT_GAS, pa
 import type { SealedClient } from '../server/sealedDelivery'
 import { formatUsdc, parseUsdc } from '../src/onchain-money'
 
-export const SELLER_DEPOSIT = parseUsdc('0.1')
+/**
+ * coverageFor asks for 2 * (price + MAX_DISPUTE_COST) per claim. With MAX_GAS_PRICE at 100 gwei that is about
+ * 0.112 USDC, so 0.5 USDC backs four open claims at the cap. Each answered claim also repays its gas from here.
+ */
+export const SELLER_DEPOSIT = parseUsdc('0.5')
 export const SELLER_GAS = parseUsdc('0.03')
 
 export interface SetupPlan {

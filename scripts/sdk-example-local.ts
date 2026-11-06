@@ -22,8 +22,11 @@ import type { PaymentRequirement } from '../packages/sealed-delivery/src/index'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PRICE = 1_000n
-const DISPUTE_COST = 10_500n
-const DEPOSIT = 100_000n
+/** The values contracts/README.md recommends for Arc testnet. */
+const FOLLOW_UP_GAS = 230_000n
+const MAX_GAS_PRICE = 100_000_000_000n
+/** Covers four claims at the cap: each needs 2 * (price + MAX_DISPUTE_COST), about 0.112 USDC. */
+const DEPOSIT = 500_000n
 const GATEWAY: Address = '0x0077777d7EBA4688BDeF3E311b846F25870A19B9'
 const ONE_ETH = '0xDE0B6B3A7640000'
 
@@ -83,7 +86,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }, cleanups
 
   // Any 6-decimal ERC-20 and any EIP-712 payment domain whose version is not "2" without a salt.
   const usdc = await deploy(['SealedDelivery.Base.t.sol', 'MockUSDC'], [])
-  const contract = await deploy(['SealedDelivery.sol', 'SealedDelivery'], [3600n, 8n, 3608n, usdc, 'GatewayWalletBatched', '1', GATEWAY, DISPUTE_COST, `0x${'0'.repeat(64)}`])
+  const contract = await deploy(['SealedDelivery.sol', 'SealedDelivery'], [3600n, 8n, 3608n, usdc, 'GatewayWalletBatched', '1', GATEWAY, FOLLOW_UP_GAS, MAX_GAS_PRICE, `0x${'0'.repeat(64)}`])
   await pub.waitForTransactionReceipt({
     hash: await deployer.writeContract({ address: usdc, abi: parseAbi(['function mint(address,uint256)']), functionName: 'mint', args: [addressOf(keys.seller), DEPOSIT] }),
   })
@@ -144,21 +147,24 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }, cleanups
       check('key on chain', 'answer', r.text, ANSWER)
       check('key on chain', 'key came from the chain', r.via, 'chain')
     }
-    check('key on chain', 'deposit untouched', await sealedChain.deposits(addressOf(keys.seller)), DEPOSIT)
+    const refund = r.status !== 'not covered' && r.claimId ? await sealedChain.gasRefundOf(r.claimId) : -1n
+    check('key on chain', 'the answer repaid the claim gas', refund > 0n, true)
+    check('key on chain', 'the deposit paid only that', await sealedChain.deposits(addressOf(keys.seller)), DEPOSIT - refund)
     s.stop()
   }
 
   // 3. The key route drops and nobody answers. The deadline passes and the deposit pays the buyer.
   {
     const s = await serve(keys.seller, { watch: false, dropKey: true })
+    const depositBefore = await sealedChain.deposits(addressOf(keys.seller))
     const r = await buyer(s.url)
-    const owed = PRICE + DISPUTE_COST
+    const owed = r.status === 'not covered' ? 0n : (r.credited ?? 0n)
     check('silence', 'status', r.status, 'silent')
     if (r.status !== 'not covered') {
       check('silence', 'no answer', r.text, null)
-      check('silence', 'buyer credited price plus dispute cost', r.credited, owed)
+      check('silence', 'buyer credited the price and its gas', owed > PRICE, true)
     }
-    check('silence', 'deposit fell by twice that', await sealedChain.deposits(addressOf(keys.seller)), DEPOSIT - 2n * owed)
+    check('silence', 'deposit fell by twice that', await sealedChain.deposits(addressOf(keys.seller)), depositBefore - 2n * owed)
     check('silence', 'buyer withdraws the credit', await sealedChain.withdrawClaimable(keys.buyer), owed)
     s.stop()
   }

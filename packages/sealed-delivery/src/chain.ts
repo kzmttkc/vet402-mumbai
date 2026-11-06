@@ -60,7 +60,10 @@ export function createSealedChain({ contract, rpcUrl, pollingMs = 1000 }: ChainO
     deposits: (seller: Address) => read<bigint>('deposits', [seller]),
     claimable: (buyer: Address) => read<bigint>('claimable', [buyer]),
     usdc: () => read<Address>('USDC'),
-    disputeCost: () => read<bigint>('DISPUTE_COST'),
+    /** The most one claim's dispute cost can be, in USDC units. coverageFor counts it. */
+    maxDisputeCost: () => read<bigint>('MAX_DISPUTE_COST'),
+    /** What an answer repays the buyer for this claim's gas, in USDC units. */
+    gasRefundOf: (claimId: Hex) => read<bigint>('gasRefundOf', [claimId]),
     latestBlock: () => pub.getBlockNumber(),
     chainTime: async () => (await pub.getBlock()).timestamp,
 

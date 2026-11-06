@@ -39,6 +39,7 @@ import {
 } from '../server/sealedDelivery'
 import type { SealedNet } from '../server/sealedDelivery'
 import { createSeller, DEMO_PRICE } from '../server/sellers'
+import { formatUsdc } from '../src/onchain-money'
 import type { SellerFacilitator } from '../server/sellers'
 import { exportPublic } from './export-public'
 import { runSetup, SELLER_DEPOSIT } from './sealed-setup'
@@ -51,10 +52,13 @@ const DEAD: Address = '0x000000000000000000000000000000000000dEaD'
 const USDC = ARC_USDC as Address
 const ONE_ETH = '0xDE0B6B3A7640000'
 
-/** Every value the contract's constructor may ask for, by name. Change the deployment here. */
-const DISPUTE_COST = 10_500n
-const OWED = DEMO_PRICE + DISPUTE_COST
+/** The values contracts/README.md recommends for Arc testnet. */
+const FOLLOW_UP_GAS = 230_000n
+const MAX_GAS_PRICE = 100_000_000_000n
+/** Gas is counted in 18 decimals, USDC in 6. */
+const WEI_PER_UNIT = 10n ** 12n
 
+/** Every value the contract's constructor may ask for, by name. Change the deployment here. */
 const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   maxExpiry: MAX_EXPIRY,
   answerWindow: ANSWER_WINDOW,
@@ -63,7 +67,8 @@ const CONSTRUCTOR_VALUES: Record<string, unknown> = {
   paymentDomainName: ARC_GATEWAY_DOMAIN_NAME,
   paymentDomainVersion: ARC_GATEWAY_DOMAIN_VERSION,
   paymentVerifyingContract: ARC_GATEWAY_WALLET,
-  disputeCost: DISPUTE_COST,
+  followUpGas: FOLLOW_UP_GAS,
+  maxGasPrice: MAX_GAS_PRICE,
   paymentDomainSalt: `0x${'0'.repeat(64)}`,
 }
 
@@ -152,7 +157,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       address: USDC,
       abi: parseAbi(['function mint(address,uint256)']),
       functionName: 'mint',
-      args: [addressOf(keys.buyer), 1_000_000n],
+      args: [addressOf(keys.buyer), 5_000_000n],
     }),
   })
 
@@ -283,6 +288,22 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     const poorDemos = createDemoService(ports, { ...sellers, d: seller('g', 'Seller G', keys.poor) }, createReceiptStore(path.join(tmp, 'data-poor')))
 
     const hold = addressOf(keys.hold)
+    // What the buyer's transactions cost, from their receipts, in gas wei.
+    const costOf = async (hash: Hex) => {
+      const r = await pub.getTransactionReceipt({ hash })
+      return { wei: r.gasUsed * r.effectiveGasPrice, gas: r.gasUsed, price: r.effectiveGasPrice }
+    }
+    const claimTxOf = async (claimId: Hex) => {
+      const log = (await client.claimLogs(0n)).find((l) => l.claimId.toLowerCase() === claimId.toLowerCase())
+      if (!log) throw new Error('No claim on the chain')
+      return log.transactionHash
+    }
+    const eventTx = async (eventName: 'Silent' | 'Fraud' | 'ClaimableWithdrawn', fromBlock: bigint, claimId?: Hex) => {
+      const logs = await pub.getContractEvents({ address, abi: SEALED_ABI, eventName, fromBlock })
+      const log = claimId ? logs.find((l) => (l.args as { claimId?: Hex }).claimId?.toLowerCase() === claimId.toLowerCase()) : logs[logs.length - 1]
+      if (!log) throw new Error(`No ${eventName} on the chain`)
+      return log.transactionHash
+    }
     // A contract with flushBurn holds the burned half back until someone sends it on.
     const holdsBurnBack = sealedArtifact.abi.some((item) => (item as { name?: string }).name === 'flushBurn')
     const runScene = async (service: typeof demos, kind: 'a' | 'd' | 'e' | 'f'): Promise<{ run: DemoRunView; row: ReceiptRow | undefined; store: ReceiptRow[] }> => {
@@ -309,9 +330,19 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     check('A key from the chain', 'nothing to press', a.run.action, null)
     const holdTopUp = (await client.usdcBalance(hold)) - holdStart
     check('A key from the chain', 'the buyer added gas to the hold', holdTopUp > 0n, true)
-    check('A key from the chain', 'deposit untouched', await client.deposits(addressOf(keys.a)), SELLER_DEPOSIT)
-    check('A key from the chain', 'coverage came back', await client.coverageFor(addressOf(keys.a), SELLER_DEPOSIT / 2n - DISPUTE_COST), true)
     const aClaimId = a.row?.sealed?.claimId as Hex
+    const aRefund = await client.gasRefundOf(aClaimId)
+    check('A key from the chain', 'the deposit paid the claim gas and nothing else', await client.deposits(addressOf(keys.a)), SELLER_DEPOSIT - aRefund)
+    const aRepaid = await pub.getContractEvents({ address, abi: SEALED_ABI, eventName: 'ClaimGasRepaid', args: { claimId: aClaimId }, fromBlock: 0n })
+    check('A key from the chain', 'the answer sent the claim gas to the buyer', aRepaid.map((l) => [l.args.buyer, l.args.amount, l.args.sent]), [[hold, aRefund, true]])
+    const aClaimCost = await costOf(await claimTxOf(aClaimId))
+    const aNet = aRefund * WEI_PER_UNIT - aClaimCost.wei
+    console.log(`      A: claim ${aClaimCost.gas} gas at ${aClaimCost.price} wei, repaid ${aRefund} units, buyer net ${aNet} wei`)
+    check('A key from the chain', 'the buyer gets its claim gas back', aNet >= 0n, true)
+    check('A key from the chain', 'and no more than 5 % on top', aNet * 100n <= aClaimCost.wei * 5n, true)
+    const maxCost = await client.maxDisputeCost()
+    const free = (await client.deposits(addressOf(keys.a))) / 2n - maxCost
+    check('A key from the chain', 'coverage came back', [await client.coverageFor(addressOf(keys.a), free), await client.coverageFor(addressOf(keys.a), free + 1n)], [true, false])
     let kept = 'no revert'
     try {
       await client.prove(keys.hold, aClaimId, a.row?.sealed?.ciphertext as Hex, (await client.readKeyRevealed(aClaimId, 0n))?.key as Hex)
@@ -359,20 +390,29 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
       console.log(`      ${label}: ${stepsLine(run)}`)
       check(label, 'stops at the button', run.action, 'finalize')
       check(label, 'receipt before the button', row?.outcome, first)
+      // A silent claim has no sealed record on the receipt. Its claim is the seller's latest on the chain.
+      const sellerClaims = await client.readClaimed(addressOf(key), 0n, await client.latestBlock())
+      const claimId = sellerClaims[sellerClaims.length - 1]?.claimId as Hex
+      const owed = (await client.liabilityOf(claimId)) / 2n
+      const fromBlock = await client.latestBlock()
       const pressed = await demos.act(run.id, 'finalize')
       // The button already sent the burned half on, and the check below reads that.
       const after = receipts.list().find((r) => r.id === row?.id)
-      check(label, 'receipt', after?.outcome, [...first, 'The seller stayed silent. Its deposit paid 0.0115 USDC back.'])
-      check(label, 'the buyer is credited 1x', (await client.claimable(hold)) - claimableBefore, OWED)
-      check(label, '1x is burned', (await client.usdcBalance(DEAD)) - deadBefore, OWED)
-      check(label, 'the deposit pays 2x', depositBefore - (await client.deposits(addressOf(key))), 2n * OWED)
+      check(label, 'receipt', after?.outcome, [...first, `The seller stayed silent. Its deposit paid ${formatUsdc(owed)} USDC back.`])
+      check(label, 'the buyer is credited the price and its gas', (await client.claimable(hold)) - claimableBefore, owed)
+      check(label, 'the same is burned', (await client.usdcBalance(DEAD)) - deadBefore, owed)
+      check(label, 'the deposit pays twice that', depositBefore - (await client.deposits(addressOf(key))), 2n * owed)
       check(label, 'next button', pressed.action, 'withdraw')
       const holdBefore = await client.usdcBalance(hold)
       const withdrawn = await demos.act(run.id, 'withdraw')
       const holdAfter = await client.usdcBalance(hold)
-      check(label, 'back in the hold', holdAfter - holdBefore >= OWED - (await client.gasCost(WITHDRAW_GAS)), true)
+      check(label, 'back in the hold', holdAfter - holdBefore >= owed, true)
       check(label, 'nothing left to take', await client.claimable(hold), 0n)
       check(label, 'no more buttons', withdrawn.action, null)
+      const costs = await Promise.all((await Promise.all([claimTxOf(claimId), eventTx('Silent', fromBlock, claimId), eventTx('ClaimableWithdrawn', fromBlock)])).map(costOf))
+      const net = owed * WEI_PER_UNIT - DEMO_PRICE * WEI_PER_UNIT - costs.reduce((sum: bigint, c) => sum + c.wei, 0n)
+      console.log(`      ${label}: claim ${costs[0]!.gas}, finalize ${costs[1]!.gas}, withdraw ${costs[2]!.gas} gas, buyer net ${net} wei`)
+      check(label, 'the buyer gets the price and all three transactions back', net >= 0n, true)
     }
 
     await silentScene('D wrong key, then silent', 'd', keys.d, ['Wrong key rejected by the contract.'])
@@ -384,15 +424,23 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
     console.log(`      F: ${stepsLine(f.run)}`)
     check('F swapped answer', 'steps end at opened', names(f.run).slice(-3), ['claim', 'key on chain', 'opened'])
     check('F swapped answer', 'stops at the button', f.run.action, 'prove')
+    const fClaimId = f.row?.sealed?.claimId as Hex
+    const fOwed = (await client.liabilityOf(fClaimId)) / 2n
+    const fRefund = await client.gasRefundOf(fClaimId)
+    const fFrom = await client.latestBlock()
     const proved = await demos.act(f.run.id, 'prove')
     const fRow = receipts.list().find((r) => r.id === f.row?.id)
-    check('F swapped answer', 'receipt', fRow?.outcome, ["The answer did not match the seller's promise. Its deposit paid 0.0115 USDC back."])
+    check('F swapped answer', 'receipt', fRow?.outcome, [`The answer did not match the seller's promise. Its deposit paid ${formatUsdc(fOwed)} USDC back.`])
     check('F swapped answer', 'FRAUD on the contract', await pub.readContract({ address, abi: SEALED_ABI, functionName: 'fraudCount', args: [addressOf(keys.f)] }), 1n)
-    check('F swapped answer', 'the deposit pays 2x', fDeposit - (await client.deposits(addressOf(keys.f))), 2n * OWED)
-    check('F swapped answer', 'the buyer is credited 1x', await client.claimable(hold), OWED)
+    check('F swapped answer', 'the deposit pays the claim gas, then twice the credit', fDeposit - (await client.deposits(addressOf(keys.f))), fRefund + 2n * fOwed)
+    check('F swapped answer', 'the buyer is credited the price and its gas', await client.claimable(hold), fOwed)
     check('F swapped answer', 'next button', proved.action, 'withdraw')
     await demos.act(f.run.id, 'withdraw')
     check('F swapped answer', 'nothing left to take', await client.claimable(hold), 0n)
+    const fCosts = await Promise.all((await Promise.all([claimTxOf(fClaimId), eventTx('Fraud', fFrom, fClaimId), eventTx('ClaimableWithdrawn', fFrom)])).map(costOf))
+    const fNet = (fRefund + fOwed - DEMO_PRICE) * WEI_PER_UNIT - fCosts.reduce((sum: bigint, c) => sum + c.wei, 0n)
+    console.log(`      F: claim ${fCosts[0]!.gas}, prove ${fCosts[1]!.gas}, withdraw ${fCosts[2]!.gas} gas, buyer net ${fNet} wei`)
+    check('F swapped answer', 'the buyer gets the price and all three transactions back', fNet >= 0n, true)
 
     // A button pressed twice does nothing the second time.
     let again = 'no error'

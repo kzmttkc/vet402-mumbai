@@ -45,10 +45,14 @@ export const SEALED_ABI = parseAbi([
   'function flushBurn()',
   'function silentCount(address seller) view returns (uint256)',
   'function fraudCount(address seller) view returns (uint256)',
+  'function MAX_DISPUTE_COST() view returns (uint256)',
+  'function gasRefundOf(bytes32 claimId) view returns (uint256)',
+  'function claims(bytes32 claimId) view returns (address seller, address buyer, uint256 liability, uint64 deadline, bytes32 keyHash, uint8 status, bytes32 paymentNonce, bytes32 plaintextHash, bytes32 ciphertextHash)',
   'event KeyRevealed(bytes32 indexed claimId, bytes32 indexed paymentNonce, bytes key)',
   'event Silent(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 paidOut)',
   'event Fraud(bytes32 indexed claimId, bytes32 indexed paymentNonce, address indexed seller, address buyer, uint256 paidOut)',
   'event ClaimableWithdrawn(address indexed buyer, uint256 amount)',
+  'event ClaimGasRepaid(bytes32 indexed claimId, address indexed buyer, uint256 amount, bool sent)',
   'error InvalidSellerSignature()',
   'error InvalidBuyerSignature()',
   'error NotBuyer()',
@@ -56,6 +60,8 @@ export const SEALED_ABI = parseAbi([
   'error WrongPayee()',
   'error WrongValue()',
   'error WrongNonce()',
+  'error PaymentNotYetValid()',
+  'error PaymentNeverValid()',
   'error PromiseExpired()',
   'error ExpiryTooFar()',
   'error AlreadyClaimed()',
@@ -102,7 +108,8 @@ export const PROMISE_SECONDS = 3000
 
 // Upper bounds on the gas of each call, measured on the local run and rounded up.
 export const CLAIM_GAS = 320_000n
-export const ANSWER_GAS = 90_000n
+/** An answer also sends the buyer its claim gas back, which costs the seller a USDC transfer. */
+export const ANSWER_GAS = 150_000n
 export const APPROVE_GAS = 60_000n
 export const DEPOSIT_GAS = 100_000n
 export const FINALIZE_GAS = 160_000n
@@ -242,6 +249,14 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
       publicClient.readContract({ address, abi: SEALED_ABI, functionName: 'claimable', args: [buyer] }),
     deposits: (seller: Address) =>
       publicClient.readContract({ address, abi: SEALED_ABI, functionName: 'deposits', args: [seller] }),
+    /** The most one claim's dispute cost can be, in 6-decimal USDC. coverageFor counts it. */
+    maxDisputeCost: () => publicClient.readContract({ address, abi: SEALED_ABI, functionName: 'MAX_DISPUTE_COST' }),
+    /** What an answer repays the buyer for this claim's gas. */
+    gasRefundOf: (claimId: Hex) =>
+      publicClient.readContract({ address, abi: SEALED_ABI, functionName: 'gasRefundOf', args: [claimId] }),
+    /** What a verdict on this claim takes from the deposit. The buyer is credited half of it. */
+    liabilityOf: async (claimId: Hex) =>
+      (await publicClient.readContract({ address, abi: SEALED_ABI, functionName: 'claims', args: [claimId] }))[2],
     usdcBalance: (who: Address) =>
       publicClient.readContract({ address: usdc, abi: erc20Abi, functionName: 'balanceOf', args: [who] }),
     latestBlock: () => publicClient.getBlockNumber(),
