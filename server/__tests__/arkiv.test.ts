@@ -12,6 +12,7 @@ import {
   decideDelivery,
   NOT_PAID,
   parseSellerTtl,
+  UNREADABLE,
 } from '../arkiv'
 import type { ArkivWire, EntityOptions, ReceiptValues, SellerRead } from '../arkiv'
 import { createDemoService } from '../demo'
@@ -105,6 +106,7 @@ function sink(wire: ArkivWire, logs: string[] = [], ttl = 604800) {
 const read = (over: Partial<SellerRead> = {}): SellerRead => ({
   sellerLive: false,
   paymentBlocks: [],
+  verdictBlocks: [],
   currentBlock: 1000n,
   blockSeconds: 2,
   ...over,
@@ -136,17 +138,14 @@ describe('The delivery check, one stop condition at a time', () => {
     expect(decideDelivery(read({ paymentBlocks: [969n] })).kind).toBe('expired')
   })
 
-  test('a failed read goes on with the busy sentence, and the log carries no key', async () => {
+  test('a failed read stops the purchase and says why, and the log carries no key', async () => {
     const logs: string[] = []
     const check = createSellerCheck(
       { readSeller: () => Promise.reject(new Error('https://rpc/secret-access-key answered 429')) },
       (m) => logs.push(m),
       createScrubber(['secret-access-key']),
     )
-    expect(await check('Seller X')).toEqual({
-      kind: 'busy',
-      line: 'Arkiv is busy. Buying without the delivery check.',
-    })
+    expect(await check('Seller X')).toEqual({ kind: 'expired', line: UNREADABLE })
     expect(logs.join()).not.toContain('secret-access-key')
   })
 })
@@ -429,8 +428,8 @@ describe('The real client over a fake transport', () => {
     expect(writer).toMatch(/^0x[0-9a-fA-F]{40}$/)
     expect(JSON.stringify(writer)).not.toContain(KEY_A.slice(2))
 
-    await wire.readSeller('Seller X')
-    await wire.findSellerKey('Seller X')
+    await wire.readSeller({ name: 'Seller X', payTo: null })
+    await wire.findSellerKey({ name: 'Seller X', payTo: null })
     await wire.findPaymentKey('transfer-1')
 
     expect(queries).toHaveLength(4)
@@ -484,13 +483,12 @@ describe('The approval card with the delivery check', () => {
     request: { url: 'http://127.0.0.1:3001/sellers/c', method: 'GET' },
   }
 
-  const verdict = (map: Record<string, 'live' | 'first' | 'expired' | 'busy'>) => (seller: string) =>
+  const verdict = (map: Record<string, 'live' | 'first' | 'expired'>) => (seller: string) =>
     Promise.resolve(
       {
         live: { kind: 'live', line: 'Delivered recently.' } as const,
         first: { kind: 'first', line: 'First purchase from this seller.' } as const,
         expired: { kind: 'expired', line: NOT_PAID } as const,
-        busy: { kind: 'busy', line: 'Arkiv is busy. Buying without the delivery check.' } as const,
       }[map[seller] ?? 'first'],
     )
 
@@ -507,13 +505,16 @@ describe('The approval card with the delivery check', () => {
     expect(view.delivery).toBe('Delivered recently.')
   })
 
-  test('a read failure still shows the card', async () => {
+  test('a read failure pays nobody: the seller is passed over and no card is shown for it', async () => {
+    const failing = createSellerCheck(
+      { readSeller: () => Promise.reject(new Error('429')) },
+      () => undefined,
+      createScrubber([]),
+    )
     const service = createJobService(ports([candidate('Cheap', 1000n)]), memoryStore(), undefined, {
-      sellerCheck: verdict({ Cheap: 'busy' }),
+      sellerCheck: failing,
     })
-    const view = await service.plan('find prices')
-    expect(view.sellerName).toBe('Cheap')
-    expect(view.delivery).toBe('Arkiv is busy. Buying without the delivery check.')
+    await expect(service.plan('find prices')).rejects.toThrow('I couldn’t find anyone who can do this job.')
   })
 
   test('with Arkiv off, the card is what it always was', async () => {

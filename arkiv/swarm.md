@@ -124,7 +124,9 @@ If Arkiv or Swarm cannot be read, the screen opens the copy in the exported file
 
 ## Swarm in the demo video
 
-{{TODO: the moment in the video where Swarm is used}}
+2:23.8 to 2:28.2: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order.
+
+The boxes went to Swarm two ways on 2026-11-05. The boxes of the filmed run, 22:40 to 22:46 UTC, went through the public gateway with bee-js's `NULL_STAMP`, so the gateway stamped them with a batch of its own. The four boxes from 23:11 UTC on, Seller A, E, D and F, went up through my own Bee node with my own batch `b6455d93…`, as the table under "Postage stamp, wallet and node" shows.
 
 ## What got in my way
 

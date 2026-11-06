@@ -18,11 +18,23 @@ export interface RawReceipt {
   timesReceived: bigint
   batchTx: string | null
   paymentKey: string | null
+  /** The seller's payTo address, lowercase. Null on entities written before it was recorded. */
+  payTo: string | null
 }
 
 export interface RawSeller {
   seller: string
+  payTo: string | null
   expiresAt: bigint
+}
+
+/** Arc's ruling against a seller, as vet402 copied it to Arkiv. */
+export interface RawVerdict {
+  /** The seller's payTo address, lowercase. */
+  seller: string
+  verdict: string
+  /** The block the ruling was written in. */
+  createdAt: bigint
 }
 
 export interface BlockTiming {
@@ -34,6 +46,8 @@ export interface BlockTiming {
 export interface RawRead {
   receipts: RawReceipt[]
   sellers: RawSeller[]
+  /** Optional, so a read from before rulings existed still builds rows. */
+  verdicts?: RawVerdict[]
   timing: BlockTiming
 }
 
@@ -47,6 +61,8 @@ export interface FeedRow {
   keptUntil: string
   /** Null when the seller has no live entity. */
   sellerActiveUntil: string | null
+  /** The UTC date of Arc's latest ruling against this seller, or null when there is none. */
+  ruledAgainst: string | null
   responseHash: string
   responseBytes: number
   timesReceived: number
@@ -65,18 +81,25 @@ export function blockToDate(block: bigint, timing: BlockTiming): string {
 }
 
 /** One row per payment. A settlement moves its payment's row on, through payment_key. */
-export function buildRows({ receipts, sellers, timing }: RawRead): FeedRow[] {
+export function buildRows({ receipts, sellers, verdicts = [], timing }: RawRead): FeedRow[] {
   const settlements = new Map(
     receipts.filter((r) => r.kind === 'settlement' && r.paymentKey).map((r) => [r.paymentKey, r]),
   )
-  const sellerExpiry = new Map(sellers.map((s) => [s.seller, s.expiresAt]))
+  // A seller is matched by its payTo address when both sides carry one, and by name otherwise.
+  const byPayTo = new Map(sellers.flatMap((s) => (s.payTo ? [[s.payTo, s.expiresAt] as const] : [])))
+  const byName = new Map(sellers.map((s) => [s.seller, s.expiresAt]))
+  const latestRuling = new Map<string, bigint>()
+  for (const v of verdicts) {
+    if ((latestRuling.get(v.seller) ?? -1n) < v.createdAt) latestRuling.set(v.seller, v.createdAt)
+  }
 
   return receipts
     .filter((r) => r.kind === 'payment' && !r.seller.startsWith(LIVE_CHECK_PREFIX))
     .sort((a, b) => (a.expiresAt < b.expiresAt ? 1 : a.expiresAt > b.expiresAt ? -1 : 0))
     .map((payment) => {
       const settlement = settlements.get(payment.key)
-      const sellerUntil = sellerExpiry.get(payment.seller)
+      const sellerUntil = (payment.payTo ? byPayTo.get(payment.payTo) : undefined) ?? byName.get(payment.seller)
+      const ruling = payment.payTo ? latestRuling.get(payment.payTo) : undefined
       return {
         key: payment.key,
         seller: payment.seller,
@@ -85,6 +108,7 @@ export function buildRows({ receipts, sellers, timing }: RawRead): FeedRow[] {
         batchTx: settlement?.batchTx ?? null,
         keptUntil: blockToDate(payment.expiresAt, timing),
         sellerActiveUntil: sellerUntil === undefined ? null : blockToDate(sellerUntil, timing),
+        ruledAgainst: ruling === undefined ? null : blockToDate(ruling, timing),
         responseHash: payment.responseHash,
         responseBytes: Number(payment.responseBytes),
         timesReceived: Number(payment.timesReceived),

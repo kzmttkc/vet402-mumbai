@@ -109,6 +109,9 @@ function Row({ row }: { row: FeedRow }) {
           </p>
           <p className="mt-1 text-sm text-pretty">Kept outside this app until {row.keptUntil}</p>
           {row.sellerActiveUntil && <p className="mt-1 text-sm text-pretty">Seller active until {row.sellerActiveUntil}</p>}
+          {row.ruledAgainst && (
+            <p className="mt-1 text-sm text-pretty text-[var(--danger)]">Arc ruled against this seller on {row.ruledAgainst}</p>
+          )}
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
             <dt>Got back</dt>
             <dd className="tabular-nums" title={row.responseHash}>

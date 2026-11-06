@@ -2,19 +2,20 @@
 //
 // Reads ARKIV_WRITER_KEY and ARKIV_ACCESS_KEY from the environment, and ARKIV_OTHER_KEY when there is
 // a second funded key to try. Keys are never printed. It writes one payment, one settlement and one
-// seller under a "live-check-" name. The receipts screen leaves those rows out, and they expire on
-// their own within minutes, so nothing is left behind on screen.
+// seller under a "live-check-" name, tries to change the payment with the writer's own key, and
+// writes one ruling against a fresh address that no seller uses. The receipts screen leaves those
+// rows out, and they expire on their own within minutes, so nothing is left behind on screen.
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
 import { eq } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { createArkivReader } from '../src/arkiv/readArkiv'
 import { buildRows } from '../src/arkiv/receiptsFeed'
 import { LIVE_CHECK_PREFIX, ReceiptSchema, SellerSchema } from '../src/arkiv/schema'
 import { receiptStatusLine } from '../src/lib/receiptStatus'
-import { createArkivWire, createScrubber, createSellerCheck } from '../server/arkiv'
+import { createArkivWire, createScrubber, createSellerCheck, RULED_AGAINST } from '../server/arkiv'
 
 const isKey = (value: string | undefined): value is Hex => /^0x[0-9a-fA-F]{64}$/.test(value ?? '')
 
@@ -36,6 +37,7 @@ function report(id: string, ok: boolean, detail: string): void {
 
 const chain = rabdi({ accessKey })
 const { wire, writer } = createArkivWire({ writerKey, accessKey })
+const writerAccount = privateKeyToAccount(writerKey)
 const reads = createPublicClient({ chain, transport: http() })
 const run = `${LIVE_CHECK_PREFIX}${Date.now()}`
 const transferId = `${run}-transfer`
@@ -146,13 +148,31 @@ async function main(): Promise<void> {
     'payment readonly and open to extension, seller readonly and owner only',
   )
 
-  // (3) The seller entity's expiry moves out on delivery.
+  // (3) The seller entity's expiry moves out on delivery. An extension sets the expiry to the block it
+  // lands in plus the lifetime. It does not add the lifetime to what was left.
   const before = sellerRows[0]?.$expiresAt ?? 0n
+  const lifetimeBlocks = BigInt((SELLER_TTL_SECONDS + 4) / 2)
+  const sentAt = await reads.getBlockNumber()
   const { expiresAt: after } = await wire.extendEntity({
     entityKey: seller.entityKey,
     expiration: ExpirationTime.fromSeconds(SELLER_TTL_SECONDS + 4),
   })
-  report('(3)', after > before, `seller expiry block ${before} to ${after}`)
+  const landedBy = await reads.getBlockNumber()
+  const isSet = after > sentAt + lifetimeBlocks - 1n && after <= landedBy + lifetimeBlocks
+  report(
+    '(3)',
+    after > before && isSet && after !== before + lifetimeBlocks,
+    `seller expiry block ${before} to ${after}. Sent at block ${sentAt}, landed by ${landedBy}, lifetime ${lifetimeBlocks} blocks, so the expiry was ${isSet ? 'set from the landing block' : 'not set from the landing block'}, not ${before + lifetimeBlocks}`,
+  )
+
+  // (11) readonly holds against the writer too: vet402's own key tries to change the receipt and is refused.
+  const ownerClient = createWalletClient({ chain, transport: http(), account: writerAccount })
+  try {
+    await ownerClient.patchEntity(ReceiptSchema, payment.entityKey, { set: { response_hash: '0'.repeat(64) } })
+    report('(11)', false, 'the writer changed a readonly receipt, which must be refused')
+  } catch (error) {
+    report('(11)', true, `the writer was refused a change to its own receipt: ${scrub(error).slice(0, 120)}`)
+  }
 
   // (4) The README's query, sent by hand.
   const res = await fetch(chain.rpcUrls.default.http[0], {
@@ -221,6 +241,27 @@ async function main(): Promise<void> {
   report('(7b)', gone, `seller entity left the query after about ${Math.round((Date.now() - started) / 1000)} s`)
   const afterExpiry = await check(run)
   report('(7c)', afterExpiry.kind === 'expired', `after expiry: "${afterExpiry.line}"`)
+
+  // (10) A ruling from Arc stops the purchase. The address is fresh, so no real seller is marked.
+  const ruledPayTo = privateKeyToAccount(generatePrivateKey()).address
+  await wire.createVerdict(
+    {
+      kind: 'verdict',
+      claim_id: `${run}-claim`,
+      seller: ruledPayTo.toLowerCase(),
+      verdict: 'silent',
+      contract: `0x${'0'.repeat(40)}`,
+      chain_id: 0n,
+    },
+    receiptOptions,
+  )
+  const ruledCheck = createSellerCheck(wire, (message) => console.error(message), scrub, () => ruledPayTo)
+  let ruled = await ruledCheck(run)
+  for (let i = 0; i < 10 && ruled.line !== RULED_AGAINST; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    ruled = await ruledCheck(run)
+  }
+  report('(10)', ruled.kind === 'expired' && ruled.line === RULED_AGAINST, `with a ruling on Arkiv: "${ruled.line}"`)
 }
 
 main()

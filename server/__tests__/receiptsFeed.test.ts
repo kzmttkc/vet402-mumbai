@@ -173,7 +173,8 @@ describe('The browser reader over a fake transport', () => {
 
     const result = await createArkivReader(WRITER, transport)()
 
-    expect(queries).toHaveLength(2)
+    // Payments, settlements, sellers and rulings, one page each.
+    expect(queries).toHaveLength(4)
     for (const query of queries) expect(query.toLowerCase()).toContain(`$owner = addr(${WRITER})`)
     expect(result.receipts[0]?.key).toBe(`0x${'1'.repeat(64)}`)
     expect(result.receipts[0]?.amountMicro).toBe(1000n)

@@ -32,7 +32,8 @@ export type StepName =
 export type DemoAction = 'finalize' | 'prove' | 'withdraw'
 
 // The receipt sentences. These are fixed wordings.
-const KEY_FROM_CHAIN = 'Charged once. Key read from Arc.'
+/** Only a sealed answer whose key opened it to the seller's promise gets this line. server/arkiv.ts relies on that. */
+export const KEY_FROM_CHAIN = 'Charged once. Key read from Arc.'
 const WRONG_KEY_REJECTED = 'Wrong key rejected by the contract.'
 const silentLine = (amount: string) => `The seller stayed silent. Its deposit paid ${amount} back.`
 const fraudLine = (amount: string) => `The answer did not match the seller's promise. Its deposit paid ${amount} back.`
@@ -72,6 +73,8 @@ export interface DemoPorts {
   sealedPollMs?: number
   /** Keeps the claimed box on Swarm and returns its reference. A failure only logs. */
   evidence?: (box: SealedBox, claimId: Hex) => Promise<string>
+  /** Writes Arc's ruling to Arkiv once finalize or prove has gone through. It queues and never throws. */
+  verdict?: (ruling: { claimId: Hex; payTo: string; verdict: 'silent' | 'fraud'; claimTx?: Hex }) => void
 }
 
 /**
@@ -126,7 +129,7 @@ export function createDemoService(
   interface Run extends DemoRunView {
     startedAt: number
     /** What the buttons need. Never leaves this service. */
-    open?: { claimId: Hex; ciphertext: Hex; key?: Hex; rowId: string; lines: string[] }
+    open?: { claimId: Hex; ciphertext: Hex; key?: Hex; rowId: string; lines: string[]; payTo: string; claimTx?: Hex }
     acting?: boolean
   }
   const runs = new Map<string, Run>()
@@ -134,6 +137,12 @@ export function createDemoService(
   let busy = false
 
   const mark = (run: Run, name: StepName) => run.steps.push({ name, atMs: now() - run.startedAt })
+
+  /** Who a ruling on this claim is about: the address that was paid, and the claim's transaction. */
+  const ruledOn = (payment: PreparedPayment, claim: { transactionHash?: Hex }) => ({
+    payTo: payment.accept.payTo,
+    ...(claim.transactionHash ? { claimTx: claim.transactionHash } : {}),
+  })
 
   /** The Swarm reference, or null when there is no uploader or the upload failed. Never throws. */
   async function keepEvidence(box: SealedBox, claimId: Hex): Promise<string | null> {
@@ -329,7 +338,7 @@ export function createDemoService(
       // The deadline passed with no key. Anyone can press finalize now.
       const rowId = addRow(seller, payment, { body: '', received: 0, outcome: lines, demo: kind })
       attach(rowId)
-      run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, rowId, lines }
+      run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, rowId, lines, ...ruledOn(payment, claim) }
       run.action = 'finalize'
       return
     }
@@ -353,7 +362,7 @@ export function createDemoService(
         sealed: record,
       })
       attach(rowId)
-      run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, key: found.key, rowId, lines }
+      run.open = { claimId: claim.claimId, ciphertext: box.ciphertext, key: found.key, rowId, lines, ...ruledOn(payment, claim) }
       run.action = 'prove'
       return
     }
@@ -499,6 +508,17 @@ export function createDemoService(
           action === 'finalize'
             ? await sealed.finalize(opened.claimId)
             : await sealed.prove(opened.claimId, opened.ciphertext, opened.key as Hex)
+        // finalize and prove only return once the contract emitted Silent or Fraud, so this is Arc's ruling.
+        try {
+          ports.verdict?.({
+            claimId: opened.claimId,
+            payTo: opened.payTo,
+            verdict: action === 'finalize' ? 'silent' : 'fraud',
+            ...(opened.claimTx ? { claimTx: opened.claimTx } : {}),
+          })
+        } catch (error) {
+          console.error('verdict write failed:', error instanceof Error ? error.message.split('\n')[0] : error)
+        }
         const line = paid > 0n ? (action === 'finalize' ? silentLine : fraudLine)(usdcAmount(paid)) : 'Nothing delivered. No second charge.'
         opened.lines.push(line)
         receipts.update(opened.rowId, { outcome: [...opened.lines] })
