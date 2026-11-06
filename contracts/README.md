@@ -76,6 +76,11 @@ Reads: `coverage(seller)` is `deposits - pendingWithdrawal`. `coverageFor(seller
 
 ## The economics
 
+On Arc mainnet on 2026-11-06, at 20.001 gwei (the transactions are in the [README](../README.md)):
+
+- **Answered:** the claim's fee was 0.005421 USDC, and the answer sent the buyer `ClaimGasRepaid` 0.00556 USDC in the same transaction.
+- **Silent:** `finalize` credited the buyer 0.01116 USDC: the 0.001 USDC price plus the claim's measured gas and `FOLLOW_UP_GAS` (230,000) for the calls after it, at the claim's gas price. The seller paid the same 0.01116 again into the burn.
+
 **A dispute leaves the buyer at or above zero, whatever the seller does, under three conditions.** The claim's gas price is at or below `MAX_GAS_PRICE` (100 gwei in both deployments). The buyer sends its later calls (`finalize`, `prove`, `withdrawClaimable`) at the claim's gas price or lower. And the seller's free deposit still covers the verdict when it lands (`coverageFor` was true before paying, and no earlier verdict drained the pool). [Using it well](#using-it-well) shows how vet402 keeps each claim inside them. A claim used about 271,000 gas, which costs more than a sub-cent price, so the contract counts the buyer's gas, at the gas price the claim actually paid, and makes the seller carry it.
 
 - **Silent or lying seller.** The verdict credits the buyer `value + disputeCost`: the price, the claim's measured gas, and `FOLLOW_UP_GAS` for the verdict and the withdrawal. The seller pays the same again into the burn.

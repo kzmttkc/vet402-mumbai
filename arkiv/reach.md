@@ -33,9 +33,13 @@ vet402's buyer is ERC-8004 agent 9907. At 2026-11-05 18:49 UTC its hold wallet h
 
 Every payment since 2026-11-05 17:49 UTC has a receipt on Arkiv that anyone reads on the receipts page, 11 of 11 at that time.
 
-The delivery check has used these entities once. On 2026-11-05 at 18:38 UTC vet402 paid Seller C. About 100 s later, with Seller C's short demo lifetime over, it refused Seller C and offered the next listing, BotPay, which I did not pay.
+The delivery check acts on these entities. On 2026-11-05 at 18:38 UTC vet402 paid Seller C. About 100 s later, with Seller C's short demo lifetime over, it refused Seller C and offered the next listing, BotPay.
 
 On the `arkiv2` branch the rulings are read before the local agent pays a catalog listing or Seller C, before a demo pays one of Sellers A to F, and before the public agent pays a catalog listing. A catalog listing's rulings are read by the payTo its listing names. On 2026-11-06 at 03:11 UTC, the read only check against the public endpoint, with no key, answered "Seller F: Arc ruled against this seller in the last 7 days. Not paid." for Seller F's address, nothing for an address with no ruling, and "Delivered recently." for Quicknode by name.
+
+Another buyer can use the rulings without vet402. On 2026-11-06 at 04:36 UTC I ran `isRuledAgainst(payTo, { writer: '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5' })` from `packages/sealed-delivery` in a separate script, as any x402 buyer would, with no key: `true` for each of the three sellers Arc ruled against (`0x2d861219…`, `0x1401bd7c…`, `0xb9a6f77d…`) and `false` for an address with no ruling. The 6 rulings it read were 4 Silent and 2 Fraud.
+
+Each dispute now lands on Arkiv as one transaction. The receipt of Seller A's dispute on 2026-11-06 at 04:25 UTC reads "Arkiv: 1 transaction, 3 entities" and "the evidence entity belongs to the buyer 0x24Ab…6ba7". At 04:26 UTC Arkiv held 25 evidence entities from the writer, 4 of them already owned by their buyers.
 
 ## After Mumbai
 

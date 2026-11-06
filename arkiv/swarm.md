@@ -37,14 +37,14 @@ When the upload goes to my own Bee node (`SWARM_API_URL` with `SWARM_POSTAGE_BAT
 
 ```
 Seller D
-Kept on Swarm until 2026-12-03
+Kept on Swarm until 2026-12-13
 ```
 
 The date is the batch's own: Bee works it out from the batch's balance at today's storage price, and a top up moves it later. A box that went through the public gateway shows the seller's name alone, because the gateway stamps with a batch of its own. The tests in `server/__tests__/swarmKeep.test.tsx` cover the pin, the date on the entity and both screens.
 
 ## The receipts page on Swarm under one fixed URL
 
-`scripts/swarm-publish.ts` builds `receipts.html` and the files it loads with relative paths, uploads them to my Bee node as one collection with `receipts.html` as its index, and pins it. A feed signed with `SWARM_FEED_KEY` then points at that collection, and the feed manifest is the page's fixed address: `bzz://<manifest>`, and the same page at `https://api.gateway.ethswarm.org/bzz/<manifest>/`. Each later run uploads the new page and moves the feed, and the address stays the same. The page reads Arkiv straight from the browser, so the copy on Swarm shows every receipt with no vet402 server running.
+`scripts/swarm-publish.ts` builds `receipts.html` and the files it loads with relative paths, uploads them to my Bee node as one collection with `receipts.html` as its index, and pins it. A feed signed with `SWARM_FEED_KEY` then points at that collection, and the feed manifest is the page's fixed address: `bzz://bffd1e6065a6b595d7540e202aac6d7bed3da69ba9abae3530af2eafafec6dd9`, and the same page at https://api.gateway.ethswarm.org/bzz/bffd1e6065a6b595d7540e202aac6d7bed3da69ba9abae3530af2eafafec6dd9/ (first published 2026-11-06 at 04:34 UTC, pinned, status 200 through the public gateway). Each later run uploads the new page and moves the feed, and the address stays the same. The page reads Arkiv straight from the browser, so the copy on Swarm shows every receipt with no vet402 server running.
 
 ```bash
 npx bun run scripts/swarm-publish.ts --dry-run
@@ -73,7 +73,15 @@ Seller A, 2026-11-06 01:42 UTC, on the live contract `0xE9C35ad2caF5D76CA5a5F61c
 | The claim on Arc | [`0x1269e948…`](https://explorer.testnet.arc.io/tx/0x1269e9487f9fbe1207f1791cfdc9963bf9fb20d93854722c9f794f79c597f94b), 01:42:03 UTC |
 | The key on Arc | [`0xa63eaf5a…`](https://explorer.testnet.arc.io/tx/0xa63eaf5ac05d8ebb22c1467ddc407984e92a7fe573d167f001ab403ac16117a4), `KeyRevealed` at 01:42:09 UTC |
 
-The public gateway returned the box with status 200 on 2026-11-06 at 02:23 UTC, although my node uploaded it. Its `claimId` and `contract` match the claim transaction, and its `chainId` is 5042002. The same query that README.md uses for receipts returns this entity with `vet402_evidence` in place of `vet402_receipt`.
+The public gateway returned the box with status 200 on 2026-11-06 at 02:23 UTC, although my node uploaded it. Its `claimId` and `contract` match the claim transaction, and its `chainId` is 5042002. Since 2026-11-06 around 04:00 UTC each evidence entity passes to the buyer that filed the claim, so a reader finds evidence by its creator. This query returns the entity of Seller A's dispute at 04:25 UTC with its owner, the buyer `0x24abb3e0…6ba7`, and its creator, vet402's writer:
+
+```bash
+curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_evidence'"'"') AND claim_id = str('"'"'0xce8ba849ddeab4b1ed2bc6fac4573f13c118e46dbadfcc848a6ea5c6662c6026'"'"') AND $creator = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"owner":true,"creator":true,"attributes":true}}]}'
+```
+
+It answered key `0x77e1831f5cd82387319e35417d145662bebc76bcf519d2c32900860d6265f003`, owner `0x24abb3e04a7b73426f30369ea6fc36f89d3d6ba7` and creator `0x4eea8eddcc608cbd8b3683f738a473923f2de4c5` on 2026-11-06 at 04:38 UTC.
 
 The boxes of the seven other disputes on this contract that day went up the same way: Seller F, E and D from 01:42 to 01:45 UTC, and Seller A, F, E and D from 01:59 to 02:02 UTC. My node lists an upload tag for each of the eight boxes, from 01:42:05 to 02:02:35 UTC, every chunk synced. The public gateway returned each box with status 200 at 02:23 UTC:
 
@@ -96,7 +104,7 @@ https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e65
 - **Wallet:** the node's own address on Gnosis Chain, `0x8620Bd0D7b9C1Cd5eCa426B639F2e38ba5FEdb94`. I funded it with xDAI and xBZZ through https://fund.ethswarm.org, and the node bought the batch itself.
 - **Batch ID:** `b6455d939e16dd59c5295e70b8123fe8412e224614eec41aeee0c3d3e5ecf9c0`, depth 17, amount 95011833600 per chunk, immutable.
 - **Purchase:** Gnosis Chain transaction `0xca6451b9425077d4a0a15fb588bd2c7a13fc83659dd823a71e59cbc9ac1cba12`, block 49129674, 2026-11-05 22:53 UTC, sent by the node's wallet to the Swarm postage stamp contract `0x45a1502382541cd610cc9068e88727426b696293`, which emitted `BatchCreated` for this batch.
-- **Lifetime:** `GET /stamps/<batch>` on my node answered `batchTTL` 2360122 s on 2026-11-05 at 23:24 UTC, so the batch lasts until about 2026-12-03 07:00 UTC unless I top it up.
+- **Lifetime:** `GET /stamps/<batch>` on my node answered `batchTTL` 2360122 s on 2026-11-05 at 23:24 UTC. The node's wallet topped the batch up on 2026-11-06 at 00:48 UTC (Gnosis transaction `0xd5e201d84908f7ccbc65e40e73b7400383e781020c4dddb8bccb3c21622b49e9`, `BatchTopUp`), and at 04:35 UTC the node answered amount 129774355200 and `batchTTL` 3204665 s, so the batch keeps its boxes until 2026-12-13.
 - **Code:** `SWARM_API_URL` names the Bee API and `SWARM_POSTAGE_BATCH_ID` the batch it stamps with (commit `2d6d920`). Without them the upload goes to the public gateway at `https://api.gateway.ethswarm.org` with bee-js's `NULL_STAMP` (64 zeros), and the gateway stamps it with a batch of its own.
 
 Which boxes went which way:
@@ -172,7 +180,7 @@ Swarm is required. There is no copy on the page to open instead, so when a sourc
 
 From 2:20.3: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order.
 
-The video was filmed on 2026-11-05 between 22:40 and 22:49 UTC, on the earlier contract `0xa1eff55d…`. The boxes of that run went through the public gateway with bee-js's `NULL_STAMP`. My batch was bought at 22:53 UTC, and every box after it went through my own Bee node with batch `b6455d93…`: the run of 23:11 to 23:16 UTC on the same contract, and both runs on the live contract on 2026-11-06. The table under "Postage stamp, wallet and node" lists all three.
+The scenes at 2:20.3 and 2:24.8 open Seller A's and Seller F's boxes from the 2026-11-06 runs on the live contract `0xE9C35ad2…`: Seller A's matches the seller's promise and Seller F's does not. Every box of those runs that vet402's own sellers sealed went up through my own Bee node with batch `b6455d93…`, listed above. An earlier take on 2026-11-05 between 22:40 and 22:49 UTC, before the batch was bought at 22:53 UTC, used the public gateway.
 
 ## What would make Swarm even better
 
