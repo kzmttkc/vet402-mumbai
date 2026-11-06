@@ -35,7 +35,7 @@ export function PublicApp() {
         </details>
         <ReceiptList receipts={receipts} onRetryAsNew={payNothing} busy={false} />
       </section>
-      <StudioWatermark />
+      <StudioWatermark inline />
     </main>
   )
 }

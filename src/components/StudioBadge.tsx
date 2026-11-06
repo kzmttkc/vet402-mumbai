@@ -6,16 +6,16 @@ const StudioLogo = () => (
   </svg>
 )
 
-// Studio watermark component - links back to Studio
-export const StudioWatermark = () => (
+// Studio watermark component - links back to Studio. Inline, it sits at the end of the page instead of over the content.
+export const StudioWatermark = ({ inline = false }: { inline?: boolean }) => (
   <a
     href="https://studio.arc.io/"
     target="_blank"
     rel="noopener noreferrer"
     style={{
-      position: 'fixed',
-      ...(FILM_MODE ? { top: '16px' } : { bottom: '16px' }),
-      right: '16px',
+      ...(inline
+        ? { position: 'static' as const, margin: '24px auto 8px', width: 'fit-content' }
+        : { position: 'fixed' as const, ...(FILM_MODE ? { top: '16px' } : { bottom: '16px' }), right: '16px' }),
       display: 'flex',
       alignItems: 'center',
       gap: '6px',
