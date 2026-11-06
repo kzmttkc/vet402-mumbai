@@ -6,7 +6,9 @@ import {
   createPublicClient,
   createWalletClient,
   encodeAbiParameters,
+  encodeFunctionData,
   erc20Abi,
+  hexToString,
   http,
   isAddress,
   keccak256,
@@ -14,13 +16,14 @@ import {
   parseAbiItem,
   parseEventLogs,
   recoverTypedDataAddress,
+  stringToHex,
 } from 'viem'
 import type { Address, Chain, Hex, TransactionReceipt } from 'viem'
 import { arcTestnet } from 'viem/chains'
 import { privateKeyToAccount } from 'viem/accounts'
 import { ARC_USDC } from '../src/existing/arc-gateway'
 import { sealResponse } from '../src/lib/sealed'
-import { requireChain } from '../src/onchain-facts'
+import { getChain, getProtocolContractByName, requireChain } from '../src/onchain-facts'
 import type { PreparedPayment } from './gatewayPay'
 import { createSeller } from './sellers'
 import type { SellerFacilitator, SellerSealing } from './sellers'
@@ -77,6 +80,17 @@ export const SEALED_ABI = parseAbi([
   'error NothingToWithdraw()',
 ])
 
+/** Arc's predeployed Memo contract. It runs a call as the wallet that sent it and logs the memo right after the call. */
+export const ARC_MEMO: Address = '0x5294E9927c3306DcBaDb03fe70b92e01cCede505'
+
+export const MEMO_ABI = parseAbi([
+  'function memo(address target, bytes data, bytes32 memoId, bytes memoData)',
+  'event Memo(address indexed sender, address indexed target, bytes32 callDataHash, bytes32 indexed memoId, bytes memo, uint256 memoIndex)',
+])
+
+/** Circle Gateway's wallet contract: depositFor credits the depositor's Gateway balance. */
+export const GATEWAY_WALLET_ABI = parseAbi(['function depositFor(address token, address depositor, uint256 value)'])
+
 /**
  * Claimed, with and without the reserved amount, because the contract is dropping it. Nothing here
  * reads that amount: only the claim id, nonce, seller and deadline, which both shapes carry.
@@ -116,6 +130,10 @@ export const FINALIZE_GAS = 160_000n
 export const WITHDRAW_GAS = 80_000n
 /** prove() decrypts in a loop, so its bound leaves room for a small cached answer. */
 export const PROVE_GAS = 200_000n
+/** What the Memo wrapper adds to a claim. On Arc testnet it added 18,168 to a USDC transfer with an empty memo. */
+export const MEMO_GAS = 40_000n
+/** A Gateway deposit. On Arc testnet one used 87,551. */
+export const GATEWAY_DEPOSIT_GAS = 120_000n
 /** Gas prices move, so every estimate keeps a cushion. */
 const FEE_CUSHION = 2n
 /** Gas is counted in 18 decimals, USDC in 6. */
@@ -206,6 +224,70 @@ export function paymentAuthOf(headerValue: string): { auth: PaymentAuth; signatu
   }
 }
 
+/** What a claim's memo points to, beside the claim id that is its memoId. */
+export interface ClaimLinks {
+  /** Circle Gateway's id for the transfer this claim is about. */
+  gatewayTransferId?: string
+  /** The Swarm reference of the evidence box, known before the upload because Swarm addresses data by its content. */
+  swarmRef?: string
+}
+
+const TRANSFER_ID = /^[0-9A-Za-z-]{1,64}$/
+const SWARM_REF = /^[0-9a-f]{64}$/
+
+/** Only well formed links go on the chain. */
+const cleanLinks = (links: ClaimLinks): ClaimLinks => ({
+  ...(links.gatewayTransferId && TRANSFER_ID.test(links.gatewayTransferId) ? { gatewayTransferId: links.gatewayTransferId } : {}),
+  ...(links.swarmRef && SWARM_REF.test(links.swarmRef) ? { swarmRef: links.swarmRef } : {}),
+})
+
+/**
+ * The memo a claim carries on Arc. The memoId is the claim id, so an indexer finds the claim by it, and the memo is
+ * JSON an explorer shows as text: the Gateway transfer, the Swarm box, and the Arkiv evidence entity that names this
+ * claim id. Null when there is nothing to point to.
+ */
+export function claimMemoOf(claimId: Hex, links: ClaimLinks): { memoId: Hex; memoData: Hex } | null {
+  const clean = cleanLinks(links)
+  if (!clean.gatewayTransferId && !clean.swarmRef) return null
+  const body = {
+    app: 'vet402',
+    claimId,
+    ...(clean.gatewayTransferId ? { gatewayTransferId: clean.gatewayTransferId } : {}),
+    ...(clean.swarmRef ? { swarmRef: clean.swarmRef, arkiv: { kind: 'evidence', claim_id: claimId } } : {}),
+  }
+  return { memoId: claimId, memoData: stringToHex(JSON.stringify(body)) }
+}
+
+/** Reads a claim memo back. Null for a memo vet402 did not write. */
+export function readClaimMemo(memoData: Hex): (ClaimLinks & { claimId: Hex }) | null {
+  try {
+    const body = JSON.parse(hexToString(memoData)) as Record<string, unknown>
+    if (body.app !== 'vet402' || typeof body.claimId !== 'string') return null
+    return {
+      claimId: body.claimId as Hex,
+      ...cleanLinks({
+        gatewayTransferId: typeof body.gatewayTransferId === 'string' ? body.gatewayTransferId : undefined,
+        swarmRef: typeof body.swarmRef === 'string' ? body.swarmRef : undefined,
+      }),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The reference Swarm gives the evidence box, worked out before the upload: the same bytes the uploader sends, hashed
+ * into Swarm's chunk tree. Swarm is loaded here only, so the SDK that shares this file needs no Swarm.
+ */
+export async function evidenceRefOf(box: SealedBox, claimId: Hex, contract: string, chainId: number): Promise<string> {
+  const [{ ChunkSplitter }, { createEvidenceUploader }] = await Promise.all([import('@ethersphere/bee-js'), import('./swarm')])
+  const local = {
+    upload: async (data: Uint8Array) => (await ChunkSplitter.root(data)).hash().toHex(),
+    download: () => Promise.reject(new Error('Only the reference is worked out here')),
+  }
+  return createEvidenceUploader({ swarm: local, contract, chainId })(box, claimId)
+}
+
 export type SealedClient = ReturnType<typeof createSealedDelivery>
 
 export function createSealedDelivery({ address, net = ARC_NET }: { address: Address; net?: SealedNet }) {
@@ -214,6 +296,11 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
   const publicClient = createPublicClient({ chain: net.chain, transport, pollingInterval: net.pollingMs ?? 1000 })
   const usdc = ARC_USDC as Address
   const domain = { name: 'SealedDelivery', version: '1', chainId: net.chain.id, verifyingContract: address } as const
+  // Circle Gateway's wallet on this chain, testnet or mainnet. A chain vet402 does not know has none.
+  const known = getChain(net.chain.id)
+  const gatewayWallet = known
+    ? ((getProtocolContractByName('GatewayWallet', known.isTestnet ? 'testnet' : 'mainnet')?.address as Address | undefined) ?? null)
+    : null
 
   const walletOf = (key: Hex) =>
     createWalletClient({ account: privateKeyToAccount(key), chain: net.chain, transport, pollingInterval: net.pollingMs ?? 1000 })
@@ -223,6 +310,17 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS })
     if (receipt.status !== 'success') throw new Error('The transaction reverted')
     return receipt
+  }
+
+  /** True when the contract is there. Only a read that answered is kept, so a failed read is tried again. */
+  const deployed = new Map<Address, boolean>()
+  async function hasCode(at: Address): Promise<boolean> {
+    const cached = deployed.get(at)
+    if (cached !== undefined) return cached
+    const code = await publicClient.getCode({ address: at })
+    const found = code !== undefined && code !== '0x'
+    deployed.set(at, found)
+    return found
   }
 
   const send = async (
@@ -241,6 +339,12 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
 
   const client = {
     address,
+    chainId: net.chain.id,
+
+    /** True where Arc's Memo contract is deployed. A local chain has none, and a claim there goes straight to the contract. */
+    memoReady: (): Promise<boolean> => hasCode(ARC_MEMO).catch(() => false),
+    /** True where Circle Gateway's wallet contract is deployed. */
+    gatewayReady: (): Promise<boolean> => (gatewayWallet ? hasCode(gatewayWallet).catch(() => false) : Promise.resolve(false)),
 
     // Reads.
     coverageFor: (seller: Address, value: bigint) =>
@@ -340,9 +444,29 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
     },
 
     // Writes.
-    async claim(buyerKey: Hex, box: SealedBox, auth: PaymentAuth, buyerSignature: Hex) {
+    /**
+     * With links, and where Arc has its Memo contract, the claim goes through Memo: the call still comes from the
+     * buyer's wallet, and the same transaction logs the memo. A memo that cannot be sent leaves a plain claim.
+     */
+    async claim(buyerKey: Hex, box: SealedBox, auth: PaymentAuth, buyerSignature: Hex, links?: ClaimLinks) {
       const promise = boxToPromise(box)
-      const receipt = await send(buyerKey, 'claim', [promise, box.sellerSignature, auth, buyerSignature])
+      const args = [promise, box.sellerSignature, auth, buyerSignature] as const
+      const claimId = claimIdOf(promise.seller, promise.buyer, promise.paymentNonce)
+      const memo = links && (await client.memoReady()) ? claimMemoOf(claimId, links) : null
+      let hash: Hex | null = null
+      if (memo) {
+        try {
+          hash = await walletOf(buyerKey).writeContract({
+            address: ARC_MEMO,
+            abi: MEMO_ABI,
+            functionName: 'memo',
+            args: [address, encodeFunctionData({ abi: SEALED_ABI, functionName: 'claim', args }), memo.memoId, memo.memoData],
+          })
+        } catch (error) {
+          console.error('claim memo not sent, claiming without it:', messageOf(error))
+        }
+      }
+      const receipt = hash ? await mined(hash) : await send(buyerKey, 'claim', [...args])
       const [event] = parseEventLogs({ abi: CLAIMED_EVENTS, logs: receipt.logs })
       if (!event) throw new Error('The claim left no event')
       return {
@@ -351,6 +475,7 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
         fromBlock: receipt.blockNumber,
         gasUsed: receipt.gasUsed,
         transactionHash: receipt.transactionHash,
+        memo: hash && memo && links ? cleanLinks(links) : null,
       }
     },
 
@@ -431,6 +556,29 @@ export function createSealedDelivery({ address, net = ARC_NET }: { address: Addr
         }),
       )
       await send(sellerKey, 'deposit', [amount])
+    },
+
+    /**
+     * Circle Gateway's depositFor: USDC from this wallet becomes the depositor's Gateway balance. Approves exactly the
+     * amount first when the allowance is short. Null where there is no Gateway, and nothing is sent.
+     */
+    async depositToGateway(fromKey: Hex, depositor: Address, amount: bigint): Promise<Hex | null> {
+      const gateway = gatewayWallet
+      if (amount <= 0n || !gateway || !(await client.gatewayReady())) return null
+      const wallet = walletOf(fromKey)
+      const allowance = await publicClient.readContract({
+        address: usdc,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [wallet.account.address, gateway],
+      })
+      if (allowance < amount) {
+        await mined(await wallet.writeContract({ address: usdc, abi: erc20Abi, functionName: 'approve', args: [gateway, amount] }))
+      }
+      const receipt = await mined(
+        await wallet.writeContract({ address: gateway, abi: GATEWAY_WALLET_ABI, functionName: 'depositFor', args: [usdc, depositor, amount] }),
+      )
+      return receipt.transactionHash
     },
 
     async transferUsdc(fromKey: Hex, to: Address, amount: bigint): Promise<void> {
@@ -642,8 +790,15 @@ export interface SealedPorts {
   readBox(body: string, payment: PreparedPayment): Promise<{ kind: 'box'; box: SealedBox } | { kind: 'plain' } | { kind: 'bad' }>
   /** Asks for the key with the same payment. A dropped connection comes back as null. */
   requestKey(sellerUrl: string, payment: PreparedPayment): Promise<Hex | null>
-  /** Sends the claim from the hold, first adding what it needs from the buyer. */
-  claim(box: SealedBox, payment: PreparedPayment): Promise<{ claimId: Hex; deadline: bigint; fromBlock: bigint; transactionHash?: Hex }>
+  /**
+   * Sends the claim from the hold, first adding what it needs from the buyer. With a request, the claim carries a memo
+   * on Arc that points to the Gateway transfer and, when the box goes to Swarm, to its Swarm reference.
+   */
+  claim(
+    box: SealedBox,
+    payment: PreparedPayment,
+    request?: ClaimRequest,
+  ): Promise<{ claimId: Hex; deadline: bigint; fromBlock: bigint; transactionHash?: Hex; memo?: ClaimLinks | null }>
   /** The transaction is there for a link to the explorer. Nothing decides on it. */
   readKey(claimId: Hex, fromBlock: bigint): Promise<{ key: Hex; block: bigint; transactionHash?: Hex } | null>
   /** What the answer repaid the buyer for its claim gas. Null when the answer repaid nothing. Optional, so a fake may leave it out. */
@@ -655,6 +810,19 @@ export interface SealedPorts {
   prove(claimId: Hex, ciphertext: Hex, key: Hex): Promise<bigint>
   /** Moves what was credited back to the hold. */
   withdraw(): Promise<bigint>
+  /**
+   * Puts USDC the hold wallet got back into the hold's Gateway balance with Circle Gateway's depositFor, so the next
+   * payment can spend it. Returns what went back: 0 where there is no Gateway. Optional, so a fake may leave it out.
+   */
+  backToGateway?(amount: bigint): Promise<bigint>
+}
+
+/** What the demo knows about a claim before it is sent. */
+export interface ClaimRequest {
+  /** Gateway's id for the settled transfer, from the seller's PAYMENT-RESPONSE. */
+  gatewayTransferId?: string
+  /** True when the box will be uploaded to Swarm, so its reference can go in the memo. */
+  keepsEvidence?: boolean
 }
 
 export function createSealedPorts({
@@ -715,10 +883,23 @@ export function createSealedPorts({
       }
     },
 
-    async claim(box, payment) {
-      await fill(CLAIM_GAS)
+    async claim(box, payment, request) {
       const { auth, signature } = paymentAuthOf(payment.header.value)
-      return client.claim(holdKey, box, auth, signature)
+      const memo = request ? await client.memoReady() : false
+      const claimId = claimIdOf(box.promise.seller, box.promise.buyer, box.promise.paymentNonce)
+      const links: ClaimLinks = {}
+      if (memo && request?.gatewayTransferId) links.gatewayTransferId = request.gatewayTransferId
+      if (memo && request?.keepsEvidence) {
+        // The reference is only a pointer. Without it the claim still goes out.
+        try {
+          links.swarmRef = await evidenceRefOf(box, claimId, client.address, client.chainId)
+        } catch (error) {
+          console.error('could not work out the Swarm reference:', messageOf(error))
+        }
+      }
+      const withMemo = claimMemoOf(claimId, links) !== null
+      await fill(withMemo ? CLAIM_GAS + MEMO_GAS : CLAIM_GAS)
+      return client.claim(holdKey, box, auth, signature, withMemo ? links : undefined)
     },
 
     readKey: (claimId, fromBlock) => client.readKeyRevealed(claimId, fromBlock),
@@ -741,8 +922,18 @@ export function createSealedPorts({
     },
 
     async withdraw() {
-      await fill(WITHDRAW_GAS)
+      // The gas for putting the credit back into Gateway comes in now, so all of it can go back.
+      await fill(WITHDRAW_GAS + ((await client.gatewayReady()) ? APPROVE_GAS + GATEWAY_DEPOSIT_GAS : 0n))
       return client.withdrawClaimable(holdKey)
+    },
+
+    async backToGateway(amount) {
+      if (amount <= 0n || !(await client.gatewayReady())) return 0n
+      // The deposit's own gas stays in the wallet. When the wallet holds no more than the refund, the gas comes out of it.
+      const [cost, balance] = await Promise.all([client.gasCost(APPROVE_GAS + GATEWAY_DEPOSIT_GAS), client.usdcBalance(hold)])
+      const back = balance - cost < amount ? balance - cost : amount
+      if (back <= 0n) return 0n
+      return (await client.depositToGateway(holdKey, hold, back)) ? back : 0n
     },
   }
 }

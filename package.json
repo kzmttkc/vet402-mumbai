@@ -15,13 +15,6 @@
   },
   "dependencies": {
     "@arkiv-network/sdk": "1.0.1",
-    "@circle-fin/adapter-viem-v2": "^1.19.2",
-    "@circle-fin/app-kit": "^1.18.0",
-    "@circle-fin/developer-controlled-wallets": "^10.8.1",
-    "@circle-fin/modular-wallets-core": "^1.0.16",
-    "@circle-fin/smart-contract-platform": "^10.8.1",
-    "@circle-fin/user-controlled-wallets": "^10.8.1",
-    "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
     "@circle-fin/x402-batching": "^4.0.0",
     "@ethersphere/bee-js": "13.2.0",
     "@openzeppelin/contracts": "5.6.1",

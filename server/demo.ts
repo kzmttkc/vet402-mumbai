@@ -57,6 +57,25 @@ const fraudLines = (paid: bigint, price: bigint) => [
   `The answer wasn't what the seller promised. ${gotBack(paid, price)}`,
   detail(`The answer did not match the seller's promise. ${paidBack(paid, price)}`),
 ]
+/** Money a dispute won back, once Circle Gateway's depositFor has put it in the hold's Gateway balance. */
+export const BACK_IN_GATEWAY = "The refund is back in your agent's Gateway balance, ready for the next payment."
+const backLines = (amount: bigint) => [
+  BACK_IN_GATEWAY,
+  detail(`${usdcAmount(amount)} went back into the hold's Circle Gateway balance through depositFor.`),
+]
+
+/** Gateway's id for the settled transfer, from the seller's PAYMENT-RESPONSE. Undefined when there is none. */
+export function settledTransferOf(res: Response): string | undefined {
+  const header = res.headers.get('PAYMENT-RESPONSE')
+  if (!header) return undefined
+  try {
+    const settled = JSON.parse(Buffer.from(header, 'base64').toString('utf8')) as { transaction?: unknown }
+    return typeof settled.transaction === 'string' && settled.transaction ? settled.transaction : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** From the answer's ClaimGasRepaid. A transfer that failed stays on Arc as the buyer's credit. */
 const claimGasLines = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
   sent
@@ -174,6 +193,18 @@ export function createDemoService(
     price: payment.amount,
     ...(claim.transactionHash ? { claimTx: claim.transactionHash } : {}),
   })
+
+  /** Puts money won back into the hold's Gateway balance and returns its lines. A failure only logs and adds none. */
+  async function backToGateway(sealed: SealedPorts, amount: bigint): Promise<string[]> {
+    if (!sealed.backToGateway || amount <= 0n) return []
+    try {
+      const back = await sealed.backToGateway(amount)
+      return back > 0n ? backLines(back) : []
+    } catch (error) {
+      console.error('gateway deposit failed:', error instanceof Error ? error.message.split('\n')[0] : error)
+      return []
+    }
+  }
 
   /** The Swarm reference, or null when there is no uploader or the upload failed. Never throws. */
   async function keepEvidence(box: SealedBox, claimId: Hex): Promise<string | null> {
@@ -325,6 +356,7 @@ export function createDemoService(
       }
     }
     if (!first.ok) throw new DemoError('REFUSED')
+    const gatewayTransferId = settledTransferOf(first)
     const body = await first.text()
 
     const read = await sealed.readBox(body, payment)
@@ -362,7 +394,11 @@ export function createDemoService(
     mark(run, 'claim')
     let claim: Awaited<ReturnType<SealedPorts['claim']>>
     try {
-      claim = await sealed.claim(box, payment)
+      // The claim's memo on Arc points to the Gateway transfer and the box's place on Swarm.
+      claim = await sealed.claim(box, payment, {
+        ...(gatewayTransferId ? { gatewayTransferId } : {}),
+        keepsEvidence: ports.evidence !== undefined,
+      })
     } catch (error) {
       console.error('claim failed:', error instanceof Error ? error.message.split('\n')[0] : error)
       await nothingMore(seller, payment, kind)
@@ -372,6 +408,9 @@ export function createDemoService(
     const evidence = keepEvidence(box, claim.claimId)
     const attach = (rowId: string) =>
       void evidence.then((swarmRef) => {
+        if (swarmRef && claim.memo?.swarmRef && swarmRef !== claim.memo.swarmRef) {
+          console.error(`swarm reference ${swarmRef} is not the one in the claim memo, ${claim.memo.swarmRef}`)
+        }
         if (swarmRef) receipts.update(rowId, { evidence: { claimId: claim.claimId, swarmRef } })
       })
 
@@ -391,6 +430,8 @@ export function createDemoService(
     // The answer that put the key on Arc also repaid the claim's gas. The line is there only when Arc says so.
     const repaid = await readClaimGasRepaid(sealed, claim)
     const repaidLines = repaid && repaid.amount > 0n ? claimGasLines(repaid) : []
+    // A repayment that reached the hold wallet goes back into Gateway. One that stayed a credit waits for withdraw.
+    const sentBack = repaid?.sent ? await backToGateway(sealed, repaid.amount) : []
     const result = open(box, found.key)
     mark(run, 'opened')
     const record: SealedRecord = {
@@ -401,7 +442,7 @@ export function createDemoService(
     }
 
     if (!result?.matches) {
-      lines.push(...repaidLines)
+      lines.push(...repaidLines, ...sentBack)
       const rowId = addRow(seller, payment, {
         body: result?.text ?? '',
         received: 1,
@@ -419,7 +460,7 @@ export function createDemoService(
     const id = addRow(seller, payment, {
       body: result.text,
       received: 1,
-      outcome: [...lines, KEY_FROM_CHAIN, ...repaidLines],
+      outcome: [...lines, KEY_FROM_CHAIN, ...repaidLines, ...sentBack],
       demo: kind,
       sealed: record,
     })
@@ -430,6 +471,7 @@ export function createDemoService(
         ...lines,
         KEY_FROM_CHAIN,
         ...repaidLines,
+        ...sentBack,
         confirmed ? 'Circle record: 1 transfer for this payment.' : 'Circle record: not confirmed yet.',
       ],
     })
@@ -550,8 +592,13 @@ export function createDemoService(
     run.acting = true
     try {
       if (action === 'withdraw') {
-        await sealed.withdraw()
+        const withdrawn = await sealed.withdraw()
         run.action = null
+        const back = await backToGateway(sealed, withdrawn)
+        if (back.length > 0) {
+          opened.lines.push(...back)
+          receipts.update(opened.rowId, { outcome: [...opened.lines] })
+        }
       } else {
         const paid =
           action === 'finalize'

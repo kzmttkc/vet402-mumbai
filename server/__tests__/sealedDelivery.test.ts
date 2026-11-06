@@ -6,7 +6,7 @@ import { keccak256 } from 'viem'
 import type { Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
-import { createDemoService, DemoError } from '../demo'
+import { BACK_IN_GATEWAY, createDemoService, DemoError, settledTransferOf } from '../demo'
 import type { DemoPorts, DemoRunView } from '../demo'
 import { preparePayment } from '../gatewayPay'
 import type { PreparedPayment } from '../gatewayPay'
@@ -347,7 +347,7 @@ describe('the demo with a contract', () => {
     sellerSignature: '0x',
   }
 
-  function setup(over: Partial<SealedPorts> = {}, confirmed = true) {
+  function setup(over: Partial<SealedPorts> = {}, confirmed = true, extra: { settled?: string; evidence?: boolean } = {}) {
     const log = { claims: 0, finalize: 0, prove: 0, withdraw: 0, sends: 0 }
     const sealedPorts: SealedPorts = {
       coverageFor: () => Promise.resolve(true),
@@ -386,13 +386,16 @@ describe('the demo with a contract', () => {
           header: { name: 'PAYMENT-SIGNATURE', value: 'h' },
           send: () => {
             log.sends++
-            return Promise.resolve(new Response('{"sealed":{}}'))
+            return Promise.resolve(
+              new Response('{"sealed":{}}', extra.settled ? { headers: { 'PAYMENT-RESPONSE': extra.settled } } : {}),
+            )
           },
         }),
       confirmOnePayment: () => Promise.resolve(confirmed),
       countPayments: () => Promise.resolve(0),
       sealed: sealedPorts,
       sealedPollMs: 1,
+      ...(extra.evidence ? { evidence: () => Promise.resolve('ab'.repeat(32)) } : {}),
     }
     const seller = { name: 'Seller A', url: 'http://s/a', address: PAYER }
     const receipts = memoryStore()
@@ -666,6 +669,80 @@ describe('the demo with a contract', () => {
       for (const line of plain) expect(line).not.toMatch(/gas|contract|claim/i)
       expect(details.join(' ')).toMatch(/gas|contract/i)
     }
+  })
+
+  // Arc Memo: the claim names what the demo knew before it, the Gateway transfer and the box it keeps on Swarm.
+  test('the claim is sent with the Gateway transfer from PAYMENT-RESPONSE, and asks for the Swarm reference only with an uploader', async () => {
+    const TRANSFER = '1f0c6a52-6a4e-4c41-9d3e-0a4d6b0f1c2e'
+    const settled = Buffer.from(JSON.stringify({ success: true, transaction: TRANSFER, network: 'eip155:5042002' })).toString('base64')
+    const requests: unknown[] = []
+    const claim: SealedPorts['claim'] = (_box, _payment, request) => {
+      requests.push(request)
+      return Promise.resolve({ claimId: CLAIM_ID, deadline: 100n, fromBlock: 1n })
+    }
+    await run(setup({ claim }, true, { settled, evidence: true }).demos, 'a')
+    await run(setup({ claim }).demos, 'a')
+    expect(requests).toEqual([{ gatewayTransferId: TRANSFER, keepsEvidence: true }, { keepsEvidence: false }])
+    expect(settledTransferOf(new Response('', { headers: { 'PAYMENT-RESPONSE': 'not base64 json' } }))).toBeUndefined()
+  })
+
+  // Circle Gateway: money a dispute won back goes into the hold's Gateway balance, and the receipt says so.
+  test('withdraw: the refund goes back into the Gateway balance, and the receipt says so word for word', async () => {
+    const back: bigint[] = []
+    const { demos, receipts } = setup({
+      readKey: () => Promise.resolve(null),
+      chainTime: () => Promise.resolve(100n),
+      finalize: () => Promise.resolve(13268n),
+      withdraw: () => Promise.resolve(13268n),
+      backToGateway: (amount) => {
+        back.push(amount)
+        return Promise.resolve(amount)
+      },
+    })
+    const finished = await run(demos, 'e')
+    await demos.act(finished.id, 'finalize')
+    expect((await demos.act(finished.id, 'withdraw')).action).toBeNull()
+    expect(back).toEqual([13268n])
+    expect(receipts.list()[0]?.outcome).toEqual([
+      "The seller didn't deliver. You got 0.013268 USDC back: your 0.001 USDC and your costs.",
+      'Detail: The seller stayed silent. Its deposit paid 0.013268 USDC back: the 0.001 USDC price and 0.012268 USDC for the gas of the dispute.',
+      "The refund is back in your agent's Gateway balance, ready for the next payment.",
+      "Detail: 0.013268 USDC went back into the hold's Circle Gateway balance through depositFor.",
+    ])
+  })
+
+  test('answer ending: a repayment that reached the wallet goes back into Gateway, word for word, and a credit waits', async () => {
+    const back: bigint[] = []
+    const backToGateway = (amount: bigint) => {
+      back.push(amount)
+      return Promise.resolve(amount - 1000n)
+    }
+    const sent = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }), backToGateway })
+    await run(sent.demos, 'a')
+    expect(sent.receipts.list()[0]?.outcome).toEqual([
+      'Charged once. Key read from Arc.',
+      'The seller sent the key late and paid back the 0.005698 USDC it cost you to ask for it.',
+      'Detail: Claim gas repaid by the seller: 0.005698 USDC.',
+      "The refund is back in your agent's Gateway balance, ready for the next payment.",
+      "Detail: 0.004698 USDC went back into the hold's Circle Gateway balance through depositFor.",
+      'Circle record: 1 transfer for this payment.',
+    ])
+    const credit = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: false }), backToGateway })
+    await run(credit.demos, 'a')
+    expect(back).toEqual([5698n])
+    expect(splitLines(credit.receipts.list()[0]?.outcome ?? []).plain).not.toContain(BACK_IN_GATEWAY)
+  })
+
+  test('a Gateway deposit that fails or sends nothing adds no line, and the run still ends', async () => {
+    for (const backToGateway of [() => Promise.reject(new Error('rpc down')), () => Promise.resolve(0n)]) {
+      const { demos, receipts } = setup({ claimGasRepaid: () => Promise.resolve({ amount: 5698n, sent: true }), backToGateway })
+      expect((await run(demos, 'a')).state).toBe('done')
+      expect(receipts.list()[0]?.outcome).not.toContain(BACK_IN_GATEWAY)
+    }
+  })
+
+  test('the Gateway line reads without gas, contract or claim', () => {
+    expect(BACK_IN_GATEWAY).not.toMatch(/gas|contract|claim/i)
   })
 
   test('a button that does not apply is refused', async () => {

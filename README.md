@@ -10,6 +10,8 @@ An agent that pays for an API today has no recourse when the answer never comes.
 
 vet402 solves it on Arc. The answer arrives locked, and the key comes on a separate request. When the key goes missing, vet402 sends one claim to SealedDelivery, and the seller has 60 seconds to put the key on chain. An answer repays the buyer the gas of its claim from the seller's deposit, in the same transaction. Silence or a swapped answer costs the deposit twice the price plus the buyer's gas for the whole dispute, counted at the gas price the claim paid: half to the buyer, the rest burned, so a seller that pays itself through a second address loses half. The buyer comes out whole whenever the claim's gas price is at most 100 gwei, its later calls use the claim's gas price, and the deposit covers the verdict, which vet402 checks with `coverageFor` before it pays.
 
+vet402 sends each claim through Arc's Memo contract, so the claim transaction on the explorer names the Circle Gateway transfer it disputes, the Swarm reference of the box, and the claim id the Arkiv evidence entity carries. What a dispute wins back goes into the agent's Gateway balance through Circle Gateway's `depositFor`, ready for the next payment.
+
 Proof on Arc testnet, 2026-11-06 01:59 to 02:04 UTC, on the final contract, each at a price of 0.001 USDC. Sellers A, D, E and F are demo sellers, each built to take one path: answer, stay silent, send a wrong key, or swap the answer, so every outcome of the contract is on Arc to check. Each deposited 0.5 USDC at 01:37 UTC. The "line stayed up" row is from the run of 01:42 UTC on the same contract. All rows, the run of 01:42 to 01:46 UTC, and the runs on earlier versions are in [DEMO.md](DEMO.md).
 
 | Seller | What it did | Result | Onchain proof |
