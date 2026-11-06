@@ -55,7 +55,7 @@ export function TryDispute() {
         {running && <Loader2 size={16} className="animate-spin" aria-hidden />}
         {running ? 'Running on Arc' : 'Start a dispute'}
       </button>
-      <p className="mt-2 text-xs text-[var(--muted)]">It takes about 10 to 20 seconds. The payment is test money.</p>
+      <p className="mt-2 text-xs text-[var(--muted)]">It takes about 5 seconds. The payment is test money.</p>
 
       {steps.length > 0 && (
         <ol className="mt-4 space-y-1" aria-live="polite">
