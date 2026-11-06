@@ -13,7 +13,7 @@ I am the builder of vet402, and I used Arkiv (`@arkiv-network/sdk@1.0.1` on Rabd
 ## What would make it even better
 
 1. **The access key in a header.** On 2026-11-05 before 16:24 UTC I called Rabdi with a wrong access key on purpose. The 401 error's `message` held the full RPC URL with the key in its path, and `shortMessage` held the clean text. To reproduce, build the chain with `rabdi({ accessKey: "wrong" })`, make any read, and print `error.message`. vet402 logs only `shortMessage`, with known secrets removed. Carrying the key in a header would keep it out of every app's logs at once.
-   To see it in one command: `npx bun run scripts/arkiv-401.ts`. With a made-up key, on 2026-11-06 at 08:15 UTC it printed `error.message holds the key: true`, `shortMessage holds the key: false`, and this masked message:
+   To see it in one command: `npx bun run scripts/arkiv-401.ts`. With a made-up key, on 2026-11-06 at 08:04 UTC it printed `error.message holds the key: true`, `shortMessage holds the key: false`, and this masked message:
    ```
    HTTP request failed.
 
