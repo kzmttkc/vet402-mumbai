@@ -9,6 +9,7 @@ export const ARC_TX = 'https://explorer.testnet.arc.io/tx/'
 export const NOT_ADDRESS_LINE = "Paste a seller's 0x address."
 export const UNREAD_LINE = 'Could not read Arkiv. Try again.'
 export const CLEAR_LINE = 'No ruling from Arc against this seller. Checked on Arkiv just now.'
+export const arcCheckedLine = (verdict: string) => `Checked on Arc: the ${verdictLabel(verdict)} event for this claim is on chain.`
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 
@@ -17,8 +18,12 @@ export interface RawRuling {
   verdict: string
   claimId: string
   claimTx: string | null
+  /** The entity's key, so its contract and chain can be read for the check on Arc. */
+  key?: `0x${string}`
   /** The block the ruling was written in. */
   createdAt: bigint
+  /** True when Arc holds the contract's Silent or Fraud event for this claim. */
+  onArc?: boolean
 }
 
 export interface RulingsRead {
@@ -40,6 +45,8 @@ export type SellerAnswer =
       claimUrl: string | null
       /** The UTC date vet402 pays this seller again, while the latest ruling is under 7 days old. */
       notPaidUntil: string | null
+      /** Present when the latest ruling's event was found on Arc. */
+      checkedOnArc?: true
     }
 
 export const verdictLabel = (verdict: string) => (verdict ? verdict[0]!.toUpperCase() + verdict.slice(1) : verdict)
@@ -52,9 +59,12 @@ export function rulingLine(answer: Extract<SellerAnswer, { kind: 'ruled' }>): st
 
 export const notPaidLine = (date: string) => `vet402 does not pay this seller until ${date}.`
 
+export const latestRuling = (rulings: RawRuling[]) =>
+  rulings.reduce<RawRuling | null>((a, b) => (a && a.createdAt >= b.createdAt ? a : b), null)
+
 /** The latest ruling decides the answer. An older one ends its 7 days sooner. */
 export function answerFrom({ rulings, timing }: RulingsRead): SellerAnswer {
-  const latest = rulings.reduce<RawRuling | null>((a, b) => (a && a.createdAt >= b.createdAt ? a : b), null)
+  const latest = latestRuling(rulings)
   if (!latest) return { kind: 'clear' }
   const age = (timing.currentBlock - latest.createdAt) * BigInt(timing.blockDuration)
   const endBlock = latest.createdAt + BigInt(Math.ceil(RULING_SECONDS / timing.blockDuration))
@@ -65,6 +75,7 @@ export function answerFrom({ rulings, timing }: RulingsRead): SellerAnswer {
     claimId: latest.claimId,
     claimUrl: latest.claimTx ? `${ARC_TX}${latest.claimTx}` : null,
     notPaidUntil: age < BigInt(RULING_SECONDS) ? blockToDate(endBlock, timing) : null,
+    ...(latest.onArc ? { checkedOnArc: true as const } : {}),
   }
 }
 

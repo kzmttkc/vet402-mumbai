@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { CLEAR_LINE, checkSeller, NOT_ADDRESS_LINE, notPaidLine, shortClaim, UNREAD_LINE, verdictLabel } from './sellerCheck'
+import { arcCheckedLine, CLEAR_LINE, checkSeller, NOT_ADDRESS_LINE, notPaidLine, shortClaim, UNREAD_LINE, verdictLabel } from './sellerCheck'
 import type { RulingsRead, SellerAnswer } from './sellerCheck'
 
 /** What one check says, in the receipts page's words. */
@@ -22,6 +22,7 @@ export function SellerAnswerView({ answer }: { answer: SellerAnswer }) {
         )}{' '}
         on Arc.
       </p>
+      {answer.checkedOnArc && <p>{arcCheckedLine(answer.verdict)}</p>}
       {answer.notPaidUntil && <p>{notPaidLine(answer.notPaidUntil)}</p>}
     </>
   )

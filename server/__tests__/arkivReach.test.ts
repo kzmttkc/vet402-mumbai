@@ -128,11 +128,11 @@ describe('A ruling stops a catalog seller by the payTo its listing names', () =>
       amount: 1000n,
       request: { url: 'http://127.0.0.1:3001/sellers/c', method: 'GET' },
     }
-    // Seller C has payments and no live record, so it is not paid. The cheapest listing is ruled against at its payTo.
+    // Seller C was paid hours ago and has no live record, so it is not paid. The cheapest listing is ruled against at its payTo.
     const check = createSellerCheck(
       {
         readSeller: (seller) =>
-          seller.name === SELLER_C_NAME ? Promise.resolve(read({ paymentBlocks: [1n] })) : wire.readSeller(seller),
+          seller.name === SELLER_C_NAME ? Promise.resolve(read({ paymentBlocks: [979_000n] })) : wire.readSeller(seller),
       },
       () => undefined,
       createScrubber([]),

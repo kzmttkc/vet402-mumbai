@@ -38,11 +38,16 @@ const BLOCK_SECONDS = 2
 export const NOT_PAID = 'No recent delivery from this seller. Not paid.'
 export const RULED_AGAINST = 'Arc ruled against this seller in the last 7 days. Not paid.'
 export const UNREADABLE = 'Arkiv could not be read, so the delivery check did not run. Not paid.'
+export const NO_RECENT_PURCHASE = 'No recent purchase from this seller.'
 
-/** 'expired' is the one answer that stops the purchase, whichever line says why. A failed read stops it too. */
+/**
+ * 'expired' is the one answer that stops the purchase, whichever line says why. A failed read stops it too.
+ * 'busy' is the planner's plain signal: it goes on with no bonus and no words of its own on the card.
+ */
 export type DeliveryCheck =
   | { kind: 'live'; line: 'Delivered recently.' }
   | { kind: 'first'; line: 'First purchase from this seller.' }
+  | { kind: 'busy'; line: typeof NO_RECENT_PURCHASE }
   | { kind: 'expired'; line: typeof NOT_PAID | typeof RULED_AGAINST | typeof UNREADABLE }
 
 export interface ReceiptValues {
@@ -145,6 +150,8 @@ export interface SellerRead {
   sellerLive: boolean
   /** The block each payment entity was created in. */
   paymentBlocks: bigint[]
+  /** The block each payment entity whose answer never came back (`times_received` 0) was created in. */
+  undeliveredBlocks?: bigint[]
   /** The block each of Arc's rulings against this payTo address was written in. Empty without an address. */
   verdictBlocks: bigint[]
   currentBlock: bigint
@@ -308,7 +315,7 @@ function createReads(accessKey: string, writer: Hex, transport?: Transport): Rea
       const [live, payments, verdicts, timing] = await Promise.all([
         sellerEntity(seller),
         readAllPages((offset) => {
-          const query = reads.select({ $key: true, $createdAt: true }).from(ReceiptSchema).where(eq('kind', 'payment'))
+          const query = reads.select({ $key: true, $createdAt: true, times_received: true }).from(ReceiptSchema).where(eq('kind', 'payment'))
           return (seller.payTo ? query.where(eq('pay_to', addressColumn(seller.payTo))) : query.where(eq('seller', sellerColumn(seller.name))))
             .ownedBy(writer)
             .orderBy(asc('$key'))
@@ -323,6 +330,9 @@ function createReads(accessKey: string, writer: Hex, transport?: Transport): Rea
       return {
         sellerLive: live.entities.length > 0,
         paymentBlocks: payments.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
+        undeliveredBlocks: payments.flatMap((row) =>
+          row.$createdAt === undefined || row.times_received?.value !== 0n ? [] : [row.$createdAt],
+        ),
         verdictBlocks: verdicts.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
         currentBlock: timing.currentBlock,
         blockSeconds: timing.blockDuration,
@@ -435,7 +445,12 @@ export function decideDelivery(read: SellerRead): DeliveryCheck {
   // A payment under a minute old is not counted, because its seller entity may not be readable yet.
   const counted = read.paymentBlocks.filter((block) => age(block) > COUNT_AFTER_SECONDS)
   if (counted.length === 0) return { kind: 'first', line: 'First purchase from this seller.' }
-  return { kind: 'expired', line: NOT_PAID }
+  // The seller entity is gone, so its last extension is older than SELLER_SECONDS. A last payment younger
+  // than that did not extend it. A last payment whose answer never came back did not extend it either.
+  const last = counted.reduce((a, b) => (a > b ? a : b))
+  if ((read.undeliveredBlocks ?? []).includes(last) || age(last) < BigInt(SELLER_SECONDS)) return { kind: 'expired', line: NOT_PAID }
+  // A seller nobody bought from for a while is not one that stopped delivering.
+  return { kind: 'busy', line: NO_RECENT_PURCHASE }
 }
 
 /**
