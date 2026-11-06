@@ -24,7 +24,7 @@ Shared by payment and settlement entities, so one query returns both for a trans
 | gateway_transfer_id | str | yes | The Gateway transfer id | `findPaymentKey`, `createArkivCounter` and the README query |
 | response_hash | str | no | SHA-256 of the response body. With no response, SHA-256 of "no-response:" plus the transfer id | Shown on the receipts page |
 | response_bytes | u64 | no | Size of the response body | Shown on the receipts page |
-| times_received | u64 | no | How many times the paid response came back | Shown on the receipts page |
+| times_received | u64 | no | How many times the paid response came back | Shown on the receipts page. The delivery check reads it to tell a payment that got no answer from one that did |
 | status | str | no | "accepted" or "settled" | Nothing. `kind` already tells the two apart |
 | batch_tx | str | no | Settlement only, and optional. The batch transaction | Shown on the receipts page |
 | payment_key | str | no | Settlement only, and optional. The payment entity's key | The receipts page joins each settlement to its payment in the browser, after reading both |
