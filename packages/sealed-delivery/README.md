@@ -96,6 +96,9 @@ if (await coverageFor({ contract, rpcUrl }, accept.payTo, BigInt(accept.amount))
 
 `buyerKey` must be the key that signed the payment, because only the payer can claim. Without it, `openSealed` still opens a box whose key arrives over HTTP. The full example is `examples/buyer.ts`. `npx bun run scripts/sdk-example-local.ts` runs both against the real contract on a local anvil: the key over HTTP, the key on chain, silence, a seller without cover, and a wrong amount.
 
+Before paying, `await isRuledAgainst(accept.payTo, { writer: '0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5', verifyOnArc: true })` is true when vet402 recorded a Silent or Fraud ruling against that address in the last 7 days and Arc holds the contract's event for it.
+`verifyOnArc` reads Arc testnet by default (`arcRpcUrl` for another node, `contracts` for other deployments), counts only rulings whose event it found, and throws when a node cannot be read, so you decide what a failed read means.
+
 ## Also exported
 
 `buyerClaimRecord`, `isGuarded`, `sealResponse`, `openResponse`, `sealAndPromise`, `signPromise`, `promiseSigner`, `checkBox`, `openBox`, `claimIdOf`, `paymentAuthOf`, `PROMISE_TYPES`, `promiseDomain`, `SEALED_DELIVERY_ABI` and `createSealedChain`, for a seller or buyer that is not on Express.

@@ -3,6 +3,9 @@ import { rabdi } from '@arkiv-network/sdk/chains'
 import { asc, eq, or } from '@arkiv-network/sdk/query'
 import { http } from 'viem'
 import type { Hex, Transport } from 'viem'
+import { rulingOnArc } from '../../packages/sealed-delivery/src/rulings'
+import type { ArcCheckOptions, ArcRuling } from '../../packages/sealed-delivery/src/rulings'
+import { latestRuling } from './sellerCheck'
 import type { RulingsRead } from './sellerCheck'
 import type { RawRead } from './receiptsFeed'
 import { PAGE_SIZE, readAllPages } from './pages'
@@ -180,11 +183,35 @@ export function createEvidenceLister(writer: Hex, transport: Transport = http(un
  * Every ruling this writer recorded against one payTo address, with the block timing to date them.
  * The filter matches either address column, and a row is kept only when its own address is the one
  * asked for, so an entity with `pay_to` is judged by `pay_to`. No key and no backend are involved.
+ * The latest ruling is then looked up on Arc. A failed Arc read only leaves out the line it would give.
  */
-export function createRulingsReader(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
+export function createRulingsReader(
+  writer: Hex,
+  transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 }),
+  arc: ArcCheckOptions | null = {},
+) {
   const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
 
   return async function readRulings(payTo: string): Promise<RulingsRead> {
+    const read = await readRows(payTo)
+    const latest = latestRuling(read.rulings)
+    if (!arc || !latest?.key || !latest.claimTx) return read
+    const writtenAt = read.timing.currentBlockTime - Number((read.timing.currentBlock - latest.createdAt) * BigInt(read.timing.blockDuration))
+    const onArc = await onArcFor(payTo, latest.key, { ...latest, writtenAt }, arc).catch(() => false)
+    return onArc ? { ...read, rulings: read.rulings.map((r) => (r === latest ? { ...r, onArc: true } : r)) } : read
+  }
+
+  // The contract and chain are read for the latest ruling alone, so a list read never drops an entity that lacks them.
+  async function onArcFor(payTo: string, key: Hex, ruling: Omit<ArcRuling, 'contract' | 'chainId'>, options: ArcCheckOptions) {
+    const { $attributes } = await client.getEntity(key)
+    const value = (name: string) => {
+      const found = ($attributes as Record<string, { value?: unknown } | undefined> | undefined)?.[name]?.value
+      return found === undefined || found === null ? null : String(found)
+    }
+    return rulingOnArc(payTo, { ...ruling, contract: value('contract'), chainId: value('chain_id') }, options)
+  }
+
+  async function readRows(payTo: string): Promise<RulingsRead> {
     const address = addressColumn(payTo)
     const [rows, timing] = await Promise.all([
       readAllPages((offset) =>
@@ -208,6 +235,7 @@ export function createRulingsReader(writer: Hex, transport: Transport = http(und
           verdict: row.verdict.value,
           claimId: row.claim_id.value,
           claimTx: row.claim_tx?.value ?? null,
+          key: row.$key,
           createdAt: row.$createdAt ?? 0n,
         })),
       timing,

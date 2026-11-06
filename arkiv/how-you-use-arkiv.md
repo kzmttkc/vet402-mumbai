@@ -55,12 +55,13 @@ A payment entity counts only once it is older than 60 seconds. Every page of the
 | A ruling against this payTo address in the last 7 days | Not paid, next listing | Arc ruled against this seller in the last 7 days. Not paid. |
 | A live seller entity | Goes on | Delivered recently. |
 | No seller entity and no payment entity | Goes on | First purchase from this seller. |
-| Payment entities and no live seller entity | Not paid, next listing | No recent delivery from this seller. Not paid. |
+| Payment entities and no live seller entity, and the latest counted payment is under 7 days old or its answer never came back (`times_received` 0) | Not paid, next listing | No recent delivery from this seller. Not paid. |
+| Payment entities and no live seller entity, and the latest counted payment came back and is 7 days old or more | Goes on | No recent purchase from this seller. |
 | The read failed | Not paid, next listing | Arkiv could not be read, so the delivery check did not run. Not paid. |
 
 The note above the card is built in `server/jobs.ts` and carries the check's own sentence for each seller passed over, for example "{seller}: Arc ruled against this seller in the last 7 days. Not paid." The demo shows the same sentence when it refuses a seller.
 
-Another x402 buyer can read the same rulings with `isRuledAgainst(payTo, { writer })` from `packages/sealed-delivery`. It sends the query in [schema.md](schema.md#vet402_verdict) over plain JSON-RPC, with no key.
+Another x402 buyer can read the same rulings with `isRuledAgainst(payTo, { writer })` from `packages/sealed-delivery`. It sends the query in [schema.md](schema.md#vet402_verdict) over plain JSON-RPC, with no key. With `verifyOnArc: true` it also finds the contract's Silent or Fraud event for each ruling's claim on Arc, after the claim transaction, and counts only the rulings it found. "Check a seller" on the receipts page does the same for the latest ruling and then shows "Checked on Arc: the {Silent|Fraud} event for this claim is on chain."
 
 ## Reading on the receipts page
 
