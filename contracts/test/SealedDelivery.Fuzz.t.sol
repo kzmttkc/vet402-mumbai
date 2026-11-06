@@ -83,6 +83,8 @@ contract SDHandler is SDHelpers {
         p.expiry = uint64(block.timestamp + bound(expiryOff, 1, 3600));
         p.ciphertextHash = keccak256(_ct);
         p.plaintextHash = honest ? keccak256(PT) : keccak256("a different plaintext");
+        // Any gas price up to twice the cap. It changes nothing on a deployment that repays no gas.
+        vm.txGasPrice(uint256(keccak256(abi.encode(value, nSeed))) % 2000 gwei);
         _claimOk(p);
         _nonces.push(id);
     }
@@ -294,7 +296,7 @@ contract SealedDeliveryFuzzTest is SealedDeliveryTestBase {
 contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
     SDHandler internal handler;
 
-    function setUp() public override {
+    function setUp() public virtual override {
         super.setUp();
         handler = new SDHandler(sd, usdc);
         targetContract(address(handler));
@@ -382,5 +384,14 @@ contract SealedDeliveryInvariantTest is SealedDeliveryTestBase {
         }
         assertEq(sd.openLiability(handler.sellerAt(0)), r0);
         assertEq(sd.openLiability(handler.sellerAt(1)), r1);
+    }
+}
+
+/// The same invariants on a deployment that repays gas: answers move USDC out to the buyer, claims at any gas price.
+contract SealedDeliveryInvariantGasRepaidTest is SealedDeliveryInvariantTest {
+    function setUp() public override {
+        followUpGas = 230_000;
+        maxGasPrice = 1000 gwei;
+        super.setUp();
     }
 }

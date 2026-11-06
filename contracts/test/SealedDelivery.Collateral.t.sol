@@ -310,50 +310,66 @@ contract SealedDeliveryCollateralTest is SealedDeliveryTestBase {
 
     // ---------------------------------------------------------------- the dispute cost
 
-    function _withDisputeCost(uint256 cost) internal {
-        disputeCost = cost;
+    uint256 internal constant FOLLOW_UP = 200_000;
+
+    /// Gas repaid at up to 1000 gwei, and the claim sent at 25 gwei.
+    function _withGasRepaid() internal {
+        followUpGas = FOLLOW_UP;
+        maxGasPrice = 1000 gwei;
         sd = _deploy(MAX_EXPIRY, WINDOW, COOLDOWN);
+        vm.txGasPrice(25 gwei);
     }
 
     function test_DisputeCost_SilencePaysThePriceAndTheCostOfAsking() public {
-        uint256 cost = 10_500;
         uint256 price = 1_000;
-        _withDisputeCost(cost);
-        vm.prank(sellerA);
-        usdc.approve(address(sd), type(uint256).max);
-        _fund(sellerA, 100_000);
+        _withGasRepaid();
+        _fund(sellerA, 2_000_000);
         assertTrue(sd.coverageFor(sellerA, price));
         _claimOk(_prom(sellerA, buyer, price, N1));
-        assertEq(sd.openLiability(sellerA), 2 * (price + cost));
+        (,, uint256 liability,,) = _claimData(id1);
+        uint256 cost = liability / 2 - price;
+        assertEq(sd.openLiability(sellerA), liability, "the open liability is the trimmed one");
+        assertGe(cost, sd.gasRefundOf(id1) + FOLLOW_UP * 25 gwei / 1e12, "the cost holds the claim and the follow up gas");
+        assertLe(cost, sd.gasRefundOf(id1) + FOLLOW_UP * 25 gwei / 1e12 + 1, "and nothing more than rounding");
         skip(WINDOW);
         sd.finalize(id1);
         assertEq(sd.claimable(buyer), price + cost, "the buyer is made whole");
         assertEq(sd.pendingBurn(), price + cost, "the seller pays the same again");
-        assertEq(sd.deposits(sellerA), 100_000 - 2 * (price + cost));
+        assertEq(sd.deposits(sellerA), 2_000_000 - 2 * (price + cost));
     }
 
-    function test_DisputeCost_AnsweringCostsTheDepositNothing() public {
-        _withDisputeCost(10_500);
-        vm.prank(sellerA);
-        usdc.approve(address(sd), type(uint256).max);
-        _fund(sellerA, 100_000);
+    function test_DisputeCost_AnsweringRepaysOnlyTheClaimGas() public {
+        _withGasRepaid();
+        _fund(sellerA, 2_000_000);
         _claimOk(_prom(sellerA, buyer, 1_000, N1));
+        uint256 refund = sd.gasRefundOf(id1);
+        assertGt(refund, 0);
         sd.answer(id1, KEY);
-        assertEq(sd.deposits(sellerA), 100_000);
-        assertEq(sd.claimable(buyer), 0);
+        assertEq(sd.deposits(sellerA), 2_000_000 - refund, "the deposit pays the claim's gas and nothing else");
+        assertEq(usdc.balanceOf(buyer), refund, "the buyer has it at once");
+        assertEq(sd.claimable(buyer), 0, "nothing waits for a withdrawal");
+        assertEq(sd.openLiability(sellerA), 0);
     }
 
-    function test_DisputeCost_CoverageForCountsIt() public {
-        _withDisputeCost(10_500);
-        vm.prank(sellerA);
-        usdc.approve(address(sd), type(uint256).max);
-        _fund(sellerA, 2 * (1_000 + 10_500));
+    function test_DisputeCost_CoverageForCountsTheMostAClaimCanCost() public {
+        _withGasRepaid();
+        uint256 most = sd.MAX_DISPUTE_COST();
+        assertEq(most, (sd.CLAIM_GAS_CAP() + FOLLOW_UP) * 1000 gwei / 1e12);
+        _fund(sellerA, 2 * (1_000 + most));
         assertTrue(sd.coverageFor(sellerA, 1_000));
         assertFalse(sd.coverageFor(sellerA, 1_001));
+        // A claim at the cap books no more than coverageFor counted.
+        vm.txGasPrice(1000 gwei);
+        _claimOk(_prom(sellerA, buyer, 1_000, N1));
+        assertLe(sd.openLiability(sellerA), 2 * (1_000 + most));
     }
 
     function test_DisputeCost_RefusesAnImpossibleValue() public {
         vm.expectRevert(SealedDelivery.InvalidDisputeCost.selector);
-        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint256).max, bytes32(0));
+        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, 0, type(uint256).max, bytes32(0));
+        vm.expectRevert(SealedDelivery.InvalidDisputeCost.selector);
+        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint256).max, 1, bytes32(0));
+        vm.expectRevert(SealedDelivery.InvalidDisputeCost.selector);
+        new SealedDelivery(3600, 60, 3660, address(usdc), PAY_NAME, PAY_VERSION, GATEWAY_WALLET, type(uint64).max, type(uint128).max, bytes32(0));
     }
 }

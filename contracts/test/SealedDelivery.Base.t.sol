@@ -27,7 +27,7 @@ function _gatewaySalt(string memory version, address usdc) pure returns (bytes32
 /// The same contract set up for a token's own EIP-3009 domain, as plain x402 signs it: no salt at any version.
 contract SealedDeliveryPlainDomainHarness is SealedDelivery {
     constructor(address usdc, string memory name, string memory version, address verifyingContract)
-        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, bytes32(0))
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, 0, bytes32(0))
     {}
 
     function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
@@ -37,7 +37,7 @@ contract SealedDeliveryPlainDomainHarness is SealedDelivery {
 
 contract SealedDeliveryHarness is SealedDelivery {
     constructor(address usdc, string memory name, string memory version, address verifyingContract)
-        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, _gatewaySalt(version, usdc))
+        SealedDelivery(3600, 60, 3660, usdc, name, version, verifyingContract, 0, 0, _gatewaySalt(version, usdc))
     {}
 
     function paymentDigest(PaymentAuth memory a) external view returns (bytes32) {
@@ -91,10 +91,14 @@ abstract contract SDHelpers is Test {
         usdc = MockUSDC(USDC_ADDR);
     }
 
-    uint256 internal disputeCost;
+    /// Zero by default: no gas is repaid and a liability is exactly twice the value, which most suites assume.
+    uint256 internal followUpGas;
+    uint256 internal maxGasPrice;
 
     function _deploy(uint256 maxExpiry, uint256 window, uint256 cooldown) internal returns (SealedDelivery) {
-        return new SealedDelivery(maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET, disputeCost, bytes32(0));
+        return new SealedDelivery(
+            maxExpiry, window, cooldown, USDC_ADDR, PAY_NAME, PAY_VERSION, GATEWAY_WALLET, followUpGas, maxGasPrice, bytes32(0)
+        );
     }
 
     function _sdDomain() internal view returns (bytes32) {
