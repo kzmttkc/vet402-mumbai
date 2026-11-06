@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { formatUsdc } from '../src/onchain-money'
+import { formatUsdc, parseUsdc } from '../src/onchain-money'
 import type { SellerCheck } from './arkiv'
 import type { Candidate } from './discovery'
 import { choosePlan, DEFAULT_NETWORK_NAME, describeAnswer, describeReceipt, JobError } from './jobs'
@@ -9,9 +9,10 @@ import type { Compared, LatestReceipt, Plan, PlannedRequest } from './planner'
 import type { TransferStatus } from './receiptStore'
 
 // "Ask the agent" on the public page. The agent ranks the Arc catalog for the job, shows its pick,
-// and pays only after Approve, from a fixed test wallet. The browser sends the job's words and,
-// to approve, the plan's id. It never sends an amount, a seller or a payee: on Approve the server
-// plans again from the same words and pays only if it lands on the same seller for the same price.
+// and pays only after Approve, from a fixed test wallet. The browser sends the job's words, the limit the
+// person chose and, to approve, the plan's id. It never sends an amount, a seller or a payee: on Approve the
+// server plans again from the same words and pays only if it lands on the same seller for the same price,
+// under the same limit. The person's limit can only lower the server's own.
 
 /** One paid job every this long from the same address. */
 export const JOB_IP_GAP_MS = 120_000
@@ -49,6 +50,25 @@ export const PROTECTED_LINE = "Protected on Arc: if the answer goes missing, the
 /** On every card, under the question: the most one job may cost, from the limit the agent actually keeps to. */
 export const limitLine = (limit: bigint) => `Each job can spend at most ${formatUsdc(limit)} USDC.`
 
+/** When the seller that fits best asks more than the person allowed. The agent does not fall back to a weaker match. */
+export const overYourLimit = (limit: bigint) => `Over your limit of ${formatUsdc(limit)} USDC. Nothing was paid.`
+/** The compared row of that seller. */
+export const OVER_YOUR_LIMIT_NOTE = 'Over your limit'
+
+const LIMIT_TEXT = /^\d{1,6}(\.\d{1,6})?$/
+
+/**
+ * The person's limit for one job, from the browser, never above `serverLimit`. A missing one is the server's own,
+ * so an older page keeps working. Null when it is not a positive USDC amount.
+ */
+export function cleanLimit(value: unknown, serverLimit: bigint): bigint | null {
+  if (value === undefined || value === null) return serverLimit
+  if (typeof value !== 'string' || !LIMIT_TEXT.test(value.trim())) return null
+  const asked = parseUsdc(value.trim())
+  if (asked <= 0n) return null
+  return asked < serverLimit ? asked : serverLimit
+}
+
 export const TRY_JOB_STATUS: Record<TryJobCode, number> = {
   RESTING: 503,
   RATE: 429,
@@ -85,7 +105,8 @@ export interface TryJobPorts {
 export interface OwnSeller {
   candidate: Candidate
   summary?: string
-  buy(cap: bigint): Promise<OwnPurchase>
+  /** `lineDropped` keeps the key off the connection, so the answer has to come through Arc. */
+  buy(cap: bigint, options?: { lineDropped?: boolean }): Promise<OwnPurchase>
 }
 
 export interface TryJobOptions {
@@ -98,7 +119,7 @@ export interface TryJobOptions {
 }
 
 export interface TryPlanView {
-  /** Send this back to approve. It names nothing: it is a signature over the time, the words and the pick. */
+  /** Send this back to approve. It names nothing: it is a signature over the time, the words, the pick and the limit. */
   id: string
   sellerName: string
   summary: string
@@ -182,9 +203,12 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
   }
   const paidAt: number[] = []
 
-  const sign = (issuedAt: number, job: string, plan: Plan) =>
+  // The person's limit is signed with the pick, so an approval cannot raise it.
+  const sign = (issuedAt: number, job: string, plan: Plan, cap: bigint) =>
     createHmac('sha256', options.secret)
-      .update(['v1', issuedAt, job, plan.kind, plan.sellerName, plan.request.method, plan.request.url, plan.amount.toString()].join('\n'))
+      .update(
+        ['v2', issuedAt, job, plan.kind, plan.sellerName, plan.request.method, plan.request.url, plan.amount.toString(), cap.toString()].join('\n'),
+      )
       .digest('hex')
 
   // vet402's own sellers go beside the catalog. Only they may carry their names, so no listing can pass as one.
@@ -207,10 +231,14 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       limit,
     })
 
-  /** Ranks the catalog for the job. Nothing is paid here. */
-  async function plan(rawJob: unknown, ip = 'unknown'): Promise<Reply<PlanReply>> {
+  /**
+   * Ranks the catalog for the job. Nothing is paid here. The ranking keeps to the server's limit, as before, and a pick
+   * over the person's own limit is refused rather than swapped for a weaker match.
+   */
+  async function plan(rawJob: unknown, ip = 'unknown', rawLimit?: unknown): Promise<Reply<PlanReply>> {
     const job = cleanJob(rawJob)
-    if (!job) return { ok: false, code: 'BAD_REQUEST' }
+    const cap = cleanLimit(rawLimit, limit)
+    if (!job || cap === null) return { ok: false, code: 'BAD_REQUEST' }
     if (!planAllowed(ip)) return { ok: false, code: 'RATE' }
     let chosen: Chosen
     try {
@@ -222,6 +250,11 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
       log(`try-job plan failed: ${messageOf(error)}`)
       return { ok: false, code: 'UNREACHABLE' }
     }
+    const { plan: picked } = chosen
+    if (picked.amount > cap) {
+      const compared = (picked.compared ?? []).map((c) => (c.note === 'Picked' ? { ...c, note: OVER_YOUR_LIMIT_NOTE } : c))
+      return { ok: true, value: { ok: false, code: 'OVER_LIMIT', message: overYourLimit(cap), compared } }
+    }
     const issuedAt = now()
     let covered = false
     try {
@@ -229,13 +262,12 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
     } catch (error) {
       log(`try-job balance read failed: ${messageOf(error)}`)
     }
-    const { plan: picked } = chosen
     return {
       ok: true,
       value: {
         ok: true,
         plan: {
-          id: `${issuedAt}.${sign(issuedAt, job, picked)}`,
+          id: `${issuedAt}.${sign(issuedAt, job, picked, cap)}`,
           sellerName: picked.sellerName,
           summary: ownFor(picked)?.summary ?? picked.summary,
           amount: formatUsdc(picked.amount),
@@ -244,7 +276,7 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
           ...(chosen.notices.length ? { notices: chosen.notices } : {}),
           ...(chosen.delivery ? { delivery: chosen.delivery } : {}),
           ...(chosen.protectedOnArc ? { protection: PROTECTED_LINE } : {}),
-          limitLine: limitLine(limit),
+          limitLine: limitLine(cap),
           ...(picked.own ? { own: true } : {}),
           covered,
         },
@@ -276,11 +308,21 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
     return null
   }
 
-  /** Plans again from the same words and pays only if the pick and the price are the ones on the card. */
-  async function approve(rawJob: unknown, rawId: unknown, ip: string): Promise<Reply<PaidReply>> {
+  /**
+   * Plans again from the same words and pays only if the pick, the price and the limit are the ones on the card.
+   * `lineDropped` buys a protected vet402 seller with the key kept off the connection, so the answer comes through Arc.
+   */
+  async function approve(
+    rawJob: unknown,
+    rawId: unknown,
+    ip: string,
+    rawLimit?: unknown,
+    { lineDropped = false }: { lineDropped?: boolean } = {},
+  ): Promise<Reply<PaidReply>> {
     const job = cleanJob(rawJob)
     const id = typeof rawId === 'string' ? PLAN_ID.exec(rawId) : null
-    if (!job || !id) return { ok: false, code: 'BAD_REQUEST' }
+    const cap = cleanLimit(rawLimit, limit)
+    if (!job || !id || cap === null) return { ok: false, code: 'BAD_REQUEST' }
     const issuedAt = Number(id[1])
     const age = now() - issuedAt
     if (!(age >= 0 && age <= PLAN_TTL_MS)) return { ok: false, code: 'EXPIRED' }
@@ -297,12 +339,15 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
         return { ok: false, code: 'UNREACHABLE' }
       }
       const { plan: approved } = chosen
-      const expected = Buffer.from(sign(issuedAt, job, approved), 'hex')
+      const expected = Buffer.from(sign(issuedAt, job, approved, cap), 'hex')
       const given = Buffer.from(id[2] as string, 'hex')
       if (expected.length !== given.length || !timingSafeEqual(expected, given)) return { ok: false, code: 'EXPIRED' }
+      if (approved.amount > cap) return { ok: false, code: 'EXPIRED' }
       // Only vet402's own seller may sell what its plan names, and it is only planned when it is there.
       const own = ownFor(approved)
       if (approved.own && !own) return { ok: false, code: 'EXPIRED' }
+      // The dropped line is only for a card with the protection line, and only with vet402's own seller.
+      if (lineDropped && !(own && chosen.protectedOnArc)) return { ok: false, code: 'BAD_REQUEST' }
 
       if ((await ports.holdAvailable()) < approved.amount) return { ok: false, code: 'RESTING' }
 
@@ -316,7 +361,7 @@ export function createTryJob(ports: TryJobPorts, options: TryJobOptions) {
         // The approved amount is the most the agent may spend on this job.
         if (own) {
           // vet402's own seller is bought from vet402 itself. Its resource is never fetched.
-          const bought = await own.buy(approved.amount)
+          const bought = await own.buy(approved.amount, lineDropped ? { lineDropped: true } : undefined)
           paid = bought
           lines = bought.lines
         } else {
@@ -409,10 +454,12 @@ async function readBody(request: Request): Promise<Record<string, unknown> | nul
 
 /**
  * The HTTP side.
- * - POST {"step":"plan","job":"..."} ranks the catalog and shows the pick. Nothing is paid.
- * - POST {"step":"approve","job":"...","id":"..."} pays the pick once.
+ * - POST {"step":"plan","job":"...","limit":"0.005"} ranks the catalog and shows the pick. Nothing is paid.
+ * - POST {"step":"approve","job":"...","id":"...","limit":"0.005"} pays the pick once. "lineDropped": true keeps the
+ *   key off the connection, for a protected vet402 seller only.
  * - GET ?transfer=<id> says whether one of the agent's payments has settled.
- * Only `step`, `job` and `id` are ever read from the body, so no amount, seller or payee can come from the browser.
+ * Only `step`, `job`, `id`, `limit` and `lineDropped` are ever read from the body. The limit can only lower the
+ * server's own, so no amount, seller or payee can come from the browser.
  */
 export function createTryJobHandler(service: () => TryJob | null) {
   return async function handle(request: Request): Promise<Response> {
@@ -430,11 +477,11 @@ export function createTryJobHandler(service: () => TryJob | null) {
     const body = await readBody(request)
     if (!body) return refuse('BAD_REQUEST')
     if (body.step === 'plan') {
-      const reply = await jobs.plan(body.job, ip)
+      const reply = await jobs.plan(body.job, ip, body.limit)
       return reply.ok ? json(200, reply.value) : refuse(reply.code)
     }
     if (body.step === 'approve') {
-      const reply = await jobs.approve(body.job, body.id, ip)
+      const reply = await jobs.approve(body.job, body.id, ip, body.limit, { lineDropped: body.lineDropped === true })
       return reply.ok ? json(200, reply.value) : refuse(reply.code)
     }
     return refuse('BAD_REQUEST')

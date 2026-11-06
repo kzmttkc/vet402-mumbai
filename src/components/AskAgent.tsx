@@ -1,7 +1,10 @@
 import { readable } from '@/lib/readable'
 import { useEffect, useRef, useState } from 'react'
 import { Check, ExternalLink, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
+import { LimitRow, PurchaseList } from '@/components/AgentControls'
 import { OWN_SELLER_MARK, PlanWhy } from '@/components/PlanWhy'
+import { addPurchase, loadLimit, loadPurchases, saveLimit } from '@/lib/agentHistory'
+import type { LimitChoice, Purchase } from '@/lib/agentHistory'
 import { approvePlan, arcTxUrl, askAgent, receiptLine, settlementOf } from '@/lib/askAgent'
 import type { AgentPlan as Plan, Compared, Paid as PaidReply } from '@/lib/askAgent'
 import { splitLines } from '@/lib/receiptLines'
@@ -24,13 +27,15 @@ const ghost =
 const chip =
   'min-h-9 rounded-full border border-[var(--border)] bg-white px-3 text-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
 const link = 'inline-flex items-center gap-1 text-sm font-semibold underline underline-offset-2'
+const small =
+  'mx-auto block min-h-11 px-3 text-sm text-[var(--muted)] underline underline-offset-2 hover:text-[var(--ink)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
 
 type State =
   | { step: 'idle' }
   | { step: 'planning' }
   | { step: 'declined'; message: string; compared: Compared[] }
   | { step: 'asking'; plan: AgentPlan }
-  | { step: 'paying'; plan: AgentPlan }
+  | { step: 'paying'; plan: AgentPlan; lineDropped?: boolean }
   | { step: 'done'; paid: Paid }
 
 /** The question on the card, with the limit under it. A pick that seals, with a deposit that covers it, also has the protection line. */
@@ -76,36 +81,59 @@ export function SealedLines({ lines }: { lines?: string[] }) {
   )
 }
 
+/**
+ * Only under a card with the protection line: the same purchase, once, with the answer held back on the connection, so
+ * vet402 has to get it through Arc. The server allows it only for vet402's own protected seller.
+ */
+export function DroppedLineLink({ plan, disabled, onTry }: { plan: Pick<AgentPlan, 'protection'>; disabled?: boolean; onTry: () => void }) {
+  if (!plan.protection) return null
+  return (
+    <button type="button" disabled={disabled} onClick={onTry} className={small}>
+      Try it with the line dropped
+    </button>
+  )
+}
+
 /** "Ask the agent": it picks a seller from the Arc catalog, asks before it spends, and shows a plain receipt. */
 export function AskAgent() {
   const [text, setText] = useState('')
   const [state, setState] = useState<State>({ step: 'idle' })
   const [error, setError] = useState<string | null>(null)
   const [settled, setSettled] = useState<{ done: boolean; batchTx: string | null }>({ done: false, batchTx: null })
-  const asked = useRef('')
+  const [limit, setLimit] = useState<LimitChoice>(() => loadLimit())
+  const [purchases, setPurchases] = useState<Purchase[]>(() => loadPurchases())
+  // The words and the limit the card was planned with. An approval sends both back unchanged.
+  const asked = useRef({ words: '', limit })
 
   const job = text.trim()
   const busy = state.step === 'planning' || state.step === 'paying'
 
   const ask = async (words: string) => {
     setError(null)
-    asked.current = words
+    asked.current = { words, limit }
     setState({ step: 'planning' })
-    const answer = await askAgent(words)
+    const answer = await askAgent(words, limit)
     setState(answer.ok ? { step: 'asking', plan: answer.plan } : { step: 'declined', message: answer.message, compared: answer.compared })
   }
 
-  const approve = async (plan: AgentPlan) => {
+  const approve = async (plan: AgentPlan, lineDropped = false) => {
     setError(null)
-    setState({ step: 'paying', plan })
-    const reply = await approvePlan(asked.current, plan.id)
+    setState({ step: 'paying', plan, lineDropped })
+    const reply = await approvePlan(asked.current.words, plan.id, asked.current.limit, { lineDropped })
     if (!reply.ok) {
       setError(reply.message)
       setState({ step: 'asking', plan })
       return
     }
-    setSettled({ done: reply.value.status === 'completed' && !!arcTxUrl(reply.value.batchTx), batchTx: reply.value.batchTx })
-    setState({ step: 'done', paid: reply.value })
+    const paid = reply.value
+    setPurchases(addPurchase({ sellerName: paid.sellerName, amount: paid.paid, line: readable(paid.text), at: Date.now() }))
+    setSettled({ done: paid.status === 'completed' && !!arcTxUrl(paid.batchTx), batchTx: paid.batchTx })
+    setState({ step: 'done', paid })
+  }
+
+  const chooseLimit = (next: LimitChoice) => {
+    setLimit(next)
+    saveLimit(next)
   }
 
   const reset = () => {
@@ -138,6 +166,8 @@ export function AskAgent() {
 
   return (
     <div className="mb-4 rounded-2xl bg-[var(--surface-muted)] p-4">
+      {/* The limit can change only between jobs, so a card always matches the limit it was planned with. */}
+      <LimitRow value={limit} onChange={chooseLimit} disabled={state.step === 'planning' || state.step === 'asking' || state.step === 'paying'} />
       <div className="flex items-center gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[var(--ink)]">
           <Sparkles size={20} aria-hidden />
@@ -235,11 +265,16 @@ export function AskAgent() {
               className={primary}
             >
               {state.step === 'paying' && <Loader2 size={18} className="animate-spin" aria-hidden />}
-              {state.step === 'paying' ? 'Working on it…' : 'Approve'}
+              {state.step === 'paying' ? (state.lineDropped ? 'The line dropped. Asking Arc…' : 'Working on it…') : 'Approve'}
             </button>
             <button type="button" disabled={state.step === 'paying'} onClick={reset} className={ghost}>
               Not now
             </button>
+            <DroppedLineLink
+              plan={state.plan}
+              disabled={!state.plan.covered || state.step === 'paying'}
+              onTry={() => void approve(state.plan, true)}
+            />
           </div>
         </div>
       )}
@@ -280,6 +315,8 @@ export function AskAgent() {
           {error}
         </p>
       )}
+
+      <PurchaseList purchases={purchases} />
     </div>
   )
 }

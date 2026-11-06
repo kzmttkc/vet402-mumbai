@@ -9,8 +9,9 @@ import { useReceipts } from '@/hooks/useReceipts'
 const payNothing = () => {}
 
 /**
- * The published screen. The agent at the top picks a seller and pays only after Approve, at most
- * 0.01 USDC of test money. The dispute try below pays a fixed 0.001 USDC. The rest reads receipts.
+ * The published screen. The agent at the top picks a seller and pays only after Approve, at most the
+ * limit the person picks there, never above 0.01 USDC of test money. What it bought stays listed in this
+ * browser. The dispute try below pays a fixed 0.001 USDC. The rest reads receipts.
  */
 export function PublicApp() {
   const { receipts } = useReceipts()

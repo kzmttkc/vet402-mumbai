@@ -14,7 +14,7 @@ import { toCandidate } from './discovery'
 import type { Candidate } from './discovery'
 import { preparePayment, readBody } from './gatewayPay'
 import type { PayOutcome } from './jobs'
-import { ANSWER_GAS, createSealer, createSellerWatcher } from './sealedDelivery'
+import { ANSWER_GAS, createSealer, createSellerWatcher, linksOf } from './sealedDelivery'
 import type { SealedBox, SealedClient, SealedPorts } from './sealedDelivery'
 import { createSeller, DEMO_PRICE } from './sellers'
 import type { SellerFacilitator } from './sellers'
@@ -36,6 +36,9 @@ export const KEY_CHECKED = 'The key and the answer match the hashes the seller s
 export const CLAIM_OPEN = "The answer has not arrived yet. vet402 asked Arc to step in, and the seller's deposit pays you back if it never comes."
 const NOT_SEALED = 'The answer arrived without a valid seal, so it stays closed.'
 const NO_KEY = 'The answer has not arrived yet.'
+
+/** The receipt's plain line when the person tried the dropped line and the key came through Arc. */
+export const LINE_DROPPED_ANSWERED = 'The line dropped. vet402 asked Arc, the seller answered there, and you got your answer. Charged once.'
 
 /** The receipt's first line, from the amount actually paid. */
 export const answerChecked = (paid: bigint) => `Answer received and checked. You paid ${formatUsdc(paid)} USDC once.`
@@ -127,10 +130,10 @@ export interface OwnPurchase extends PayOutcome {
 }
 
 export interface OwnSellerOptions {
-  /** Signs the seller's promises and runs its lookout. */
-  client: Pick<SealedClient, 'signPromise' | 'latestBlock' | 'readClaimed' | 'tryAnswer' | 'chainTime' | 'answer' | 'ensureGas'>
-  /** The agent's side of the contract: the box check, the key request and the claim. */
-  sealed: Pick<SealedPorts, 'readBox' | 'requestKey' | 'coverageFor' | 'claim' | 'readKey' | 'chainTime'>
+  /** Signs the seller's promises and runs its lookout. The address and chain id go into the answer's memo. */
+  client: Pick<SealedClient, 'signPromise' | 'latestBlock' | 'readClaimed' | 'tryAnswer' | 'chainTime' | 'answer' | 'ensureGas' | 'address' | 'chainId'>
+  /** The agent's side of the contract: the box check, the key request, the claim, and what the answer repaid. */
+  sealed: Pick<SealedPorts, 'readBox' | 'requestKey' | 'coverageFor' | 'claim' | 'readKey' | 'chainTime' | 'claimGasRepaid'>
   sealedAddress: Address
   /** The agent's hold pays. The seller is a separate wallet with a deposit, and the buyer pays for gas. */
   keys: { hold: Hex; seller: Hex; buyer: Hex }
@@ -197,8 +200,8 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
   const sealer = createSealer(client, keys.seller)
   const path = new URL(spec.resource).pathname
 
-  /** The seller and its lookout, on 127.0.0.1, for one purchase. */
-  async function openSeller() {
+  /** The seller and its lookout, on 127.0.0.1, for one purchase. `handsOverKey` false keeps the key off the connection. */
+  async function openSeller(handsOverKey: () => boolean) {
     const handler = createSeller({
       name: spec.name,
       payTo: seller,
@@ -209,7 +212,7 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
       sealing: {
         // The seller writes its own answer from Circle, then seals it. A failed read leaves the buyer uncharged.
         seal: async (_answer, payment) => sealer(JSON.stringify({ seller: spec.name, answer: await answer(payment, seller) }), payment),
-        handsOverKey: options.handsOverKey ?? (() => true),
+        handsOverKey,
       },
     })
     const app = express()
@@ -224,8 +227,13 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
       const s = app.listen(0, '127.0.0.1', () => resolve(s))
       s.once('error', reject)
     })
+    // The answer carries a memo on Arc, paid by the seller, as in the dispute try.
+    const linksFor = async (nonce: Hex, claimId: Hex) => {
+      const paid = handler.paidFor(nonce)
+      return paid ? linksOf(paid, claimId, client) : null
+    }
     // The lookout reads its starting block before the payment, so a claim is always after it.
-    const watcher = createSellerWatcher({ client, sellerKey: keys.seller, keyFor: handler.keyFor, mode: 'answer', log })
+    const watcher = createSellerWatcher({ client, sellerKey: keys.seller, keyFor: handler.keyFor, mode: 'answer', linksFor, log })
     await watcher.tick()
     const stop = watcher.start(options.watchMs ?? 1000)
     const { port } = server.address() as AddressInfo
@@ -240,12 +248,12 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
   }
 
   /** Reads the chain until the key is there, the deadline has passed, or the wait is over. */
-  async function waitForKey(claim: { claimId: Hex; deadline: bigint; fromBlock: bigint }): Promise<Hex | null> {
+  async function waitForKey(claim: { claimId: Hex; deadline: bigint; fromBlock: bigint }): Promise<{ key: Hex; transactionHash?: Hex } | null> {
     const until = Date.now() + (options.keyWaitMs ?? KEY_WAIT_MS)
     while (Date.now() < until) {
       try {
         const found = await sealed.readKey(claim.claimId, claim.fromBlock)
-        if (found) return found.key
+        if (found) return found
         if ((await sealed.chainTime()) >= claim.deadline) return null
       } catch {
         // A failed read is read again.
@@ -255,9 +263,20 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
     return null
   }
 
-  /** Pays once from the hold, opens the sealed answer with the key, and asks Arc to step in when the key does not come. */
-  async function buy(cap: bigint): Promise<OwnPurchase> {
-    const host = await openSeller()
+  /** The answer's ClaimGasRepaid, read once. A failed read gives no line rather than a guess. */
+  async function claimGasLine(claim: { claimId: Hex; fromBlock: bigint }): Promise<string[]> {
+    const repaid = sealed.claimGasRepaid ? await sealed.claimGasRepaid(claim.claimId, claim.fromBlock).catch(() => null) : null
+    if (!repaid || repaid.amount <= 0n) return []
+    const amount = `${formatUsdc(repaid.amount)} USDC`
+    return [detail(repaid.sent ? `Claim gas repaid by the seller: ${amount}.` : `Claim gas repaid by the seller as a credit on Arc: ${amount}.`)]
+  }
+
+  /**
+   * Pays once from the hold, opens the sealed answer with the key, and asks Arc to step in when the key does not come.
+   * `lineDropped` is the person trying that on purpose: the seller keeps the key off the connection, so it has to come through Arc.
+   */
+  async function buy(cap: bigint, { lineDropped = false }: { lineDropped?: boolean } = {}): Promise<OwnPurchase> {
+    const host = await openSeller(lineDropped ? () => false : (options.handsOverKey ?? (() => true)))
     try {
       const challenge = await preparePayment({ holdKey: keys.hold, holdAvailable: options.holdAvailable }, { url: host.url, method: 'GET' }, cap)
       if (challenge.kind !== 'priced') throw new Error(`${spec.name} answered without a price`)
@@ -289,8 +308,23 @@ export function createOwnSealedSeller(spec: OwnSellerSpec, answer: (payment: Own
         log(`${spec.name} claim failed: ${messageOf(error)}`)
         return { ...base, data: NO_KEY, body: '', lines: [] }
       }
-      const key = await waitForKey(claim)
-      const fromChain = key ? openBox(box, key) : null
+      const found = await waitForKey(claim)
+      const fromChain = found ? openBox(box, found.key) : null
+      if (fromChain?.matches && lineDropped) {
+        return {
+          ...base,
+          data: answerOf(fromChain.text),
+          body: fromChain.text,
+          lines: [
+            LINE_DROPPED_ANSWERED,
+            detail(DELIVERED_FROM_ARC),
+            detail(`Claim ${claim.claimId} answered on SealedDelivery. ${KEY_CHECKED}`),
+            ...(claim.transactionHash ? [detail(`Claim transaction: ${claim.transactionHash}.`)] : []),
+            ...(found?.transactionHash ? [detail(`Answer transaction: ${found.transactionHash}.`)] : []),
+            ...(await claimGasLine(claim)),
+          ],
+        }
+      }
       if (fromChain?.matches) {
         return {
           ...base,
