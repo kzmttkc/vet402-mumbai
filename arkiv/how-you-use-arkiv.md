@@ -15,13 +15,26 @@ No response means no seller write. The payment entity then stores the hash of "n
 
 Payment, settlement and seller entities carry `pay_to`, the address the seller is paid at, when the server knows it for that seller name (`payToOf`). Otherwise they carry the name alone, as before.
 
+The public deploy writes too, when it holds the writer key. `api/try-dispute` puts Arkiv behind the try's own receipt row: after the result it waits for the claimed box's Swarm reference and for Gateway's transfer id, then writes the payment, the seller and the evidence entities, all inside the function's 60 seconds. Without `ARKIV_WRITER_KEY` on the deploy it writes nothing and puts nothing on Swarm.
+
 `extendEntity` sets a new expiry: the block the extension lands in, plus the lifetime. It does not add the lifetime to what is left, and Arkiv refuses an extension that would end earlier (`ExpiryNotExtended`). So 7 days after the last good delivery is when a seller entity runs out, whatever happened before it. Step (3) of the live check measures this on Rabdi.
 
 ## Reading before paying
 
-Before the approval card appears for a Discovery listing or for Seller C, the backend reads that seller from Arkiv with `ownedBy`. It looks the seller up by payTo address when it knows one, and by name otherwise. It reads every page of the seller's payments and rulings. A payment entity counts only once it is older than 60 seconds. Sellers A, B, D, E and F run a separate demo flow that never reaches this check. A ruling against one of them is still written and shown on its receipts, and it stops any purchase that does go through the check.
+Every path that pays a seller reads Arkiv first, and the reads filter on the writer with `ownedBy`.
 
-The rows are checked in this order, and the first that applies decides.
+| Path | Who | What is read | By |
+|---|---|---|---|
+| "Ask the agent" in the app | Discovery listings | Delivery record and rulings | Delivery record by name. Rulings by the payTo the listing names (`Candidate.payTo`) |
+| The Seller C scene | Seller C, then the cheapest listing | Delivery record and rulings | Seller C by its own address. The listing as above |
+| The lost answer demo | Sellers A, B, D, E and F | Rulings only | The address vet402 pays that seller at |
+| `api/try-job` on the public deploy | Discovery listings | Delivery record and rulings, read only | As in the app. It needs only the writer's address (`ARKIV_WRITER_ADDRESS`), no key |
+
+A listing's delivery record is still found by name, because a listing could name another seller's address and borrow its record. Its rulings are read by the address it names, and a name listed under several addresses is stopped when any of them was ruled against. The pick itself is always read before it is offered: the ranking reads the five front runners, and when the pick falls below them, it is read too and the ranking runs again.
+
+The demo sellers are read for rulings only. Seller B, D, E and F never deliver on purpose, so their delivery record would stop the scene it exists to show. A ruling does stop them: after Arc's Fraud ruling on Seller F, **Try Seller F** answers "Seller F: Arc ruled against this seller in the last 7 days. Not paid." and nothing is paid. The same goes for D and E after Silent.
+
+A payment entity counts only once it is older than 60 seconds. Every page of the seller's payments and rulings is read. The rows are checked in this order, and the first that applies decides.
 
 | What Arkiv holds | What happens | The check's sentence |
 |---|---|---|
@@ -31,7 +44,9 @@ The rows are checked in this order, and the first that applies decides.
 | Payment entities and no live seller entity | Not paid, next listing | No recent delivery from this seller. Not paid. |
 | The read failed | Not paid, next listing | Arkiv could not be read, so the delivery check did not run. Not paid. |
 
-The note above the card is built in `server/jobs.ts` and reads "{seller}: No recent delivery from this seller. Not paid." for every seller passed over, whichever row stopped it.
+The note above the card is built in `server/jobs.ts` and carries the check's own sentence for each seller passed over, for example "{seller}: Arc ruled against this seller in the last 7 days. Not paid." The demo shows the same sentence when it refuses a seller.
+
+Another x402 buyer can read the same rulings with `isRuledAgainst(payTo, { writer })` from `packages/sealed-delivery`. It sends the query in [schema.md](schema.md#vet402_verdict) over plain JSON-RPC, with no key.
 
 ## Reading on the receipts page
 
@@ -56,7 +71,9 @@ Rows the live check writes have a "live-check-" seller name and expire within mi
 
 ## Checking it
 
-`npx bun run scripts/arkiv-live.ts` writes a payment, a settlement and a seller under a "live-check-" name, reads them back and prints the result of each check. Step (3) shows the extension setting the expiry from the block it lands in, step (10) writes a ruling against a fresh address and expects the check to refuse it, and step (11) has the writer's own key try to change a receipt and expects a refusal. Those rows expire within minutes.
+`npx bun run scripts/arkiv-live.ts` writes a payment, a settlement and a seller under a "live-check-" name, reads them back and prints the result of each check. Step (3) shows the extension setting the expiry from the block it lands in, and step (11) has the writer's own key try to change a receipt and expects a refusal. Those rows expire within minutes.
+
+Step (10) writes a ruling against a fresh address with `ARKIV_OTHER_KEY`, as a writer of its own, and expects that writer's check to refuse it. Step (10b) expects the production writer's check to ignore it. The production writer never writes a test ruling, so the rulings it holds are only Arc's. Without `ARKIV_OTHER_KEY`, step (10) is skipped.
 
 To check the screen text for words that must not appear:
 

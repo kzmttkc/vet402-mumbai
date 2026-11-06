@@ -23,3 +23,5 @@ export {
   signPromise,
 } from './common'
 export type { PaymentAuth, SealedBox, SealedPromise, SealedResponse } from './common'
+export { ARKIV_RPC, isRuledAgainst, RULING_SECONDS, rulingQuery } from './rulings'
+export type { RulingOptions } from './rulings'

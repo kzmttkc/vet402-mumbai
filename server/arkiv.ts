@@ -89,8 +89,18 @@ export interface VerdictRecord {
 /** How a seller is found on Arkiv: by its payTo address when vet402 knows it, by name otherwise. */
 export interface SellerId {
   name: string
+  /** vet402's own address for this seller. Its delivery record and its rulings are read by it. */
   payTo: string | null
+  /**
+   * The address a catalog listing says it is paid at. Only Arc's rulings are read by it, never the
+   * delivery record, so a listing cannot borrow another seller's record by naming its address.
+   */
+  rulingAddress?: string | null
 }
+
+/** Every address Arc's rulings are read by for this seller, lowercase and without repeats. */
+export const rulingAddresses = (seller: SellerId): string[] =>
+  [...new Set([seller.payTo, seller.rulingAddress].flatMap((a) => (a ? [addressColumn(a)] : [])))]
 
 /** The payTo address vet402 knows for a seller name, or null. Only vet402's own configuration answers it. */
 export type PayToOf = (sellerName: string) => string | null
@@ -164,16 +174,14 @@ interface WireEnv {
   transport?: Transport
 }
 
-export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): { wire: ArkivWire; writer: Hex } {
-  const chain = rabdi({ accessKey })
-  const account = privateKeyToAccount(writerKey)
-  const writer = account.address
+type ReadWire = Pick<ArkivWire, 'findPaymentKey' | 'findSellerKey' | 'findEvidenceKey' | 'findVerdictKey' | 'readSeller'>
+
+/** Every read the backend makes, filtered on one writer. No key is involved: reads go to the public RPC. */
+function createReads(accessKey: string, writer: Hex, transport?: Transport): ReadWire {
   const reads = createPublicClient({
-    chain,
+    chain: rabdi({ accessKey }),
     transport: transport ?? http(undefined, { retryCount: 0, timeout: READ_TIMEOUT_MS }),
   })
-  // No nonceManager, on purpose: one queue sends one write at a time.
-  const writes = createWalletClient({ chain, transport: transport ?? http(), account })
 
   // A known payTo address is the only key used, so a catalog seller cannot borrow another seller's record by its name.
   function sellerEntity(seller: SellerId) {
@@ -199,8 +207,82 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
     )
 
   return {
+    async findPaymentKey(transferId) {
+      const { entities } = await reads
+        .select({ $key: true })
+        .from(ReceiptSchema)
+        .where(eq('kind', 'payment'))
+        .where(eq('gateway_transfer_id', transferId))
+        .ownedBy(writer)
+        .limit(1)
+        .fetch()
+      return entities[0]?.$key ?? null
+    },
+
+    async findEvidenceKey(claimId) {
+      const { entities } = await reads
+        .select({ $key: true })
+        .from(EvidenceSchema)
+        .where(eq('kind', 'evidence'))
+        .where(eq('claim_id', claimId))
+        .ownedBy(writer)
+        .limit(1)
+        .fetch()
+      return entities[0]?.$key ?? null
+    },
+
+    async findVerdictKey(claimId) {
+      const { entities } = await reads
+        .select({ $key: true })
+        .from(VerdictSchema)
+        .where(eq('kind', 'verdict'))
+        .where(eq('claim_id', claimId))
+        .ownedBy(writer)
+        .limit(1)
+        .fetch()
+      return entities[0]?.$key ?? null
+    },
+
+    findSellerKey: async (seller) => (await sellerEntity(seller)).entities[0]?.$key ?? null,
+
+    async readSeller(seller) {
+      const [live, payments, verdicts, timing] = await Promise.all([
+        sellerEntity(seller),
+        readAllPages((offset) => {
+          const query = reads.select({ $key: true, $createdAt: true }).from(ReceiptSchema).where(eq('kind', 'payment'))
+          return (seller.payTo ? query.where(eq('pay_to', addressColumn(seller.payTo))) : query.where(eq('seller', sellerColumn(seller.name))))
+            .ownedBy(writer)
+            .orderBy(asc('$key'))
+            .limit(PAGE_SIZE)
+            .offset(offset)
+            .fetch()
+        }),
+        // vet402's own address and the address a listing names. Without either there is nothing to read rulings by.
+        Promise.all(rulingAddresses(seller).map(readVerdicts)).then((pages) => pages.flat()),
+        reads.getBlockTiming(),
+      ])
+      return {
+        sellerLive: live.entities.length > 0,
+        paymentBlocks: payments.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
+        verdictBlocks: verdicts.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
+        currentBlock: timing.currentBlock,
+        blockSeconds: timing.blockDuration,
+      }
+    },
+  }
+}
+
+export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): { wire: ArkivWire; writer: Hex } {
+  const chain = rabdi({ accessKey })
+  const account = privateKeyToAccount(writerKey)
+  const writer = account.address
+  // No nonceManager, on purpose: one queue sends one write at a time.
+  const writes = createWalletClient({ chain, transport: transport ?? http(), account })
+
+  return {
     writer,
     wire: {
+      ...createReads(accessKey, writer, transport),
       createReceipt: (values, options) =>
         writes.createEntity(
           ReceiptSchema,
@@ -217,77 +299,29 @@ export function createArkivWire({ writerKey, accessKey, transport }: WireEnv): {
       createVerdict: (values, options) =>
         writes.createEntity(VerdictSchema, { ...values, chain_id: u64(values.chain_id) }, options),
       extendEntity: (params) => writes.extendEntity(params),
-
-      async findPaymentKey(transferId) {
-        const { entities } = await reads
-          .select({ $key: true })
-          .from(ReceiptSchema)
-          .where(eq('kind', 'payment'))
-          .where(eq('gateway_transfer_id', transferId))
-          .ownedBy(writer)
-          .limit(1)
-          .fetch()
-        return entities[0]?.$key ?? null
-      },
-
-      async findEvidenceKey(claimId) {
-        const { entities } = await reads
-          .select({ $key: true })
-          .from(EvidenceSchema)
-          .where(eq('kind', 'evidence'))
-          .where(eq('claim_id', claimId))
-          .ownedBy(writer)
-          .limit(1)
-          .fetch()
-        return entities[0]?.$key ?? null
-      },
-
-      async findVerdictKey(claimId) {
-        const { entities } = await reads
-          .select({ $key: true })
-          .from(VerdictSchema)
-          .where(eq('kind', 'verdict'))
-          .where(eq('claim_id', claimId))
-          .ownedBy(writer)
-          .limit(1)
-          .fetch()
-        return entities[0]?.$key ?? null
-      },
-
-      findSellerKey: async (seller) => (await sellerEntity(seller)).entities[0]?.$key ?? null,
-
-      async readSeller(seller) {
-        const [live, payments, verdicts, timing] = await Promise.all([
-          sellerEntity(seller),
-          readAllPages((offset) => {
-            const query = reads.select({ $key: true, $createdAt: true }).from(ReceiptSchema).where(eq('kind', 'payment'))
-            return (seller.payTo ? query.where(eq('pay_to', addressColumn(seller.payTo))) : query.where(eq('seller', sellerColumn(seller.name))))
-              .ownedBy(writer)
-              .orderBy(asc('$key'))
-              .limit(PAGE_SIZE)
-              .offset(offset)
-              .fetch()
-          }),
-          seller.payTo ? readVerdicts(seller.payTo) : Promise.resolve([]),
-          reads.getBlockTiming(),
-        ])
-        return {
-          sellerLive: live.entities.length > 0,
-          paymentBlocks: payments.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
-          verdictBlocks: verdicts.flatMap((row) => (row.$createdAt === undefined ? [] : [row.$createdAt])),
-          currentBlock: timing.currentBlock,
-          blockSeconds: timing.blockDuration,
-        }
-      },
     },
   }
 }
 
+/**
+ * The reads alone, for a place that holds no writer key, such as the public deploy. It knows only the
+ * writer's address, so it can check a seller but never write. The access key is optional: without it
+ * the reads go to the public endpoint, which is rate limited.
+ */
+export function createArkivReadWire({ writer, accessKey = '', transport }: { writer: Hex; accessKey?: string; transport?: Transport }): ReadWire {
+  return createReads(accessKey, writer, transport)
+}
+
 /** What the screen may do about this seller, given what Arkiv holds for it. */
+/** True when Arc ruled against this seller within VERDICT_SECONDS of the current block. */
+export function ruledRecently(read: Pick<SellerRead, 'verdictBlocks' | 'currentBlock' | 'blockSeconds'>): boolean {
+  return read.verdictBlocks.some((block) => (read.currentBlock - block) * BigInt(read.blockSeconds) < VERDICT_SECONDS)
+}
+
 export function decideDelivery(read: SellerRead): DeliveryCheck {
   // A ruling comes first: a seller Arc ruled against is not paid, however recently it delivered.
   const age = (block: bigint) => (read.currentBlock - block) * BigInt(read.blockSeconds)
-  if (read.verdictBlocks.some((block) => age(block) < VERDICT_SECONDS)) return { kind: 'expired', line: RULED_AGAINST }
+  if (ruledRecently(read)) return { kind: 'expired', line: RULED_AGAINST }
   if (read.sellerLive) return { kind: 'live', line: 'Delivered recently.' }
   // A payment under a minute old is not counted, because its seller entity may not be readable yet.
   const counted = read.paymentBlocks.filter((block) => age(block) > COUNT_AFTER_SECONDS)
@@ -295,7 +329,11 @@ export function decideDelivery(read: SellerRead): DeliveryCheck {
   return { kind: 'expired', line: NOT_PAID }
 }
 
-export type SellerCheck = (seller: string) => Promise<DeliveryCheck>
+/**
+ * Reads one seller before it is paid. `payTo` is the address the listing says it is paid at, when
+ * there is one: Arc's rulings are read by it as well as by vet402's own address for that name.
+ */
+export type SellerCheck = (seller: string, payTo?: string | null) => Promise<DeliveryCheck>
 
 export function createSellerCheck(
   wire: Pick<ArkivWire, 'readSeller'>,
@@ -303,13 +341,37 @@ export function createSellerCheck(
   scrub: (error: unknown) => string,
   payToOf: PayToOf = () => null,
 ): SellerCheck {
-  return async (seller) => {
+  return async (seller, payTo) => {
     try {
-      return decideDelivery(await wire.readSeller({ name: seller, payTo: payToOf(seller) }))
+      return decideDelivery(await wire.readSeller({ name: seller, payTo: payToOf(seller), ...(payTo ? { rulingAddress: payTo } : {}) }))
     } catch (error) {
       // Fail closed: without the record, nothing is paid.
       log(`Arkiv seller read failed: ${scrub(error)}`)
       return { kind: 'expired', line: UNREADABLE }
+    }
+  }
+}
+
+/**
+ * The check in front of vet402's own demo sellers (A to F). It looks at Arc's rulings only, read by the
+ * address the seller is paid at, because a demo seller that never delivers is the point of its scene.
+ * Returns the sentence the screen shows when the seller is not paid, or null when it may be.
+ */
+export function createRulingGate(
+  wire: Pick<ArkivWire, 'readSeller'>,
+  log: (message: string) => void,
+  scrub: (error: unknown) => string,
+  payToOf: PayToOf,
+): (sellerName: string) => Promise<string | null> {
+  return async (sellerName) => {
+    const payTo = payToOf(sellerName)
+    if (!payTo) return null
+    try {
+      return ruledRecently(await wire.readSeller({ name: sellerName, payTo })) ? `${sellerName}: ${RULED_AGAINST}` : null
+    } catch (error) {
+      // Fail closed, as the delivery check does.
+      log(`Arkiv ruling read failed: ${scrub(error)}`)
+      return `${sellerName}: ${UNREADABLE}`
     }
   }
 }

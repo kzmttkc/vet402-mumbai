@@ -190,35 +190,63 @@ export const DEFAULT_JOB_LIMIT = 10_000n
 /** The line above the card for a seller that was not paid: the check's own reason (ruled against, unreadable, no delivery). */
 const skipNotice = (seller: string, line: string) => `${seller}: ${line}`
 
+/** One seller name and one address it is paid at, as a catalog listing names them. */
+const pairOf = (candidate: Candidate) => `${candidate.sellerName}\n${candidate.payTo?.toLowerCase() ?? ''}`
+
+/** What the checks found, by seller name. A name is stopped when any address it is listed under is stopped. */
+export interface Signals {
+  signals: Map<string, SellerSignal>
+  lines: Map<string, string>
+  /** The name and address pairs Arkiv was read for. */
+  checked: Set<string>
+}
+
+async function readOne(
+  candidate: Candidate,
+  found: Signals,
+  sellerCheck: SellerCheck | undefined,
+  coverage: ((candidate: Candidate) => Promise<boolean | null>) | undefined,
+): Promise<void> {
+  const name = candidate.sellerName
+  found.checked.add(pairOf(candidate))
+  const [check, covered] = await Promise.all([
+    // The address the listing names goes with the name, so a ruling against that address stops it.
+    sellerCheck ? sellerCheck(name, candidate.payTo) : Promise.resolve(null),
+    coverage && candidate.sealedBy ? coverage(candidate).catch(() => null) : Promise.resolve(null),
+  ])
+  const before = found.signals.get(name)
+  // A stop is never undone by a later read of the same name under another address.
+  if (before?.delivery === 'expired') return
+  found.signals.set(name, { ...(check ? { delivery: check.kind } : {}), covered: covered ?? before?.covered ?? null })
+  if (check) found.lines.set(name, check.line)
+}
+
 /**
  * Reads what Arkiv and the deposit contract say about the sellers the ranking would reach, at most
- * MAX_SELLERS_CHECKED of them, so the second ranking can skip a seller that stopped delivering.
+ * MAX_SELLERS_CHECKED name and address pairs, so the second ranking can skip a seller that stopped
+ * delivering or that Arc ruled against.
  */
 export async function readSignals(
   ranked: { candidate: Candidate; blocked: string | null }[],
   sellerCheck: SellerCheck | undefined,
   coverage: ((candidate: Candidate) => Promise<boolean | null>) | undefined,
-): Promise<{ signals: Map<string, SellerSignal>; lines: Map<string, string> }> {
-  const signals = new Map<string, SellerSignal>()
-  const lines = new Map<string, string>()
-  if (!sellerCheck && !coverage) return { signals, lines }
-  const reachable = ranked.filter((r) => r.blocked === null)
-  const sellers: Candidate[] = []
-  for (const r of reachable) {
-    if (sellers.length >= MAX_SELLERS_CHECKED) break
-    if (!sellers.some((c) => c.sellerName === r.candidate.sellerName)) sellers.push(r.candidate)
+): Promise<Signals> {
+  const found: Signals = { signals: new Map(), lines: new Map(), checked: new Set() }
+  if (!sellerCheck && !coverage) return found
+  const pairs = new Map<string, Candidate>()
+  for (const r of ranked) {
+    if (pairs.size >= MAX_SELLERS_CHECKED) break
+    if (r.blocked === null && !pairs.has(pairOf(r.candidate))) pairs.set(pairOf(r.candidate), r.candidate)
   }
+  // One read at a time per name, so two addresses of one name cannot race each other.
+  const byName = new Map<string, Candidate[]>()
+  for (const candidate of pairs.values()) byName.set(candidate.sellerName, [...(byName.get(candidate.sellerName) ?? []), candidate])
   await Promise.all(
-    sellers.map(async (candidate) => {
-      const [check, covered] = await Promise.all([
-        sellerCheck ? sellerCheck(candidate.sellerName) : Promise.resolve(null),
-        coverage && candidate.sealedBy ? coverage(candidate).catch(() => null) : Promise.resolve(null),
-      ])
-      signals.set(candidate.sellerName, { ...(check ? { delivery: check.kind } : {}), covered })
-      if (check) lines.set(candidate.sellerName, check.line)
+    [...byName.values()].map(async (list) => {
+      for (const candidate of list) await readOne(candidate, found, sellerCheck, coverage)
     }),
   )
-  return { signals, lines }
+  return found
 }
 
 export interface ChooseDeps {
@@ -240,6 +268,8 @@ export interface Chosen {
 /**
  * The agent's choice for one job: rank the whole catalog, read Arkiv and the deposit for the front
  * runners, rank again with that, and read the latest payment only when the pick is a payment check.
+ * The pick itself is always read, by its name and the address it lists, before it is offered: a pick
+ * below the front runners is read, and the ranking runs again when that read stops it.
  * Throws a JobError with the planner's own sentence when it will not pay anyone.
  */
 export async function choosePlan(job: string, candidates: Candidate[], deps: ChooseDeps): Promise<Chosen> {
@@ -247,13 +277,22 @@ export async function choosePlan(job: string, candidates: Candidate[], deps: Cho
   const ctx = { networkName: deps.networkName, limit: deps.limit }
 
   const first = rankJob(job, candidates, ctx)
-  const { signals, lines } = await readSignals(first.ranked, deps.sellerCheck, deps.coverage)
-  const ranking = signals.size > 0 ? rankJob(job, candidates, { ...ctx, signals }) : first
+  const found = await readSignals(first.ranked, deps.sellerCheck, deps.coverage)
+  const { signals, lines } = found
+
+  let ranking = signals.size > 0 ? rankJob(job, candidates, { ...ctx, signals }) : first
+  for (let extra = 0; deps.sellerCheck && ranking.pick && !found.checked.has(pairOf(ranking.pick.candidate)); extra++) {
+    // Fail closed: a pick that was never read is never offered.
+    if (extra >= MAX_SELLERS_CHECKED) throw new JobError('NO_SELLER')
+    await readOne(ranking.pick.candidate, found, deps.sellerCheck, deps.coverage)
+    ranking = rankJob(job, candidates, { ...ctx, signals })
+  }
+
   const latest = needsLatestPayment(ranking) ? await deps.latestReceipt() : null
   const outcome = decide(job, ranking, latest)
   if (!outcome.ok) throw new JobError(outcome.reason, outcome.why, outcome.compared)
 
-  // A seller Arkiv says stopped delivering, that words and price alone would have put first, is named above the card.
+  // A seller Arkiv stopped, that words and price alone would have put first, is named above the card with the check's own reason.
   const pickAt = first.ranked.findIndex((r) => r.candidate === ranking.pick?.candidate)
   const notices = first.ranked
     .slice(0, pickAt < 0 ? first.ranked.length : pickAt)
@@ -300,7 +339,9 @@ export function createJobService(
     for (let checked = 0; checked < MAX_SELLERS_CHECKED; checked++) {
       const outcome = next(pool)
       if (!outcome.ok) throw new JobError(outcome.reason)
-      const check = sellerCheck ? await sellerCheck(outcome.plan.sellerName) : null
+      // The listing's own address goes with the name, so a ruling against it stops this seller too.
+      const listed = pool.find((c) => c.sellerName === outcome.plan.sellerName && c.resource === outcome.plan.request.url)
+      const check = sellerCheck ? await sellerCheck(outcome.plan.sellerName, listed?.payTo ?? null) : null
       if (check?.kind !== 'expired') return present(outcome.plan, notices, check?.line ?? null)
       notices.push(skipNotice(outcome.plan.sellerName, check.line))
       const skipped = outcome.plan.sellerName

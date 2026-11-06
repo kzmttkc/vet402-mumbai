@@ -74,7 +74,7 @@ https://api.gateway.ethswarm.org/bytes/b9e5a7f642e46a03ab213b7446b93698da4a71e65
 - **Batch ID:** `b6455d939e16dd59c5295e70b8123fe8412e224614eec41aeee0c3d3e5ecf9c0`, depth 17, amount 95011833600 per chunk, immutable.
 - **Purchase:** Gnosis Chain transaction `0xca6451b9425077d4a0a15fb588bd2c7a13fc83659dd823a71e59cbc9ac1cba12`, block 49129674, 2026-11-05 22:53 UTC, sent by the node's wallet to the Swarm postage stamp contract `0x45a1502382541cd610cc9068e88727426b696293`, which emitted `BatchCreated` for this batch.
 - **Lifetime:** `GET /stamps/<batch>` on my node answered `batchTTL` 2360122 s on 2026-11-05 at 23:24 UTC, so the batch lasts until about 2026-12-03 07:00 UTC unless I top it up.
-- **Code:** `SWARM_API_URL` names the Bee API and `SWARM_POSTAGE_BATCH_ID` the batch it stamps with (commit `2d6d920`). Without them the upload goes to the public gateway at `https://api.gateway.ethswarm.org` with bee-js's `NULL_STAMP` (64 zeros), and the gateway stamps it with a batch of its own. That batch belongs to the gateway, and its ID is not visible from outside.
+- **Code:** `SWARM_API_URL` names the Bee API and `SWARM_POSTAGE_BATCH_ID` the batch it stamps with (commit `2d6d920`). Without them the upload goes to the public gateway at `https://api.gateway.ethswarm.org` with bee-js's `NULL_STAMP` (64 zeros), and the gateway stamps it with a batch of its own.
 
 Which boxes went which way:
 
@@ -83,6 +83,9 @@ Which boxes went which way:
 | 2026-11-05 22:40 to 22:46 UTC, earlier contract `0xa1eff55d…` | The public gateway | The gateway's own batch, through `NULL_STAMP` |
 | 2026-11-05 23:11 to 23:16 UTC, earlier contract `0xa1eff55d…` | My Bee node | `b6455d93…` |
 | 2026-11-06 01:42 to 01:46 UTC and 01:59 to 02:04 UTC, live contract `0xE9C35ad2…` | My Bee node | `b6455d93…`, the only batch on the node |
+| "Try a dispute yourself" on the public deploy (`api/try-dispute`), from the `arkiv2` branch on | The public gateway | The gateway's own batch, through `NULL_STAMP` |
+
+The public deploy on Vercel puts each claimed box on Swarm through the public gateway with the null stamp, and writes the evidence entity that points to it, with `ARKIV_WRITER_KEY` set on the deploy. A null stamp upload through the gateway answered on 2026-11-06 at 03:03 UTC with reference `c171583664857b5f0dc77e8f5160112169afb16c19022390a70e37368c02874b`, and the gateway returned the same 427 bytes.
 
 ## Files that upload to Swarm and read from it
 
@@ -91,19 +94,26 @@ Which boxes went which way:
 | `src/lib/swarmBox.ts` | `createSwarmWire` uploads and downloads with bee-js (`bee.data.upload`, `bee.data.download`). `readBox` only accepts a box for the expected claim, contract and chain whose ciphertext matches its hash. |
 | `server/swarm.ts` | Builds the box from the claim and uploads it. |
 | `server/demo.ts` | Starts the upload right after the claim and puts the reference on the receipt row. A failed upload only logs. |
+| `server/tryDisputeWire.ts` | The public try's uploader and Arkiv writer, built only when the deploy holds `ARKIV_WRITER_KEY`. It always uses the public gateway. |
 | `server/arkiv.ts` | Writes the `vet402_evidence` entity once the payment has its Gateway transfer id. |
 | `src/arkiv/schema.ts` | The `vet402_evidence` schema. |
-| `src/arkiv/readArkiv.ts` | `createEvidenceReader` reads `swarm_ref` for a claim from Arkiv's public RPC. |
-| `src/lib/openSealed.ts` | `openFromRecord`: Arkiv, then Swarm, then the key from Arc, then the match. |
+| `src/arkiv/readArkiv.ts` | `createEvidenceLister` reads every `vet402_evidence` entity of the writer, and `createEvidenceReader` reads `swarm_ref` for one claim, both from Arkiv's public RPC. |
+| `src/lib/openSealed.ts` | `openableAnswers` builds the list from the evidence entities. `openFromRecord`: Arkiv, then Swarm, then the key from Arc, then the match. There is no fallback. |
 | `src/components/OpenSealed.tsx` | "Open a sealed answer" on the published screen. |
-| `scripts/swarm-live.ts` | One upload and one read on the real network. |
+| `scripts/swarm-live.ts` | One upload and one read on the real network. It reads `SWARM_API_URL` and `SWARM_POSTAGE_BATCH_ID` as the server does. |
 
 ## Run one upload and one read yourself
 
-You need Node and network access. No key, no wallet and no stamp. The script always uses the public gateway.
+You need Node and network access. No key, no wallet and no stamp. Without the two variables the upload goes through the public gateway and its null stamp.
 
 ```bash
 npx bun run scripts/swarm-live.ts
+```
+
+With your own Bee node and batch, the upload goes there, and the read still goes through the public gateway, to show that anyone can fetch the box:
+
+```bash
+SWARM_API_URL=http://127.0.0.1:1633 SWARM_POSTAGE_BATCH_ID=<your batch id> npx bun run scripts/swarm-live.ts
 ```
 
 You should see a reference, a link you can open, and the last line:
@@ -114,9 +124,9 @@ RESULT: read back the same box
 
 To see the whole path on the published screen:
 
-1. Build with the writer address: the build derives it from `ARKIV_WRITER_KEY`, and only the address enters the bundle.
-2. Open the page and press **Open** under "Open a sealed answer".
-3. The screen shows one line for each source it read, then the result:
+1. Build with the writer address: the build derives it from `ARKIV_WRITER_KEY`, or takes `ARKIV_WRITER_ADDRESS`, and only the address enters the bundle.
+2. Open the page. "Open a sealed answer" lists the claims that have a `vet402_evidence` entity on Arkiv. The exported file adds only each claim's seller name and the block that holds its key. It holds no box: no ciphertext and no plaintext hash.
+3. Press **Open**. The screen shows one line for each source it read, then the result:
 
 ```
 Record from Arkiv.
@@ -125,17 +135,24 @@ Key from Arc.
 Matches the seller's promise.
 ```
 
-If Arkiv or Swarm cannot be read, the screen opens the copy in the exported file and shows only the lines it did read.
+Swarm is required. There is no copy on the page to open instead, so when a source fails the answer does not open, and the last line says which one:
+
+| What failed | The line |
+|---|---|
+| Swarm did not return the box | Box not found on Swarm. |
+| Arkiv has no evidence entity for the claim | No record on Arkiv for this claim. |
+| Arkiv could not be read, or the build has no writer address | Could not read Arkiv. |
+| The box from Swarm is for another claim, contract or chain, or its ciphertext is not the one claimed on Arc | This box is not the one claimed on Arc. |
 
 ## Swarm in the demo video
 
-2:23.8 to 2:28.2: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order.
+From 2:20.3: "Open a sealed answer" reads "Record from Arkiv." "Box from Swarm." "Key from Arc." One line per source, in that order.
 
-The boxes went to Swarm two ways on 2026-11-05. The boxes of the filmed run, 22:40 to 22:46 UTC, went through the public gateway with bee-js's `NULL_STAMP`, so the gateway stamped them with a batch of its own. The four boxes from 23:11 UTC on, Seller A, E, D and F, went up through my own Bee node with my own batch `b6455d93…`, as the table under "Postage stamp, wallet and node" shows.
+The video was filmed on 2026-11-05 between 22:40 and 22:49 UTC, on the earlier contract `0xa1eff55d…`. The boxes of that run went through the public gateway with bee-js's `NULL_STAMP`. My batch was bought at 22:53 UTC, and every box after it went through my own Bee node with batch `b6455d93…`: the run of 23:11 to 23:16 UTC on the same contract, and both runs on the live contract on 2026-11-06. The table under "Postage stamp, wallet and node" lists all three.
 
-## What got in my way
+## What would make Swarm even better
 
-- bee-js 13 moved the raw data calls under `bee.data`. I first looked for `uploadData` in the types and it was not there. The current call is `bee.data.upload(batchId, data)`.
-- The public gateway does not say which batch it stamped with. `GET /stamps` there returned 404 on 2026-11-05 UTC. My own node answers `GET /stamps/<batch>` with the depth, the amount and the TTL.
-- bee-js made the published page's main script larger, from 367 kB to 447 kB before compression in my build.
-- The build prints a warning from the copy of zod that bee-js brings along, about a comment Rollup cannot place. The build still succeeds.
+- **The new `bee.data` calls in the migration notes.** bee-js 13 moved the raw data calls under `bee.data`. I first looked for `uploadData` in the types. The current call is `bee.data.upload(batchId, data)`, and a line in the migration notes would point straight to it.
+- **The gateway's batch on request.** `GET /stamps` on the public gateway returned 404 on 2026-11-05 UTC, while my own node answers `GET /stamps/<batch>` with the depth, the amount and the TTL. The same answer from the gateway would let a null stamp upload show its lifetime too.
+- **A slimmer browser build.** bee-js took the published page's main script from 367 kB to 447 kB before compression in my build. A smaller entry point for upload and download alone would keep pages light.
+- **One build warning less.** The copy of zod that bee-js brings along prints a Rollup warning about a comment it cannot place. The build succeeds, and a bundled zod without that comment would make the output clean.

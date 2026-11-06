@@ -2,9 +2,10 @@
 //
 // Reads ARKIV_WRITER_KEY and ARKIV_ACCESS_KEY from the environment, and ARKIV_OTHER_KEY when there is
 // a second funded key to try. Keys are never printed. It writes one payment, one settlement and one
-// seller under a "live-check-" name, tries to change the payment with the writer's own key, and
-// writes one ruling against a fresh address that no seller uses. The receipts screen leaves those
-// rows out, and they expire on their own within minutes, so nothing is left behind on screen.
+// seller under a "live-check-" name and tries to change the payment with the writer's own key. The
+// receipts screen leaves those rows out, and they expire on their own within minutes.
+// The ruling in step (10) is written by ARKIV_OTHER_KEY, never by the production writer, so a test
+// ruling never enters vet402's own rulings or their count. Without that key, step (10) is skipped.
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk'
 import { rabdi } from '@arkiv-network/sdk/chains'
 import { eq } from '@arkiv-network/sdk/query'
@@ -242,9 +243,19 @@ async function main(): Promise<void> {
   const afterExpiry = await check(run)
   report('(7c)', afterExpiry.kind === 'expired', `after expiry: "${afterExpiry.line}"`)
 
-  // (10) A ruling from Arc stops the purchase. The address is fresh, so no real seller is marked.
+  // (10) A ruling from Arc stops the purchase. It is written by the second key, as its own writer, so the
+  // production writer's rulings hold only Arc's. The address is fresh, so no real seller is marked.
+  if (!isKey(otherKey)) {
+    console.log('(10) skipped: ARKIV_OTHER_KEY is not set, and the production writer never writes a test ruling')
+    return
+  }
+  const testWriter = createArkivWire({ writerKey: otherKey, accessKey })
+  if ((await reads.getBalance({ address: testWriter.writer })) === 0n) {
+    report('(10)', false, 'ARKIV_OTHER_KEY has no balance, so it cannot write the test ruling')
+    return
+  }
   const ruledPayTo = privateKeyToAccount(generatePrivateKey()).address
-  await wire.createVerdict(
+  await testWriter.wire.createVerdict(
     {
       kind: 'verdict',
       claim_id: `${run}-claim`,
@@ -255,13 +266,16 @@ async function main(): Promise<void> {
     },
     receiptOptions,
   )
-  const ruledCheck = createSellerCheck(wire, (message) => console.error(message), scrub, () => ruledPayTo)
+  const ruledCheck = createSellerCheck(testWriter.wire, (message) => console.error(message), scrub, () => ruledPayTo)
   let ruled = await ruledCheck(run)
   for (let i = 0; i < 10 && ruled.line !== RULED_AGAINST; i++) {
     await new Promise((resolve) => setTimeout(resolve, 2000))
     ruled = await ruledCheck(run)
   }
-  report('(10)', ruled.kind === 'expired' && ruled.line === RULED_AGAINST, `with a ruling on Arkiv: "${ruled.line}"`)
+  report('(10)', ruled.kind === 'expired' && ruled.line === RULED_AGAINST, `with a ruling on Arkiv from the test writer: "${ruled.line}"`)
+  // The production writer's check does not see it.
+  const production = await createSellerCheck(wire, (message) => console.error(message), scrub, () => ruledPayTo)(run)
+  report('(10b)', production.line !== RULED_AGAINST, `the production writer's check ignores the test ruling: "${production.line}"`)
 }
 
 main()

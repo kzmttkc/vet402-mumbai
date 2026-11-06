@@ -3,6 +3,8 @@ import { GatewayClient } from '@circle-fin/x402-batching/client'
 import type { Address, Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { ARC_CAIP2 } from '../src/existing/arc-gateway'
+import { createArkivReadWire, createScrubber, createSellerCheck } from './arkiv'
+import type { SellerCheck } from './arkiv'
 import { createJobPorts } from './jobPorts'
 import type { TransferInfo } from './jobs'
 import { TRANSFER_STATUSES } from './receiptStore'
@@ -15,6 +17,29 @@ const RPC_URL = 'https://rpc.testnet.arc.network'
 const isKey = (value: string | undefined): value is Hex => /^0x[0-9a-fA-F]{64}$/.test(value ?? '')
 
 type Env = Record<string, string | undefined>
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/
+
+/**
+ * The writer whose entities the public agent trusts: ARKIV_WRITER_ADDRESS, or the address of
+ * ARKIV_WRITER_KEY when the deploy holds it. Null when neither is set.
+ */
+export function arkivWriterFromEnv(env: Env): Address | null {
+  if (isKey(env.ARKIV_WRITER_KEY)) return privateKeyToAccount(env.ARKIV_WRITER_KEY).address
+  return ADDRESS.test(env.ARKIV_WRITER_ADDRESS ?? '') ? (env.ARKIV_WRITER_ADDRESS as Address) : null
+}
+
+/**
+ * The delivery check the local app runs, for reading only: the seller's record and Arc's rulings
+ * against the address its listing names, filtered on vet402's writer. No key is needed. Null
+ * without a writer address, and the agent then picks on words and price alone, as before.
+ */
+export function readOnlySellerCheck(env: Env, log: (message: string) => void = (m) => console.error(m)): SellerCheck | null {
+  const writer = arkivWriterFromEnv(env)
+  if (!writer) return null
+  const accessKey = env.ARKIV_ACCESS_KEY ?? ''
+  return createSellerCheck(createArkivReadWire({ writer, accessKey }), log, createScrubber([accessKey]))
+}
 
 const toInfo = (t: { id: string; status: string; txHash?: unknown }): TransferInfo => ({
   id: t.id,
@@ -44,7 +69,9 @@ export function tryJobFromEnv(env: Env = process.env): TryJob | null {
   const sealedAddress = parseSealedAddress(env.SEALED_DELIVERY_ADDRESS)
   const sealed = sealedAddress ? createSealedDelivery({ address: sealedAddress }) : null
 
+  const sellerCheck = readOnlySellerCheck(env)
   const ports: TryJobPorts = {
+    ...(sellerCheck ? { sellerCheck } : {}),
     candidates: () => jobPorts.candidates(),
     latestReceipt: () => jobPorts.latestReceipt(),
     holdAvailable: () => jobPorts.holdAvailable(),

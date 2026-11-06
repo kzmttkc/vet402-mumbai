@@ -13,7 +13,8 @@ import {
   parseDailyLimit,
   TRY_MESSAGES,
 } from '../tryDispute'
-import type { TryEvent, TryPorts } from '../tryDispute'
+import type { TryEvent, TryPorts, TryRecord } from '../tryDispute'
+import type { ReceiptRow } from '../receiptStore'
 import { recentPaymentTimes } from '../tryDisputeWire'
 import { sealResponse } from '../../src/lib/sealed'
 import { splitLines } from '../../src/lib/receiptLines'
@@ -49,6 +50,8 @@ interface Setup {
   dailyLimit?: number
   answerWaitMs?: number
   clock?: { t: number }
+  record?: TryRecord
+  evidence?: DemoPorts['evidence']
 }
 
 function setup(over: Setup = {}) {
@@ -87,8 +90,10 @@ function setup(over: Setup = {}) {
     countPayments: () => Promise.resolve(0),
     sealed: sealedPorts,
     sealedPollMs: 1,
+    ...(over.evidence ? { evidence: over.evidence } : {}),
   }
   const ports: TryPorts = {
+    ...(over.record ? { record: over.record } : {}),
     contract: '0x00000000000000000000000000000000000000c0',
     demo,
     openSeller: () => {
@@ -347,5 +352,45 @@ describe("Circle's record as the shared counter", () => {
     const times = await recentPaymentTimes('0x00000000000000000000000000000000000000a1', '0x00000000000000000000000000000000000000b2', fetchImpl)
     expect(times).toEqual([Date.parse('2026-11-05T21:01:45.884Z')])
     expect(asked).toContain('from=0x00000000000000000000000000000000000000a1&to=0x00000000000000000000000000000000000000b2')
+  })
+})
+
+describe('the try on the public record', () => {
+  test('with the writer key, the try hands its row to Arkiv with the transfer id and the Swarm reference', async () => {
+    const seen: ReceiptRow[][] = []
+    const lookups: string[] = []
+    const record: TryRecord = {
+      wrap(store) {
+        return {
+          store: {
+            list: () => store.list(),
+            add: (row) => store.add(row),
+            update: (id, patch) => {
+              store.update(id, patch)
+              seen.push(store.list().map((r) => ({ ...r })))
+            },
+          },
+          idle: () => Promise.resolve(),
+        }
+      },
+      findTransfer: (nonce) => {
+        lookups.push(nonce)
+        return Promise.resolve(lookups.length < 2 ? null : { id: 'transfer-1', status: 'received', txHash: null })
+      },
+    }
+    const { tries } = setup({ record, evidence: () => Promise.resolve('ab'.repeat(32)) })
+    const { events } = await runTry(tries)
+    expect(resultOf(events)?.type === 'result' && (resultOf(events) as { ok: boolean }).ok).toBe(true)
+    expect(lookups).toEqual([NONCE, NONCE])
+    const last = seen.at(-1)?.[0]
+    expect(last?.transferId).toBe('transfer-1')
+    expect(last?.evidence).toEqual({ claimId: CLAIM_ID, swarmRef: 'ab'.repeat(32) })
+  })
+
+  test('without the key the try runs as before and asks Gateway for nothing more', async () => {
+    const { tries, log } = setup()
+    const { events } = await runTry(tries)
+    expect(resultOf(events)?.type).toBe('result')
+    expect(log.payments).toBe(1)
   })
 })

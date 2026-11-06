@@ -1,35 +1,63 @@
 import { useEffect, useMemo, useState } from 'react'
 import { KeyRound, Loader2 } from 'lucide-react'
 import type { Hex } from 'viem'
-import { createEvidenceReader } from '@/arkiv/readArkiv'
-import { COULD_NOT_READ_KEY, openFromRecord } from '@/lib/openSealed'
-import type { EvidenceSources, OpenResult, PublicSealedFile } from '@/lib/openSealed'
+import { createEvidenceLister, createEvidenceReader } from '@/arkiv/readArkiv'
+import { COULD_NOT_READ_ARKIV_RECORD, COULD_NOT_READ_KEY, openableAnswers, openFromRecord } from '@/lib/openSealed'
+import type { EvidenceEntry, EvidenceSources, OpenResult, PublicSealedAnswer, PublicSealedFile } from '@/lib/openSealed'
 import { loadSealedFile } from '@/lib/publicData'
 import { createSwarmWire } from '@/lib/swarmBox'
 
 const button =
   'flex min-h-11 items-center gap-2 rounded-full border border-[var(--border)] bg-white px-4 text-sm font-semibold transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:opacity-40'
 
-/** Arkiv and Swarm straight from the browser. With no writer in the build, the exported file is used. */
-function publicSources(): EvidenceSources {
+const LIST_ATTEMPTS = 3
+
+/** Arkiv and Swarm straight from the browser. With no writer in the build, nothing can be opened. */
+function publicSources(): EvidenceSources & { listEvidence?: () => Promise<EvidenceEntry[]> } {
   if (!__ARKIV_WRITER__) return {}
   const swarm = createSwarmWire()
-  return { readEvidence: createEvidenceReader(__ARKIV_WRITER__ as Hex), downloadBox: (reference) => swarm.download(reference) }
+  return {
+    readEvidence: createEvidenceReader(__ARKIV_WRITER__ as Hex),
+    downloadBox: (reference) => swarm.download(reference),
+    listEvidence: createEvidenceLister(__ARKIV_WRITER__ as Hex),
+  }
+}
+
+/** The evidence entities, tried a few times because the public endpoint is rate limited. Null when every try failed. */
+async function listWithRetry(list: () => Promise<EvidenceEntry[]>): Promise<EvidenceEntry[] | null> {
+  for (let attempt = 0; attempt < LIST_ATTEMPTS; attempt++) {
+    try {
+      return await list()
+    } catch {
+      if (attempt + 1 < LIST_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)))
+    }
+  }
+  return null
 }
 
 /** Opens a sealed answer in the browser, with the key read straight from the chain. Nothing here can pay. */
 export function OpenSealed() {
   const sources = useMemo(() => publicSources(), [])
   const [file, setFile] = useState<PublicSealedFile>({ contract: null, answers: [] })
+  // The list comes from the evidence entities on Arkiv. The exported file only names each claim's seller and key block.
+  const [answers, setAnswers] = useState<PublicSealedAnswer[]>([])
+  const [listError, setListError] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, OpenResult>>({})
   const [opening, setOpening] = useState<string | null>(null)
 
   useEffect(() => {
-    void loadSealedFile().then(setFile)
-  }, [])
+    void (async () => {
+      const loaded = await loadSealedFile()
+      setFile(loaded)
+      if (!sources.listEvidence) return
+      const evidence = await listWithRetry(sources.listEvidence)
+      if (evidence === null) setListError(COULD_NOT_READ_ARKIV_RECORD)
+      else setAnswers(openableAnswers(loaded, evidence))
+    })()
+  }, [sources])
 
   const open = async (ref: string) => {
-    const answer = file.answers.find((a) => a.ref === ref)
+    const answer = answers.find((a) => a.ref === ref)
     if (!answer) return
     setOpening(ref)
     const result: OpenResult = file.contract
@@ -51,10 +79,15 @@ export function OpenSealed() {
         </div>
       </div>
 
-      {file.answers.length === 0 && <p className="mt-3 text-sm text-[var(--muted)]">No sealed answers yet.</p>}
+      {listError && (
+        <p className="mt-3 text-sm text-[var(--danger)]" role="alert">
+          {listError}
+        </p>
+      )}
+      {!listError && answers.length === 0 && <p className="mt-3 text-sm text-[var(--muted)]">No sealed answers yet.</p>}
 
       <ul className="mt-3 space-y-3">
-        {file.answers.map((answer) => {
+        {answers.map((answer) => {
           const result = results[answer.ref]
           return (
             <li key={answer.ref} className="rounded-xl bg-white p-3">

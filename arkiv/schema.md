@@ -6,6 +6,8 @@ The definitions live in `src/arkiv/schema.ts`.
 
 Each table says which query reads a column. A column is indexed only when some query filters on it. On 2026-11-06 I took the index off `job_id`, `status` and `payment_key`, because no query filtered on them. Entities written before that still carry the index flag on those three. Reads never compare the flag, so old and new entities read the same.
 
+One column name means two things, and that is on purpose. `seller` holds the seller's **name** in `vet402_receipt` and `vet402_seller`, because the catalog names a seller and a receipt must show it. `seller` holds the **payTo address** in `vet402_verdict`, because Arc rules against the address that was paid, and a name is something any listing can copy. The address of a receipt or seller entity is in its own column, `pay_to`. So a ruling joins to a receipt on `vet402_verdict.seller = vet402_receipt.pay_to`, never on the two `seller` columns. Entities written before `pay_to` existed carry the name alone: at 03:15 UTC on 2026-11-06, 18 of the 123 receipts carried `pay_to`.
+
 Every list read sorts by `$key`, takes 100 rows a page and moves the offset by the rows plus the ones the schema skipped, up to 20 pages (`src/arkiv/pages.ts`). A query that matches more than 2,000 entities stops with an error instead of returning part of them.
 
 ## vet402_receipt
@@ -51,10 +53,10 @@ One per claim. It points the claim at its box on Swarm. More in [swarm.md](swarm
 
 | Attribute | Type | Indexed | Holds | Queried by |
 |---|---|---|---|---|
-| kind | str | yes | "evidence" | `createEvidenceReader` and `findEvidenceKey` |
-| claim_id | str | yes | The claim id on Arc | `createEvidenceReader`, which "Open a sealed answer" uses, and `findEvidenceKey` |
+| kind | str | yes | "evidence" | `createEvidenceReader`, `createEvidenceLister` and `findEvidenceKey` |
+| claim_id | str | yes | The claim id on Arc | `createEvidenceLister`, which gives "Open a sealed answer" its list, `createEvidenceReader`, which it opens each one with, and `findEvidenceKey` |
 | gateway_transfer_id | str | yes | The Gateway transfer id of the claimed payment | The hand query in swarm.md, the README query with `vet402_evidence` in place of `vet402_receipt` |
-| swarm_ref | str | no | The plain 32 byte Swarm reference of the box, as hex | Read by `createEvidenceReader` |
+| swarm_ref | str | no | The plain 32 byte Swarm reference of the box, as hex | Read by `createEvidenceReader`. The published screen has no other copy of the box |
 
 Flags: `readonly` and `permissionlessExtension`, like a receipt. All 11 evidence entities read back with flags `raw: 3` on 2026-11-06 at 01:01 UTC.
 
@@ -66,9 +68,9 @@ One per ruling. When the contract on Arc emits Silent (after `finalize`) or Frau
 
 | Attribute | Type | Indexed | Holds | Queried by |
 |---|---|---|---|---|
-| kind | str | yes | "verdict" | `readSeller`, `findVerdictKey` and the receipts page |
+| kind | str | yes | "verdict" | `readSeller`, `findVerdictKey`, `isRuledAgainst` and the receipts page |
 | claim_id | str | yes | The claim id on Arc | `findVerdictKey`, so a retry never writes a ruling twice |
-| seller | str | yes | The payTo address the ruling is against, lowercase | `readSeller` |
+| seller | str | yes | The payTo address the ruling is against, lowercase. Not a name, unlike `seller` in the other schemas | `readSeller`, by vet402's own address for the seller and by the payTo a catalog listing names, and `isRuledAgainst` |
 | verdict | str | no | "silent" or "fraud" | Read by hand. The receipts page shows the date of the latest ruling of either kind |
 | claim_tx | str | no | The claim's transaction on Arc. Optional | Read by hand, to open the claim on the explorer |
 | contract | str | no | The contract that ruled, lowercase | Read by hand, to check the Silent or Fraud event for `claim_id` |
@@ -77,6 +79,18 @@ One per ruling. When the contract on Arc emits Silent (after `finalize`) or Frau
 Flags: `readonly` and `permissionlessExtension`. Nobody can soften a ruling, and anybody can keep one visible.
 
 Lifetime: 30 days. A ruling stops payment for 7 days, counted from the block it was written in (`$createdAt`). Extending it keeps it readable and does not stretch those 7 days.
+
+Only Arc's rulings are written by the production writer. The live check writes its test ruling with a second key (`ARKIV_OTHER_KEY`), so no entity of this writer has the test contract `0x0000…0000` or chain id 0.
+
+The rulings against one address, the query `readSeller` and `isRuledAgainst` send (Seller F's address here):
+
+```bash
+curl -sL https://rpc.rabdi.db-chain.testnet.arkiv.network \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'vet402_verdict'"'"') AND kind = str('"'"'verdict'"'"') AND seller = str('"'"'0x1401bd7c7fab3fe8a429672fc1c5371456c8445d'"'"') AND $owner = addr(0x4eeA8EdDCC608CBD8b3683F738a473923F2De4C5)",{"select":{"key":true,"createdAt":true,"attributes":true}}]}'
+```
+
+At 03:17 UTC on 2026-11-06 it returned 2 Fraud rulings, from the contract `0xe9c35ad2…2a4b` on chain 5042002.
 
 ## What is never written
 

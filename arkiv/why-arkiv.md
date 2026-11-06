@@ -10,9 +10,21 @@ Arkiv gives me that with four things a plain database does not.
 
 **Expiry means something.** A seller entity lasts 7 days, and a delivery that kept its promise extends it. If a seller has payments on record but its entity is gone, it has not delivered lately, and the agent does not pay it. Expiry does this work for me, with no cleanup job and no counter to maintain.
 
-**Arkiv holds the ruling, not only the receipt.** A seller could not extend its own record, but vet402 used to extend it after any answer came back, even one that Arc then ruled a fraud. Now an answer that does not open to the seller's promise extends nothing, and every Silent or Fraud event from the contract becomes a readonly `vet402_verdict` entity with the claim id, the seller's payTo address, the ruling, the claim transaction, the contract and the chain. Before paying, the delivery check reads those entities first and refuses any seller with a ruling in the last 7 days. The seller's standing is what Arkiv says it is, and anybody can read the same entities and check each one against the event on Arc.
+**Arkiv holds the ruling, not only the receipt.** A seller cannot extend its own record, and only an answer that opens to the seller's promise extends it. Every Silent or Fraud event from the contract becomes a readonly `vet402_verdict` entity with the claim id, the seller's payTo address, the ruling, the claim transaction, the contract and the chain. Before paying, the delivery check reads those entities first and refuses any seller with a ruling in the last 7 days. The seller's standing is what Arkiv says it is, and anybody can read the same entities and check each one against the event on Arc.
 
 The rest of the check also leans on Arkiv instead of guessing around it. A seller is found by its payTo address when vet402 knows it, so a catalog listing cannot borrow another seller's record by using its name. When Arkiv cannot be read, vet402 does not pay. It says "Arkiv could not be read, so the delivery check did not run. Not paid."
+
+## Why the rulings are copied to Arkiv, not read from Arc each time
+
+Arc's events are the truth, and every `vet402_verdict` entity carries the contract, the chain and the claim id to check it against them. I still copy each ruling to Arkiv, for three reasons I measured.
+
+**One query instead of a scan.** Silent and Fraud index the seller, so Arc filters by address within each `eth_getLogs` window. On 2026-11-06 at 03:16 UTC, Arc testnet's public node served windows of up to 10,000 blocks, which were 5,066 seconds there, so 7 days of rulings for one seller is about 120 calls. On Arkiv it is one `arkiv_query` by the seller's address and the writer, plus one `arkiv_getBlockTiming` for the 7 days.
+
+**Any buyer can use the same answer.** The query runs with no key and no Arc node. `isRuledAgainst(payTo, { writer })` in `packages/sealed-delivery` sends it as plain JSON-RPC, so another x402 buyer reads vet402's rulings before it pays. On 2026-11-06 at 03:11 UTC it answered true for Seller F's address and false for an address with no ruling, against the public endpoint.
+
+**The window is the entity's own block.** A ruling stops payment for 7 days from the Arkiv block it was written in. The check needs that block and the current one, and both come with the query. The receipts page shows "Arc ruled against this seller on {date}" from the same entities, read in the browser, with no backend and no Arc node.
+
+The writer copies a ruling right after `finalize` or `prove` returns, from one queue that retries and looks for the claim id first, so each ruling is written once.
 
 What each Arkiv feature changes on screen is in [how-you-use-arkiv.md](how-you-use-arkiv.md#what-each-arkiv-feature-changes-on-screen).
 

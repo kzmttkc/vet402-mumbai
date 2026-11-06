@@ -13,15 +13,21 @@ export const COULD_NOT_READ_KEY = 'Could not read the key.'
 const KEY_REVEALED_TOPIC = keccak256(stringToBytes('KeyRevealed(bytes32,bytes32,bytes)'))
 const READ_TIMEOUT_MS = 10_000
 
-/** One row of the exported file. The key is not in it: it is read from the chain. */
+/**
+ * One row of the exported file: which claim, and where its key is. The box is not in it, and neither
+ * is the key. The box comes from Swarm through the reference on Arkiv, and the key from Arc.
+ */
 export interface PublicSealedAnswer {
   ref: string
   sellerName: string
-  ciphertext: string
   claimId: string
-  plaintextHash: string
   /** The block that holds the key, as a decimal string, so the read asks for one block only. */
   keyBlock: string
+}
+
+/** A claim with its box in hand: from Swarm on the published screen, or from the try's own run. */
+export interface SealedBoxToOpen extends PublicSealedAnswer {
+  ciphertext: string
 }
 
 export interface PublicSealedFile {
@@ -41,11 +47,36 @@ export const FROM_ARKIV = 'Record from Arkiv.'
 export const FROM_SWARM = 'Box from Swarm.'
 export const BOX_NOT_THIS_CLAIM = 'This box is not the one claimed on Arc.'
 export const FROM_ARC = 'Key from Arc.'
+export const NO_ARKIV_RECORD = 'No record on Arkiv for this claim.'
+export const COULD_NOT_READ_ARKIV_RECORD = 'Could not read Arkiv.'
+export const BOX_NOT_FOUND = 'Box not found on Swarm.'
 
-/** How the published screen reaches Arkiv and Swarm. Both are optional, and the file is the fallback. */
+/** How the published screen reaches Arkiv and Swarm. Without either, nothing opens: there is no copy to fall back on. */
 export interface EvidenceSources {
   readEvidence?: (claimId: string) => Promise<string | null>
   downloadBox?: (reference: string) => Promise<Uint8Array>
+}
+
+/** One `vet402_evidence` entity: a claim and the plain Swarm reference of its box. */
+export interface EvidenceEntry {
+  claimId: string
+  swarmRef: string
+}
+
+/**
+ * What the screen offers to open: the claims that have a `vet402_evidence` entity on Arkiv, in the
+ * order Arkiv returned them. The exported file only adds the seller's name and the key's block.
+ */
+export function openableAnswers(file: PublicSealedFile, evidence: readonly EvidenceEntry[]): PublicSealedAnswer[] {
+  const byClaim = new Map(file.answers.map((answer) => [answer.claimId.toLowerCase(), answer]))
+  const seen = new Set<string>()
+  return evidence.flatMap(({ claimId }) => {
+    const id = claimId.toLowerCase()
+    const answer = byClaim.get(id)
+    if (!answer || seen.has(id)) return []
+    seen.add(id)
+    return [answer]
+  })
 }
 
 /** Reads the key straight from a node. Null when the block holds no key for this claim. */
@@ -104,7 +135,7 @@ export const CLAIMS_ABI = parseAbi([
 
 /** Reads the key from the chain, opens the answer here, and compares it with the promise. */
 export async function openSealedAnswer(
-  answer: PublicSealedAnswer,
+  answer: SealedBoxToOpen,
   contract: string,
   { rpcUrl = PUBLIC_RPC, fetchImpl = fetch }: { rpcUrl?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<OpenResult> {
@@ -123,9 +154,9 @@ export async function openSealedAnswer(
 }
 
 /**
- * Opens the answer from the public record. The Swarm reference comes from Arkiv, the box from
- * Swarm and the key from Arc. When Arkiv or Swarm cannot be read, the exported file's box is used.
- * `read` names each source that answered, in order.
+ * Opens the answer from the public record only. The Swarm reference comes from Arkiv, the box from
+ * Swarm and the key from Arc. There is no copy on the page: when Arkiv or Swarm cannot be read, the
+ * answer does not open, and the line says which one failed. `read` names each source that answered.
  */
 export async function openFromRecord(
   answer: PublicSealedAnswer,
@@ -134,27 +165,28 @@ export async function openFromRecord(
   options: { rpcUrl?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<OpenResult> {
   const read: string[] = []
-  let box: { ciphertext: string; plaintextHash: string } = answer
+  if (!sources.readEvidence || !sources.downloadBox) return { ok: false, line: COULD_NOT_READ_ARKIV_RECORD, read }
+
+  let reference: string | null
   try {
-    const reference = sources.readEvidence ? await sources.readEvidence(answer.claimId) : null
-    if (reference) {
-      read.push(FROM_ARKIV)
-      if (sources.downloadBox) {
-        const fetched = readBox(await sources.downloadBox(reference), {
-          claimId: answer.claimId,
-          contract,
-          chainId: ARC_TESTNET_ID,
-        })
-        if (fetched) {
-          read.push(FROM_SWARM)
-          box = { ciphertext: fetched.ciphertext, plaintextHash: fetched.plaintextHash }
-        }
-      }
-    }
+    reference = await sources.readEvidence(answer.claimId)
   } catch {
-    // The exported file's box stands in for whatever could not be read.
+    return { ok: false, line: COULD_NOT_READ_ARKIV_RECORD, read }
   }
-  const result = await openSealedAnswer({ ...answer, ...box }, contract, options)
+  if (!reference) return { ok: false, line: NO_ARKIV_RECORD, read }
+  read.push(FROM_ARKIV)
+
+  let bytes: Uint8Array
+  try {
+    bytes = await sources.downloadBox(reference)
+  } catch {
+    return { ok: false, line: BOX_NOT_FOUND, read }
+  }
+  const box = readBox(bytes, { claimId: answer.claimId, contract, chainId: ARC_TESTNET_ID })
+  if (!box) return { ok: false, line: BOX_NOT_THIS_CLAIM, read }
+  read.push(FROM_SWARM)
+
+  const result = await openSealedAnswer({ ...answer, ciphertext: box.ciphertext }, contract, options)
   if (result.ok) read.push(FROM_ARC)
   return { ...result, read }
 }

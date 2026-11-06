@@ -137,3 +137,23 @@ export function createEvidenceReader(writer: Hex, transport: Transport = http(un
     return entities[0]?.swarm_ref.value ?? null
   }
 }
+
+/** Every `vet402_evidence` entity this writer recorded: each claim and the Swarm reference of its box, read to the last page. */
+export function createEvidenceLister(writer: Hex, transport: Transport = http(undefined, { retryCount: 0, timeout: 8000 })) {
+  const client = createPublicClient({ chain: rabdi({ accessKey: '' }), transport })
+
+  return async function listEvidence(): Promise<{ claimId: string; swarmRef: string }[]> {
+    const rows = await readAllPages((offset) =>
+      client
+        .select({ $key: true, claim_id: true, swarm_ref: true })
+        .from(EvidenceSchema)
+        .where(eq('kind', 'evidence'))
+        .ownedBy(writer)
+        .orderBy(asc('$key'))
+        .limit(PAGE_SIZE)
+        .offset(offset)
+        .fetch(),
+    )
+    return rows.map((row) => ({ claimId: row.claim_id.value, swarmRef: row.swarm_ref.value }))
+  }
+}
