@@ -559,7 +559,7 @@ describe('The demo writes Arc’s ruling after finalize and prove', () => {
     const run = await stopped(demos)
     const after = await demos.act(run.id, 'finalize')
     expect(after.action).toBe('withdraw')
-    expect(receipts.list()[0]?.outcome?.at(-1)).toBe('The seller stayed silent. Its deposit paid 0.001 USDC back.')
+    expect(receipts.list()[0]?.outcome?.at(-1)).toBe('Detail: The seller stayed silent. Its deposit paid 0.001 USDC back.')
   })
 
   test('a finalize that fails writes no ruling, and the button stays', async () => {

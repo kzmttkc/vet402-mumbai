@@ -2,6 +2,7 @@ import { createDemoService } from './demo'
 import type { DemoPorts, DemoSeller, StepName } from './demo'
 import type { ReceiptRow, ReceiptStore } from './receiptStore'
 import type { SealedPorts } from './sealedDelivery'
+import { splitLines } from '../src/lib/receiptLines'
 
 // "Try a dispute yourself": one press on the public page runs Seller A's sealed scene end to end,
 // in one function call, and streams each step as it happens. The amount and the seller are fixed
@@ -31,9 +32,9 @@ export const TRY_MESSAGES: Record<TryErrorCode, string> = {
 
 export const TRY_STATUS: Record<TryErrorCode, number> = { BUSY: 409, RATE: 429, DAILY: 429, RESTING: 503, UNREACHABLE: 503 }
 
-export const NO_ANSWER = 'Seller A did not answer in time. The claim stays open on Arc.'
+export const NO_ANSWER = 'Seller A did not answer in time. The case stays open on Arc.'
 
-/** What the screen shows for each step. The second wait is the key request. */
+/** What the screen shows for each step, in plain words. The second wait is the key request. */
 export function stepLabel(name: StepName, waitingSeen: number): string {
   switch (name) {
     case 'hold':
@@ -47,7 +48,7 @@ export function stepLabel(name: StepName, waitingSeen: number): string {
     case 'connection dropped':
       return 'The line dropped before the key arrived'
     case 'claim':
-      return 'The agent files a claim on Arc'
+      return 'vet402 asks Arc to step in'
     case 'key on chain':
       return 'Seller A put the key on Arc'
     case 'opened':
@@ -250,7 +251,7 @@ export function createTryDispute(ports: TryPorts, options: TryOptions = {}) {
           totalMs: now() - startedAt,
         })
       } else {
-        fail(row?.outcome?.join(' ') || TRY_MESSAGES.UNREACHABLE)
+        fail(splitLines(row?.outcome ?? []).plain.join(' ') || TRY_MESSAGES.UNREACHABLE)
       }
     } catch (error) {
       log(`try-dispute run failed: ${messageOf(error)}`)

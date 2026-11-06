@@ -6,6 +6,7 @@ import type { PreparedPayment } from './gatewayPay'
 import type { ReceiptRow, ReceiptStore, SealedRecord } from './receiptStore'
 import type { SealedBox, SealedPorts } from './sealedDelivery'
 import { DEMO_PRICE, RECOVERY_SAME_PAYMENT } from './sellers'
+import { detail } from '../src/lib/receiptLines'
 import { openResponse } from '../src/lib/sealed'
 import { formatUsdc, parseUsdc } from '../src/onchain-money'
 
@@ -31,11 +32,15 @@ export type StepName =
 /** What the screen can press once the run has stopped. */
 export type DemoAction = 'finalize' | 'prove' | 'withdraw'
 
-// The receipt sentences. These are fixed wordings.
+// The receipt sentences. These are fixed wordings. Each ending reads in plain words for someone who has never held
+// a crypto wallet, and is followed by its technical line (gas, claim, contract), which the screens show under Details.
 /** Only a sealed answer whose key opened it to the seller's promise gets this line. server/arkiv.ts relies on that. */
 export const KEY_FROM_CHAIN = 'Charged once. Key read from Arc.'
-const WRONG_KEY_REJECTED = 'Wrong key rejected by the contract.'
+const WRONG_KEY_LINES = ['The seller sent the wrong key. Arc refused it.', detail('Wrong key rejected by the contract.')]
 const usdcAmount = (amount: bigint) => `${formatUsdc(amount)} USDC`
+/** Past the price, a payout also covers what the dispute cost the buyer. A payout of the price or less is a bare amount. */
+const gotBack = (paid: bigint, price: bigint) =>
+  paid > price ? `You got ${usdcAmount(paid)} back: your ${usdcAmount(price)} and your costs.` : `You got ${usdcAmount(paid)} back.`
 /**
  * A verdict pays the buyer the price and the dispute's gas. Past the price, the rest is named as gas, and only then:
  * a payout of the price or less is said as a bare amount.
@@ -44,13 +49,25 @@ const paidBack = (paid: bigint, price: bigint) =>
   paid > price
     ? `Its deposit paid ${usdcAmount(paid)} back: the ${usdcAmount(price)} price and ${usdcAmount(paid - price)} for the gas of the dispute.`
     : `Its deposit paid ${usdcAmount(paid)} back.`
-const silentLine = (paid: bigint, price: bigint) => `The seller stayed silent. ${paidBack(paid, price)}`
-const fraudLine = (paid: bigint, price: bigint) => `The answer did not match the seller's promise. ${paidBack(paid, price)}`
+const silentLines = (paid: bigint, price: bigint) => [
+  `The seller didn't deliver. ${gotBack(paid, price)}`,
+  detail(`The seller stayed silent. ${paidBack(paid, price)}`),
+]
+const fraudLines = (paid: bigint, price: bigint) => [
+  `The answer wasn't what the seller promised. ${gotBack(paid, price)}`,
+  detail(`The answer did not match the seller's promise. ${paidBack(paid, price)}`),
+]
 /** From the answer's ClaimGasRepaid. A transfer that failed stays on Arc as the buyer's credit. */
-const claimGasLine = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
+const claimGasLines = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
   sent
-    ? `Claim gas repaid by the seller: ${usdcAmount(amount)}.`
-    : `Claim gas repaid by the seller as a credit on Arc: ${usdcAmount(amount)}.`
+    ? [
+        `The seller sent the key late and paid back the ${usdcAmount(amount)} it cost you to ask for it.`,
+        detail(`Claim gas repaid by the seller: ${usdcAmount(amount)}.`),
+      ]
+    : [
+        `The seller sent the key late. The ${usdcAmount(amount)} it cost you to ask for it is waiting for you on Arc.`,
+        detail(`Claim gas repaid by the seller as a credit on Arc: ${usdcAmount(amount)}.`),
+      ]
 
 export interface DemoStep {
   name: StepName
@@ -359,7 +376,7 @@ export function createDemoService(
       })
 
     const lines: string[] = []
-    const found = await waitForKey(sealed, claim, () => lines.push(WRONG_KEY_REJECTED))
+    const found = await waitForKey(sealed, claim, () => lines.push(...WRONG_KEY_LINES))
 
     if (!found) {
       // The deadline passed with no key. Anyone can press finalize now.
@@ -373,7 +390,7 @@ export function createDemoService(
     mark(run, 'key on chain')
     // The answer that put the key on Arc also repaid the claim's gas. The line is there only when Arc says so.
     const repaid = await readClaimGasRepaid(sealed, claim)
-    const repaidLines = repaid && repaid.amount > 0n ? [claimGasLine(repaid)] : []
+    const repaidLines = repaid && repaid.amount > 0n ? claimGasLines(repaid) : []
     const result = open(box, found.key)
     mark(run, 'opened')
     const record: SealedRecord = {
@@ -551,8 +568,8 @@ export function createDemoService(
         } catch (error) {
           console.error('verdict write failed:', error instanceof Error ? error.message.split('\n')[0] : error)
         }
-        const line = paid > 0n ? (action === 'finalize' ? silentLine : fraudLine)(paid, opened.price) : 'Nothing delivered. No second charge.'
-        opened.lines.push(line)
+        const ending = paid > 0n ? (action === 'finalize' ? silentLines : fraudLines)(paid, opened.price) : ['Nothing delivered. No second charge.']
+        opened.lines.push(...ending)
         receipts.update(opened.rowId, { outcome: [...opened.lines] })
         run.action = paid > 0n ? 'withdraw' : null
       }

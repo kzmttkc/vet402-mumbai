@@ -18,6 +18,8 @@ export interface ChainOptions {
 
 const TX_TIMEOUT_MS = 60_000
 const REFUSED_ANSWER_GAS = 120_000n
+/** Blocks per eth_getLogs call when a read spans a range. */
+const LOG_STEP = 10_000n
 
 export type SealedChain = ReturnType<typeof createSealedChain>
 
@@ -77,6 +79,48 @@ export function createSealedChain({ contract, rpcUrl, pollingMs = 1000 }: ChainO
       })
       const log = logs[0] as { args: { key?: Hex }; blockNumber: bigint } | undefined
       return log?.args.key ? { key: log.args.key, block: log.blockNumber } : null
+    },
+
+    /**
+     * Every claim `buyer` filed from `fromBlock` to the latest block, oldest first. The buyer is not an indexed
+     * field of Claimed, so this reads all claims in the range (or one seller's, with `seller`) and filters here.
+     * The range is read `blockStep` blocks at a time, because nodes cap eth_getLogs.
+     */
+    async readClaimsBy(buyer: Address, fromBlock: bigint, options: { seller?: Address; blockStep?: bigint } = {}) {
+      const step = options.blockStep ?? LOG_STEP
+      const latest = await pub.getBlockNumber()
+      const found: { claimId: Hex; seller: Address; block: bigint }[] = []
+      for (let from = fromBlock; from <= latest; from += step) {
+        const to = from + step - 1n < latest ? from + step - 1n : latest
+        const logs = await pub.getLogs({ address: contract, events: CLAIMED_EVENTS, fromBlock: from, toBlock: to })
+        for (const log of logs) {
+          const { claimId, seller, buyer: who } = log.args
+          if (!claimId || !seller || !who || who.toLowerCase() !== buyer.toLowerCase()) continue
+          if (options.seller && seller.toLowerCase() !== options.seller.toLowerCase()) continue
+          found.push({ claimId, seller, block: log.blockNumber ?? from })
+        }
+      }
+      return found
+    },
+
+    /** Which of these claims a seller answered: their KeyRevealed events from `fromBlock` on. */
+    async readAnswered(claimIds: readonly Hex[], fromBlock: bigint, blockStep: bigint = LOG_STEP): Promise<Set<Hex>> {
+      const answered = new Set<Hex>()
+      if (claimIds.length === 0) return answered
+      const latest = await pub.getBlockNumber()
+      for (let from = fromBlock; from <= latest; from += blockStep) {
+        const to = from + blockStep - 1n < latest ? from + blockStep - 1n : latest
+        const logs = await pub.getContractEvents({
+          address: contract,
+          abi: SEALED_DELIVERY_ABI,
+          eventName: 'KeyRevealed',
+          args: { claimId: [...claimIds] },
+          fromBlock: from,
+          toBlock: to,
+        })
+        for (const log of logs as { args: { claimId?: Hex } }[]) if (log.args.claimId) answered.add(log.args.claimId.toLowerCase() as Hex)
+      }
+      return answered
     },
 
     async readClaimed(seller: Address, fromBlock: bigint, toBlock: bigint) {

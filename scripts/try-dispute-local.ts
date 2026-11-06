@@ -183,7 +183,7 @@ async function main(tmp: string, anvil: { child: ChildProcess | null }) {
   check('result ok', result?.type === 'result' && result.ok, true)
   if (result?.type !== 'result' || !result.ok) throw new Error(`The try did not finish: ${JSON.stringify(result)}`)
   const repaid = await client.gasRefundOf(result.box.claimId as Hex)
-  check('receipt lines', result.lines, ['Charged once. Key read from Arc.', `Claim gas repaid by the seller: ${formatUsdc(repaid)} USDC.`, 'Circle record: 1 transfer for this payment.'])
+  check('receipt lines', result.lines, ['Charged once. Key read from Arc.', `The seller sent the key late and paid back the ${formatUsdc(repaid)} USDC it cost you to ask for it.`, `Detail: Claim gas repaid by the seller: ${formatUsdc(repaid)} USDC.`, 'Circle record: 1 transfer for this payment.'])
   check('settled once', settled.size, 1)
 
   // The two links point at real transactions: the claim from the hold, the answer from the seller.

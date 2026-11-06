@@ -16,6 +16,7 @@ import {
 import type { TryEvent, TryPorts } from '../tryDispute'
 import { recentPaymentTimes } from '../tryDisputeWire'
 import { sealResponse } from '../../src/lib/sealed'
+import { splitLines } from '../../src/lib/receiptLines'
 
 // The try runs the real demo service against fakes: no chain, no Gateway, no Circle. The real
 // contract is covered by scripts/try-dispute-local.ts on anvil.
@@ -133,9 +134,19 @@ describe('try a dispute yourself', () => {
     const result = resultOf((await runTry(tries)).events)
     expect(result?.type === 'result' && result.ok ? result.lines : null).toEqual([
       'Charged once. Key read from Arc.',
-      'Claim gas repaid by the seller: 0.005698 USDC.',
+      'The seller sent the key late and paid back the 0.005698 USDC it cost you to ask for it.',
+      'Detail: Claim gas repaid by the seller: 0.005698 USDC.',
       'Circle record: 1 transfer for this payment.',
     ])
+  })
+
+  test('the try reads in plain words: no gas, contract or claim in a step or in the body of the result', async () => {
+    const { tries } = setup({ sealed: { claimGasRepaid: () => Promise.resolve({ amount: 6949n, sent: true }) } })
+    const { events } = await runTry(tries)
+    const shown = events.flatMap((e) => (e.type === 'step' ? [e.label] : e.ok ? splitLines(e.lines).plain : [e.message]))
+    expect(shown.length).toBeGreaterThan(5)
+    for (const line of shown) expect(line).not.toMatch(/gas|contract|claim/i)
+    expect(NO_ANSWER).not.toMatch(/gas|contract|claim/i)
   })
 
   test('success: every step streams, then the receipt lines, both transactions and the box', async () => {
@@ -146,7 +157,7 @@ describe('try a dispute yourself', () => {
     expect(steps.map((s) => (s.type === 'step' ? s.name : ''))).toEqual([
       'hold', 'payment', 'waiting', 'waiting', 'fetching again', 'connection dropped', 'claim', 'key on chain', 'opened', 'delivered',
     ])
-    expect(steps.map((s) => (s.type === 'step' ? s.label : ''))).toContain('The agent files a claim on Arc')
+    expect(steps.map((s) => (s.type === 'step' ? s.label : ''))).toContain('vet402 asks Arc to step in')
     const result = resultOf(events)
     expect(result).toEqual({
       type: 'result',
