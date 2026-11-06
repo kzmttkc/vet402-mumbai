@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
+import express from 'express'
 import { ChunkSplitter } from '@ethersphere/bee-js'
 import {
   decodeFunctionData,
@@ -19,6 +23,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { arcTestnet } from 'viem/chains'
 import { ARC_GATEWAY_WALLET, ARC_USDC } from '../../src/existing/arc-gateway'
 import { sealResponse } from '../../src/lib/sealed'
+import { preparePayment } from '../gatewayPay'
 import type { PreparedPayment } from '../gatewayPay'
 import {
   APPROVE_GAS,
@@ -29,19 +34,25 @@ import {
   claimMemoOf,
   createSealedDelivery,
   createSealedPorts,
+  createSealer,
+  createSellerWatcher,
+  DEFAULT_REFUND_TO_GATEWAY_MIN,
   evidenceRefOf,
   GATEWAY_DEPOSIT_GAS,
   GATEWAY_WALLET_ABI,
+  linksFromSellerStore,
   MEMO_ABI,
-  MEMO_GAS,
+  parseRefundMin,
   readClaimMemo,
   SEALED_ABI,
   WITHDRAW_GAS,
 } from '../sealedDelivery'
 import type { ClaimLinks, PaymentAuth, SealedBox, SealedClient } from '../sealedDelivery'
+import { createSeller, DEMO_PRICE } from '../sellers'
+import type { SellerFacilitator } from '../sellers'
 import { createEvidenceUploader } from '../swarm'
 
-// Arc's Memo contract on a claim, and Circle Gateway's depositFor for money a dispute won back. The chain is a fake
+// Arc's Memo contract on a seller's answer, and Circle Gateway's depositFor for money a dispute won back. The chain is a fake
 // JSON-RPC node on a local port that records every signed transaction, so nothing reaches a real network.
 
 const CONTRACT: Address = '0x00000000000000000000000000000000000000c1'
@@ -143,7 +154,10 @@ interface FakeNode {
 
 const servers: Server[] = []
 afterEach(() => {
-  for (const server of servers.splice(0)) server.close()
+  for (const server of servers.splice(0)) {
+    server.closeAllConnections()
+    server.close()
+  }
 })
 
 const claimedLog = () => {
@@ -255,12 +269,16 @@ async function fakeNode(): Promise<FakeNode> {
 const clientOn = (node: FakeNode) => createSealedDelivery({ address: CONTRACT, net: { chain: arcTestnet, rpcUrl: node.url, pollingMs: 5 } })
 const CODE: Hex = '0x6080'
 
-describe('a claim through Arc Memo', () => {
-  test('on Arc the claim goes through Memo, the call inside is the claim, and the memo carries the links', async () => {
+const sellerKey = generatePrivateKey()
+const KEY: Hex = `0x${'b'.repeat(64)}`
+
+// The seller pays for the memo, on the answer. The buyer's claim stays a plain call, so its gas refund covers all of it.
+describe('an answer through Arc Memo', () => {
+  test('on Arc the answer goes through Memo, the call inside is the answer, and the memo carries the links', async () => {
     const node = await fakeNode()
     node.code.set(ARC_MEMO.toLowerCase(), CODE)
     const links: ClaimLinks = { gatewayTransferId: TRANSFER_ID, swarmRef: 'cd'.repeat(32) }
-    const result = await clientOn(node).claim(holdKey, box, auth, '0x22', links)
+    expect(await clientOn(node).answer(sellerKey, CLAIM_ID, KEY, links)).toEqual(links)
 
     expect(node.sent).toHaveLength(1)
     const tx = node.sent[0]!
@@ -269,27 +287,108 @@ describe('a claim through Arc Memo', () => {
     expect(outer.functionName).toBe('memo')
     const [target, inner, memoId, memoData] = outer.args as [Address, Hex, Hex, Hex]
     expect(target.toLowerCase()).toBe(CONTRACT)
-    expect(decodeFunctionData({ abi: SEALED_ABI, data: inner }).functionName).toBe('claim')
+    expect(decodeFunctionData({ abi: SEALED_ABI, data: inner })).toEqual({ functionName: 'answer', args: [CLAIM_ID, KEY] })
     expect(memoId).toBe(CLAIM_ID)
     expect(readClaimMemo(memoData)).toEqual({ claimId: CLAIM_ID, ...links })
-    expect(result).toMatchObject({ claimId: CLAIM_ID, memo: links })
   })
 
-  test('where Arc has no Memo contract, as on the local chain, the claim goes straight to the contract', async () => {
+  test('where Arc has no Memo contract, as on the local chain, the answer goes straight to the contract', async () => {
     const node = await fakeNode()
-    const result = await clientOn(node).claim(holdKey, box, auth, '0x22', { gatewayTransferId: TRANSFER_ID })
+    expect(await clientOn(node).answer(sellerKey, CLAIM_ID, KEY, { gatewayTransferId: TRANSFER_ID })).toBeNull()
     expect(node.sent.map((tx) => tx.to.toLowerCase())).toEqual([CONTRACT.toLowerCase()])
-    expect(decodeFunctionData({ abi: SEALED_ABI, data: node.sent[0]!.data }).functionName).toBe('claim')
-    expect(result.memo).toBeNull()
+    expect(decodeFunctionData({ abi: SEALED_ABI, data: node.sent[0]!.data }).functionName).toBe('answer')
   })
 
-  test('a memo that cannot be sent leaves a plain claim, sent once', async () => {
+  test('a memo that cannot be sent leaves a plain answer, sent once', async () => {
     const node = await fakeNode()
     node.code.set(ARC_MEMO.toLowerCase(), CODE)
     node.refuseEstimateTo = ARC_MEMO
-    const result = await clientOn(node).claim(holdKey, box, auth, '0x22', { gatewayTransferId: TRANSFER_ID })
+    expect(await clientOn(node).answer(sellerKey, CLAIM_ID, KEY, { gatewayTransferId: TRANSFER_ID })).toBeNull()
     expect(node.sent.map((tx) => tx.to.toLowerCase())).toEqual([CONTRACT.toLowerCase()])
-    expect(result).toMatchObject({ claimId: CLAIM_ID, memo: null })
+  })
+
+  test('claim, finalize and prove go straight to the contract even where Arc has Memo', async () => {
+    const node = await fakeNode()
+    node.code.set(ARC_MEMO.toLowerCase(), CODE)
+    const client = clientOn(node)
+    await client.claim(holdKey, box, auth, '0x22')
+    await client.finalize(holdKey, CLAIM_ID).catch(() => 0n)
+    await client.prove(holdKey, CLAIM_ID, sealed.ciphertext, sealed.key).catch(() => 0n)
+    expect(node.sent.map((tx) => tx.to.toLowerCase())).toEqual([CONTRACT.toLowerCase(), CONTRACT.toLowerCase(), CONTRACT.toLowerCase()])
+    expect(node.sent.map((tx) => decodeFunctionData({ abi: SEALED_ABI, data: tx.data }).functionName)).toEqual(['claim', 'finalize', 'prove'])
+  })
+})
+
+describe('the links a seller puts on its answer', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  // A real seller writes its file, so a change to that file's shape breaks this test and not the memo.
+  test('come from the seller file: the Gateway transfer it settled, and the Swarm reference of the box the buyer keeps', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'answer-links-'))
+    dirs.push(dir)
+    const file = path.join(dir, 'seller-a.json')
+    const facilitator: SellerFacilitator = {
+      verify: () => Promise.resolve({ isValid: true }),
+      settle: () => Promise.resolve({ success: true, transaction: TRANSFER_ID }),
+    }
+    const handler = createSeller({
+      name: 'Seller A',
+      payTo: privateKeyToAccount(sellerKey).address,
+      declaresRecovery: true,
+      facilitator,
+      confirmCharged: () => Promise.resolve(true),
+      dropAfterSettle: () => false,
+      storeFile: file,
+      sealing: { seal: createSealer(clientOn({ url: 'http://127.0.0.1:1' } as FakeNode), sellerKey), handsOverKey: () => true },
+    })
+    const app = express()
+    app.get('/s', (req, res) => {
+      handler(req, res).catch(() => res.status(502).end())
+    })
+    const server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, () => resolve(s))
+    })
+    servers.push(server)
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/s`
+    const challenge = await preparePayment({ holdKey, holdAvailable: () => Promise.resolve(1_000_000n) }, { url, method: 'GET' }, DEMO_PRICE)
+    if (challenge.kind !== 'priced') throw new Error('expected a price')
+    const { sealed: sold } = (await (await challenge.payment.send()).json()) as { sealed: SealedBox }
+
+    const claimId = claimIdOf(sold.promise.seller, sold.promise.buyer, sold.promise.paymentNonce)
+    const client = { address: CONTRACT, chainId: arcTestnet.id }
+    const links = await linksFromSellerStore(file, client)(challenge.payment.nonce.toUpperCase().replace('0X', '0x') as Hex, claimId)
+    expect(links).toEqual({ gatewayTransferId: TRANSFER_ID, swarmRef: await evidenceRefOf(sold, claimId, CONTRACT, arcTestnet.id) })
+    expect(await linksFromSellerStore(file, client)(`0x${'0'.repeat(64)}`, claimId)).toBeNull()
+    expect(await linksFromSellerStore(path.join(dir, 'none.json'), client)(NONCE, claimId)).toBeNull()
+  })
+
+  test('the lookout answers with them, and answers without them when they cannot be found', async () => {
+    const sent: (ClaimLinks | undefined)[] = []
+    const links: ClaimLinks = { gatewayTransferId: TRANSFER_ID }
+    for (const linksFor of [() => Promise.resolve(links), () => Promise.reject(new Error('disk'))]) {
+      let block = 10n
+      const watcher = createSellerWatcher({
+        client: {
+          latestBlock: () => Promise.resolve(block++),
+          readClaimed: () => Promise.resolve([{ claimId: CLAIM_ID, paymentNonce: NONCE, deadline: 200n, seller: SELLER, transactionHash: '0x' }] as never),
+          answer: (_key, _id, _k, l) => {
+            sent.push(l)
+            return Promise.resolve(null)
+          },
+          tryAnswer: () => Promise.resolve(null),
+          chainTime: () => Promise.resolve(100n),
+        },
+        sellerKey,
+        keyFor: () => KEY,
+        mode: 'answer',
+        linksFor,
+      })
+      await watcher.tick()
+    }
+    expect(sent).toEqual([links, undefined])
   })
 })
 
@@ -333,36 +432,43 @@ describe("Circle Gateway's depositFor", () => {
   })
 })
 
-// The ports with a fake client: what the claim is sent with, and what goes back into Gateway.
-function fakeClient(over: { memo?: boolean; gateway?: boolean; balance?: bigint; gasCost?: bigint } = {}) {
+// The ports with a fake client: the claim stays plain, and refunds go back into Gateway only once enough has come back.
+function fakeClient(over: { gateway?: boolean; balance?: bigint; gasCost?: bigint; claimable?: bigint; refundMin?: bigint } = {}) {
   const log = {
     fills: [] as bigint[],
-    claims: [] as (ClaimLinks | undefined)[],
+    claims: 0,
     deposits: [] as { depositor: Address; amount: bigint }[],
   }
   const client = {
     address: CONTRACT,
     chainId: arcTestnet.id,
-    memoReady: () => Promise.resolve(over.memo ?? true),
+    memoReady: () => Promise.resolve(true),
     gatewayReady: () => Promise.resolve(over.gateway ?? true),
     // gasCost(gas) is the gas in micro USDC, so the fills read as gas.
     gasCost: (gas: bigint) => Promise.resolve(over.gasCost ?? gas),
-    usdcBalance: () => Promise.resolve(over.balance ?? 0n),
+    usdcBalance: () => Promise.resolve(over.balance ?? 10_000_000n),
+    claimable: () => Promise.resolve(over.claimable ?? 13268n),
     ensureGas: (_from: Hex, _to: Address, gas: bigint) => {
       log.fills.push(gas)
       return Promise.resolve(0n)
     },
-    claim: (_key: Hex, _box: SealedBox, _auth: PaymentAuth, _sig: Hex, links?: ClaimLinks) => {
-      log.claims.push(links)
-      return Promise.resolve({ claimId: CLAIM_ID, deadline: 4000n, fromBlock: 2n, gasUsed: 1n, transactionHash: '0x01' as Hex, memo: links ?? null })
+    claim: () => {
+      log.claims++
+      return Promise.resolve({ claimId: CLAIM_ID, deadline: 4000n, fromBlock: 2n, gasUsed: 1n, transactionHash: '0x01' as Hex })
     },
-    withdrawClaimable: () => Promise.resolve(13268n),
+    withdrawClaimable: () => Promise.resolve(over.claimable ?? 13268n),
     depositToGateway: (_key: Hex, depositor: Address, amount: bigint) => {
       log.deposits.push({ depositor, amount })
       return Promise.resolve('0x02' as Hex)
     },
   }
-  const ports = createSealedPorts({ client: client as unknown as SealedClient, holdKey, buyerKey: generatePrivateKey(), rejected: new Set() })
+  const ports = createSealedPorts({
+    client: client as unknown as SealedClient,
+    holdKey,
+    buyerKey: generatePrivateKey(),
+    rejected: new Set(),
+    refundMin: over.refundMin ?? 50_000n,
+  })
   return { ports, log }
 }
 
@@ -377,50 +483,54 @@ const header = Buffer.from(
 const payment = { header: { name: 'PAYMENT-SIGNATURE', value: header } } as unknown as PreparedPayment
 
 describe('the sealed ports', () => {
-  test('a claim on Arc carries the Gateway transfer and the reference the box will have on Swarm, with gas for the memo', async () => {
+  test('the claim is filled and sent as before, with no memo', async () => {
     const { ports, log } = fakeClient()
-    const claim = await ports.claim(box, payment, { gatewayTransferId: TRANSFER_ID, keepsEvidence: true })
-    const swarmRef = await evidenceRefOf(box, CLAIM_ID, CONTRACT, arcTestnet.id)
-    expect(log.claims).toEqual([{ gatewayTransferId: TRANSFER_ID, swarmRef }])
-    expect(log.fills).toEqual([CLAIM_GAS + MEMO_GAS])
-    expect(claim.memo).toEqual({ gatewayTransferId: TRANSFER_ID, swarmRef })
+    await ports.claim(box, payment)
+    expect(log).toMatchObject({ claims: 1, fills: [CLAIM_GAS] })
   })
 
-  test('without Memo on the chain, or without a request, the claim is plain and filled as before', async () => {
-    const noMemo = fakeClient({ memo: false })
-    await noMemo.ports.claim(box, payment, { gatewayTransferId: TRANSFER_ID, keepsEvidence: true })
-    expect(noMemo.log).toMatchObject({ claims: [undefined], fills: [CLAIM_GAS] })
-    const noRequest = fakeClient()
-    await noRequest.ports.claim(box, payment)
-    expect(noRequest.log).toMatchObject({ claims: [undefined], fills: [CLAIM_GAS] })
+  test('REFUND_TO_GATEWAY_MIN is read in USDC, and a missing or unreadable value gives 0.05 USDC', () => {
+    expect(parseRefundMin('0.1')).toBe(100_000n)
+    expect(parseRefundMin('2')).toBe(2_000_000n)
+    expect(DEFAULT_REFUND_TO_GATEWAY_MIN).toBe(50_000n)
+    for (const bad of [undefined, '', 'abc', '-1', '0.0000001']) expect(parseRefundMin(bad)).toBe(50_000n)
   })
 
-  test('withdraw brings in the gas for the Gateway deposit too, so all of the refund can go back', async () => {
+  test('refunds below the threshold wait in the wallet, and go back together once they reach it', async () => {
     const { ports, log } = fakeClient()
-    expect(await ports.withdraw()).toBe(13268n)
-    expect(log.fills).toEqual([WITHDRAW_GAS + APPROVE_GAS + GATEWAY_DEPOSIT_GAS])
-    const noGateway = fakeClient({ gateway: false })
+    expect(await ports.backToGateway?.(13268n)).toBe(0n)
+    expect(await ports.backToGateway?.(20000n)).toBe(0n)
+    expect(log.deposits).toEqual([])
+    expect(await ports.backToGateway?.(16732n)).toBe(50_000n)
+    expect(log.deposits).toEqual([{ depositor: HOLD, amount: 50_000n }])
+    // The count starts again from zero.
+    expect(await ports.backToGateway?.(13268n)).toBe(0n)
+    expect(log.deposits).toHaveLength(1)
+  })
+
+  test('withdraw brings in the deposit gas only when this credit brings the refunds to the threshold', async () => {
+    const small = fakeClient({ claimable: 13268n })
+    await small.ports.withdraw()
+    expect(small.log.fills).toEqual([WITHDRAW_GAS])
+    const big = fakeClient({ claimable: 60_000n })
+    await big.ports.withdraw()
+    expect(big.log.fills).toEqual([WITHDRAW_GAS + APPROVE_GAS + GATEWAY_DEPOSIT_GAS])
+    const noGateway = fakeClient({ gateway: false, claimable: 60_000n })
     await noGateway.ports.withdraw()
     expect(noGateway.log.fills).toEqual([WITHDRAW_GAS])
   })
 
-  test('the whole refund goes back into the hold Gateway balance when the wallet can also pay the deposit', async () => {
-    const { ports, log } = fakeClient({ balance: 13268n + 5000n, gasCost: 5000n })
-    expect(await ports.backToGateway?.(13268n)).toBe(13268n)
-    expect(log.deposits).toEqual([{ depositor: HOLD, amount: 13268n }])
+  test('a wallet that holds less than the count, after a new hold swept it, deposits only what is there, and only past the threshold', async () => {
+    const swept = fakeClient({ balance: 5000n + 40_000n, gasCost: 5000n })
+    expect(await swept.ports.backToGateway?.(60_000n)).toBe(0n)
+    const enough = fakeClient({ balance: 5000n + 55_000n, gasCost: 5000n })
+    expect(await enough.ports.backToGateway?.(60_000n)).toBe(55_000n)
+    expect([...swept.log.deposits, ...enough.log.deposits]).toEqual([{ depositor: HOLD, amount: 55_000n }])
   })
 
-  test('when the wallet holds only the refund, the deposit gas comes out of it and the rest goes back', async () => {
-    const { ports, log } = fakeClient({ balance: 13268n, gasCost: 5000n })
-    expect(await ports.backToGateway?.(13268n)).toBe(8268n)
-    expect(log.deposits).toEqual([{ depositor: HOLD, amount: 8268n }])
-  })
-
-  test('nothing is deposited where there is no Gateway, or when the gas would take it all', async () => {
-    const none = fakeClient({ gateway: false, balance: 99999n })
-    expect(await none.ports.backToGateway?.(13268n)).toBe(0n)
-    const dust = fakeClient({ balance: 4000n, gasCost: 5000n })
-    expect(await dust.ports.backToGateway?.(4000n)).toBe(0n)
-    expect([...none.log.deposits, ...dust.log.deposits]).toEqual([])
+  test('nothing is deposited where there is no Gateway', async () => {
+    const none = fakeClient({ gateway: false })
+    expect(await none.ports.backToGateway?.(60_000n)).toBe(0n)
+    expect(none.log.deposits).toEqual([])
   })
 })

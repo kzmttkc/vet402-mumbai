@@ -57,24 +57,12 @@ const fraudLines = (paid: bigint, price: bigint) => [
   `The answer wasn't what the seller promised. ${gotBack(paid, price)}`,
   detail(`The answer did not match the seller's promise. ${paidBack(paid, price)}`),
 ]
-/** Money a dispute won back, once Circle Gateway's depositFor has put it in the hold's Gateway balance. */
+/** Money disputes won back, once Circle Gateway's depositFor has put it in the hold's Gateway balance. Only then. */
 export const BACK_IN_GATEWAY = "The refund is back in your agent's Gateway balance, ready for the next payment."
 const backLines = (amount: bigint) => [
   BACK_IN_GATEWAY,
   detail(`${usdcAmount(amount)} went back into the hold's Circle Gateway balance through depositFor.`),
 ]
-
-/** Gateway's id for the settled transfer, from the seller's PAYMENT-RESPONSE. Undefined when there is none. */
-export function settledTransferOf(res: Response): string | undefined {
-  const header = res.headers.get('PAYMENT-RESPONSE')
-  if (!header) return undefined
-  try {
-    const settled = JSON.parse(Buffer.from(header, 'base64').toString('utf8')) as { transaction?: unknown }
-    return typeof settled.transaction === 'string' && settled.transaction ? settled.transaction : undefined
-  } catch {
-    return undefined
-  }
-}
 
 /** From the answer's ClaimGasRepaid. A transfer that failed stays on Arc as the buyer's credit. */
 const claimGasLines = ({ amount, sent }: { amount: bigint; sent: boolean }) =>
@@ -194,7 +182,7 @@ export function createDemoService(
     ...(claim.transactionHash ? { claimTx: claim.transactionHash } : {}),
   })
 
-  /** Puts money won back into the hold's Gateway balance and returns its lines. A failure only logs and adds none. */
+  /** Counts money won back toward a Gateway deposit. Lines only when a deposit went through. A failure only logs. */
   async function backToGateway(sealed: SealedPorts, amount: bigint): Promise<string[]> {
     if (!sealed.backToGateway || amount <= 0n) return []
     try {
@@ -356,7 +344,6 @@ export function createDemoService(
       }
     }
     if (!first.ok) throw new DemoError('REFUSED')
-    const gatewayTransferId = settledTransferOf(first)
     const body = await first.text()
 
     const read = await sealed.readBox(body, payment)
@@ -394,11 +381,7 @@ export function createDemoService(
     mark(run, 'claim')
     let claim: Awaited<ReturnType<SealedPorts['claim']>>
     try {
-      // The claim's memo on Arc points to the Gateway transfer and the box's place on Swarm.
-      claim = await sealed.claim(box, payment, {
-        ...(gatewayTransferId ? { gatewayTransferId } : {}),
-        keepsEvidence: ports.evidence !== undefined,
-      })
+      claim = await sealed.claim(box, payment)
     } catch (error) {
       console.error('claim failed:', error instanceof Error ? error.message.split('\n')[0] : error)
       await nothingMore(seller, payment, kind)
@@ -408,9 +391,6 @@ export function createDemoService(
     const evidence = keepEvidence(box, claim.claimId)
     const attach = (rowId: string) =>
       void evidence.then((swarmRef) => {
-        if (swarmRef && claim.memo?.swarmRef && swarmRef !== claim.memo.swarmRef) {
-          console.error(`swarm reference ${swarmRef} is not the one in the claim memo, ${claim.memo.swarmRef}`)
-        }
         if (swarmRef) receipts.update(rowId, { evidence: { claimId: claim.claimId, swarmRef } })
       })
 
@@ -430,7 +410,7 @@ export function createDemoService(
     // The answer that put the key on Arc also repaid the claim's gas. The line is there only when Arc says so.
     const repaid = await readClaimGasRepaid(sealed, claim)
     const repaidLines = repaid && repaid.amount > 0n ? claimGasLines(repaid) : []
-    // A repayment that reached the hold wallet goes back into Gateway. One that stayed a credit waits for withdraw.
+    // A repayment that reached the hold wallet counts toward the next Gateway deposit. One that stayed a credit waits for withdraw.
     const sentBack = repaid?.sent ? await backToGateway(sealed, repaid.amount) : []
     const result = open(box, found.key)
     mark(run, 'opened')
