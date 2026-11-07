@@ -185,7 +185,7 @@ Every box of the 2026-11-06 runs that vet402's own sellers sealed went up throug
 
 ## What would make Swarm even better
 
-- **The new `bee.data` calls in the migration notes.** bee-js 13 moved the raw data calls under `bee.data`. I first looked for `uploadData` in the types. The current call is `bee.data.upload(batchId, data)`, and a line in the migration notes would point straight to it.
+- **The Files page on the new `bee.data` calls.** bee-js 13 moved the raw data calls under `bee.data`, and the v13 migration guide maps `bee.uploadData` to `bee.data.upload`. The Files page on docs.ethswarm.org still shows `bee.uploadData(batchId, bytes)`, which is where I looked first. The same line there would point straight to the current call.
 - **The gateway's batch on request.** `GET /stamps` on the public gateway returned 404 on 2026-11-05 UTC, while my own node answers `GET /stamps/<batch>` with the depth, the amount and the TTL. The same answer from the gateway would let a null stamp upload show its lifetime too.
 - **A slimmer browser build.** bee-js took the published page's main script from 367 kB to 447 kB before compression in my build. A smaller entry point for upload and download alone would keep pages light.
 - **One build warning less.** The copy of zod that bee-js brings along prints a Rollup warning about a comment it cannot place. The build succeeds, and a bundled zod without that comment would make the output clean.
